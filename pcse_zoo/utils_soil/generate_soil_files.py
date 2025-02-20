@@ -1,97 +1,16 @@
-import requests
 import yaml
 
 import pandas as pd
 import numpy as np
 
+from pcse_zoo.utils_soil.default_soil_variables import (
+    default_som_content,
+    default_range_pf_values,
+    default_pf_field_capacity,
+    default_pf_wilting_point,
+    default_surface_conductivity
+)
 
-request_url = "https://rest.isric.org/soilgrids/v2.0/properties/query"
-
-def request_soilgrids(lat, lon):
-    p1 = {"lat": lat, "lon": lon}
-    props = {"property": default_soilgrid_variables(), "depth": get_depth_soilgrids()}
-    res = requests.get(request_url, params={**p1, **props})
-    result = res.json()
-
-    return result
-
-def get_depth_soilgrids():
-
-    zmins, zmaxs = get_default_zs()
-
-    depth_name_template = '{zmin}-{zmax}cm'
-    depths = []
-    for zmin, zmax in zip(zmins, zmaxs):
-        depth = depth_name_template.format(zmin=zmin, zmax=zmax)
-        depths.append(depth)
-
-    print(f"depths = {depths}")
-
-    return depths
-
-def get_df_soilgrids(lat, lon):
-
-    resultd = request_soilgrids(lat, lon)
-    depths = get_depth_soilgrids()
-    zmins, zmaxs = get_default_zs()
-
-    variables = default_soilgrid_variables()
-
-    soild = {}
-    soild["latitude"] = []
-    soild["longitude"] = []
-    soild["zmin"] = []
-    soild["zmax"] = []
-    for i in range(0, len(depths)):
-        soild["zmin"].append(zmins[i])
-        soild["zmax"].append(zmaxs[i])
-        soild["latitude"].append(lat)
-        soild["longitude"].append(lon)
-    for i, var in enumerate(variables):
-        var_name = resultd['properties']["layers"][i]['name']
-        if (var_name in variables):
-            soild[var_name] = []
-            for j in range(0, len(depths)):
-                raw_value = resultd['properties']["layers"][i]["depths"][j]["values"]["mean"]
-                d_factor = resultd["properties"]["layers"][i]["unit_measure"]["d_factor"]
-                value = raw_value / d_factor
-                soild[var_name].append(value)
-
-    df_soilgrids = pd.DataFrame.from_dict(soild)
-    return df_soilgrids
-
-
-def default_soilgrid_variables():
-    # Define variables that need to be collected for this location
-    soil_variables = ["bdod", "clay", "phh2o", "sand", "silt", "soc", "nitrogen"]
-    return soil_variables
-
-
-def get_default_zs():
-    # Define minimum and maximum depths for each SoilGrids soil layer
-    zmins = [0, 5, 15, 30, 60]
-    zmaxs = [5, 15, 30, 60, 100]
-    return zmins, zmaxs
-
-
-def default_som_content():
-    """
-    Default soil organic matter content, it is assumed to be 58%
-    """
-
-    return 0.58
-
-def default_range_pf_values():
-    return [-1.0, 1.0, 1.3, 1.7, 2.0, 2.3, 2.4, 2.7, 3.0, 3.3, 3.7, 4.0, 4.2, 6.0]
-
-def default_pf_field_capacity():
-    return 2.0
-
-def default_pf_wilting_point():
-    return 4.2
-
-def default_surface_conductivity():
-    return 70
 
 def calculate_is_topsoil(zmin, zmax, zmax_topsoil):
     if (zmin <= zmax_topsoil) & (zmax <= zmax_topsoil):
@@ -99,6 +18,7 @@ def calculate_is_topsoil(zmin, zmax, zmax_topsoil):
     else:
         is_topsoil = False
     return is_topsoil
+
 
 def calculate_van_genuchten(
         df_soilgrids: pd.DataFrame,
@@ -127,6 +47,7 @@ def calculate_van_genuchten(
     df_vgp["theta_s"] = df_vgp.apply(lambda x: ptfw.calculate_theta_s(x.C, x.D, x.S, x.OM, x.is_topsoil), axis=1)
 
     return df_vgp
+
 
 def generate_df_soil_input(
         df_vgp: pd.DataFrame,
@@ -166,6 +87,7 @@ def generate_df_soil_input(
         df_model_input["SMfromPF"] = SMfromPF_perlayer
 
         return df_model_input
+
 
 def generate_soil_yaml(
         df_model_input: pd.DataFrame,
@@ -228,6 +150,7 @@ def generate_soil_yaml(
 def dump_soil_yaml(soil_input_yaml, filename):
     with open(filename, "w") as f:
         f.write(soil_input_yaml)
+
 
 class PedotransferFunctionsWosten():
     """
@@ -311,10 +234,6 @@ class PedotransferFunctionsWosten():
         return t_k_sat
 
 
-"""
-Functions below taken from https://github.com/ajwdewit/pcse_notebooks/blob/master/vangenuchten.py
-"""
-
 def calculate_water_potential_form_pf(pF):
     psi = np.power(10, pF)
     return psi
@@ -337,18 +256,6 @@ def calculate_log10_hydraulic_conductivity(pF, alpha, labda, k_sat, n):
     COND = np.log10(k_h)
     return COND
 
-
-# def make_string_table(XY_table, padding=0):
-# """Converts a list of X,Y pairs into a formatted string table.
-# """
-# padding = " " * padding
-# paddingp1 = f" {padding}"
-# s = f"\n{padding}[\n"
-# for x, y in zip(XY_table[0::2], XY_table[1::2]):
-# s += f"{paddingp1}{x:4.2f}, {y:6.3f}\n"
-# s = s[:-1]
-# s += "]\n"
-# return s
 
 def make_string_table(XY_table):
     """Converts a list of X,Y pairs into a formatted string table.
