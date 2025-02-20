@@ -9,7 +9,7 @@ from pcse_zoo.utils_soil.default_soil_variables import (
 
 request_url = "https://rest.isric.org/soilgrids/v2.0/properties/query"
 
-def request_soilgrids(lat, lon):
+def request_soilgrids(lat, lon) -> dict:
     p1 = {"lat": lat, "lon": lon}
     props = {"property": default_soilgrid_variables(), "depth": get_depth_soilgrids()}
     res = requests.get(request_url, params={**p1, **props})
@@ -17,7 +17,7 @@ def request_soilgrids(lat, lon):
 
     return result
 
-def get_depth_soilgrids():
+def get_depth_soilgrids() -> list:
 
     zmins, zmaxs = default_zs()
 
@@ -31,7 +31,7 @@ def get_depth_soilgrids():
 
     return depths
 
-def get_df_soilgrids(lat, lon):
+def get_df_soilgrids(lat: float, lon: float) -> pd.DataFrame:
 
     resultd = request_soilgrids(lat, lon)
     depths = get_depth_soilgrids()

@@ -51,7 +51,7 @@ def calculate_van_genuchten(
 
 def generate_df_soil_input(
         df_vgp: pd.DataFrame,
-):
+) -> pd.DataFrame:
     pct_to_frac = 0.01
 
     df_model_input = pd.DataFrame()
@@ -92,7 +92,7 @@ def generate_df_soil_input(
 def generate_soil_yaml(
         df_model_input: pd.DataFrame,
         filename: str = None,
-):
+) -> dict:
     PFFieldCapacity = default_pf_field_capacity()
     PFWiltingPoint = default_pf_wilting_point()
     SurfaceConductivity = default_surface_conductivity()
@@ -144,7 +144,8 @@ def generate_soil_yaml(
           CONDfromPF: {make_string_table(df_model_input.CONDfromPF[i - 1])}
     """
 
-    return soil_input_yaml
+    soil_dict = yaml.safe_load(soil_input_yaml)
+    return soil_dict
 
 
 def dump_soil_yaml(soil_input_yaml, filename):
