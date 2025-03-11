@@ -1,4 +1,4 @@
-import yaml
+import os
 
 import pandas as pd
 import numpy as np
@@ -83,10 +83,10 @@ def generate_df_soil_input(
         CONDfromPF_perlayer.append(CONDfromPF)
         SMfromPF_perlayer.append(SMfromPF)
 
-        df_model_input["CONDfromPF"] = CONDfromPF_perlayer
-        df_model_input["SMfromPF"] = SMfromPF_perlayer
+    df_model_input["CONDfromPF"] = CONDfromPF_perlayer
+    df_model_input["SMfromPF"] = SMfromPF_perlayer
 
-        return df_model_input
+    return df_model_input
 
 
 def generate_soil_yaml(
@@ -104,6 +104,8 @@ def generate_soil_yaml(
     FSOMI = df_model_input.FSOMI.to_list()
     RHOD = df_model_input.RHOD.to_list()
     Soil_pH = df_model_input.Soil_pH.to_list()
+    SMfromPF_perlayer = df_model_input.SMfromPF.to_list()
+    CONDfromPF_perlayer = df_model_input.CONDfromPF.to_list()
 
     # below we generate the header of the soil input file as YAML input structure
     soil_input_yaml = f"""
@@ -125,8 +127,8 @@ def generate_soil_yaml(
           FSOMI: {FSOMI[i]}
           RHOD: {RHOD[i]}
           Soil_pH: {Soil_pH[i]}
-          SMfromPF: {make_string_table(df_model_input.SMfromPF[i])}
-          CONDfromPF: {make_string_table(df_model_input.CONDfromPF[i])}
+          SMfromPF: {make_string_table(SMfromPF_perlayer[i])}
+          CONDfromPF: {make_string_table(CONDfromPF_perlayer[i])}
     """
         soil_input_yaml += s
 
@@ -140,15 +142,16 @@ def generate_soil_yaml(
           RHOD: {RHOD[-1]}
           Soil_pH: {Soil_pH[-1]}
           Thickness: {Thickness[-1]}
-          SMfromPF: {make_string_table(df_model_input.SMfromPF[-1])}
-          CONDfromPF: {make_string_table(df_model_input.CONDfromPF[i - 1])}
+          SMfromPF: {make_string_table(SMfromPF_perlayer[-1])}
+          CONDfromPF: {make_string_table(CONDfromPF_perlayer[-1])}
     """
 
-    soil_dict = yaml.safe_load(soil_input_yaml)
-    return soil_dict
+    # soil_dict = yaml.safe_load(soil_input_yaml)
+    return soil_input_yaml
 
 
 def dump_soil_yaml(soil_input_yaml, filename):
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
     with open(filename, "w") as f:
         f.write(soil_input_yaml)
 

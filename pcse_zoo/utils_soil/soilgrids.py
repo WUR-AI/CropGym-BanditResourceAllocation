@@ -34,6 +34,9 @@ def get_depth_soilgrids() -> list:
 def get_df_soilgrids(lat: float, lon: float) -> pd.DataFrame:
 
     resultd = request_soilgrids(lat, lon)
+
+    check_value_empty(resultd)
+
     depths = get_depth_soilgrids()
     zmins, zmaxs = default_zs()
 
@@ -61,3 +64,16 @@ def get_df_soilgrids(lat: float, lon: float) -> pd.DataFrame:
 
     df_soilgrids = pd.DataFrame.from_dict(soild)
     return df_soilgrids
+
+def check_value_empty(data, first = True):
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if key == "mean" and value is None:
+                raise ValueError(f"The key 'mean' has a value of None! Soil data in"
+                                 f"given lat/lon might not exist in SoilGrids!"
+                                 f"Please retry with a different lat/lon combination.")
+            # Recursively check nested dictionaries or lists
+            check_value_empty(value)
+    elif isinstance(data, list):
+        for item in data:
+            check_value_empty(item)
