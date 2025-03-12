@@ -1,4 +1,6 @@
 import os
+import yaml
+import json
 
 import pandas as pd
 import numpy as np
@@ -92,7 +94,7 @@ def generate_df_soil_input(
 def generate_soil_yaml(
         df_model_input: pd.DataFrame,
         filename: str = None,
-) -> dict:
+) -> str:
     PFFieldCapacity = default_pf_field_capacity()
     PFWiltingPoint = default_pf_wilting_point()
     SurfaceConductivity = default_surface_conductivity()
@@ -146,8 +148,9 @@ def generate_soil_yaml(
           CONDfromPF: {make_string_table(CONDfromPF_perlayer[-1])}
     """
 
-    # soil_dict = yaml.safe_load(soil_input_yaml)
-    return soil_input_yaml
+    soil_dict = yaml.safe_load(soil_input_yaml)
+    soil_yaml = json.dumps(soil_dict, indent=6)
+    return soil_yaml
 
 
 def dump_soil_yaml(soil_input_yaml, filename):

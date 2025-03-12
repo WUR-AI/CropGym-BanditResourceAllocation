@@ -33,6 +33,7 @@ def get_depth_soilgrids() -> list:
 
 def get_df_soilgrids(lat: float, lon: float) -> pd.DataFrame:
 
+    print(f"getting soilgrids for longitude: {lon} and latitude: {lat}")
     resultd = request_soilgrids(lat, lon)
 
     check_value_empty(resultd)

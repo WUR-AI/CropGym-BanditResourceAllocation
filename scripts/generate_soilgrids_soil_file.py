@@ -1,6 +1,7 @@
 import argparse
 import os
 import sys
+from pcse_zoo import BASE_PATH
 
 from pcse_zoo.utils_soil.soilgrids import get_df_soilgrids
 from pcse_zoo.utils_soil.generate_soil_files import (
@@ -10,9 +11,7 @@ from pcse_zoo.utils_soil.generate_soil_files import (
     dump_soil_yaml
 )
 
-current_dir = os.path.dirname(os.path.abspath(__file__))
-base_dir = os.path.dirname(current_dir)
-soil_save_dir = os.path.join(base_dir, "pcse_zoo", "configs", "soil", "soilgrids")
+soil_save_dir = os.path.join(BASE_PATH, "pcse_zoo", "configs", "soil", "soilgrids")
 
 def generate_soil_file(longitude, latitude):
     """
