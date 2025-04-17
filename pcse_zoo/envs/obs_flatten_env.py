@@ -108,7 +108,7 @@ def get_config_dir():
     return config_dir
 
 
-def get_wofost_kwargs(config_dir=get_config_dir(), soil_file='arminda_soil.yaml', agro_file='wheat_cropcalendar.yaml',
+def get_wofost_kwargs(config_dir=get_config_dir(), soil_file='arminda_soil.yaml', agro_file='generic_cropcalendar.yaml',
                       model_file='Wofost81_NWLP_MLWB_SNOMIN.conf', pcse_model=2):
     if pcse_model == 2:
         soil_params = yaml.safe_load(open(os.path.join(config_dir, 'soil', soil_file)))
@@ -157,7 +157,7 @@ def get_model_kwargs(pcse_model, loc=defaults.get_default_location(), soil=None,
             soil_file = 'EC6-fine_soil.yaml'
         else:
             soil_file = 'arminda_soil.yaml'
-        agro_file = 'wheat_cropcalendar.yaml'
+        agro_file = 'generic_cropcalendar.yaml'
         print(f'using agro file {agro_file} and soil file {soil_file} with WOFOST SNOMIN')
         return get_wofost_kwargs(soil_file=soil_file, agro_file=agro_file, model_file=model_file, pcse_model=pcse_model)
     else:

@@ -26,7 +26,7 @@ def get_crop_id(
     }
     return d[index]
 
-def get_soil_coordinates_by_id(
+def get_soil_coordinates_by_id_lt(
         index: int = 0,
 ):
     d = {
@@ -36,6 +36,20 @@ def get_soil_coordinates_by_id(
         3: (23.89, 55.11),
         4: (23.88, 55.11),
         5: (23.87, 55.12),
+    }
+    return d[index]
+
+def get_soil_coordinates_by_id_nl(
+        index: int = 0,
+):
+    d = {
+        0: (5.54, 52.49),
+        1: (5.54, 52.5),
+        2: (5.55, 52.5),
+        3: (5.56, 52.5),
+        4: (5.57, 52.5),
+        5: (5.58, 52.5),
+        6: (5.58, 52.6),
     }
     return d[index]
 

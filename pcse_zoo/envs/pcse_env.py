@@ -87,8 +87,14 @@ class AgroManagementContainer:
         self.build_structure()
         return self.structure
 
-    def replace_variety_name(self, name='Arminda'):
+    def replace_variety_name(self, name='Julius'):
         self.crop_variety = name
+
+        self.build_structure()
+        return self.structure
+
+    def replace_crop_name(self, name='Arminda'):
+        self.crop_name = name
 
         self.build_structure()
         return self.structure
@@ -266,7 +272,7 @@ class PCSEEnv(gym.Env):
     _PATH_TO_SOURCE = os.path.dirname(_PATH_TO_FILE)
     _CONFIG_PATH = os.path.join(_PATH_TO_SOURCE, 'configs')
 
-    _DEFAULT_AGRO_FILE = 'wheat_cropcalendar.yaml'
+    _DEFAULT_AGRO_FILE = 'generic_cropcalendar.yaml'
     _DEFAULT_CROP_FILE = 'winterwheat.yaml'
     _DEFAULT_SITE_FILE = 'default_site.yaml'
     _DEFAULT_SOIL_FILE = 'EC3-mediumfine_soil.yaml'
