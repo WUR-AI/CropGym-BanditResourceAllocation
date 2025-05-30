@@ -2,7 +2,7 @@ import requests
 
 import pandas as pd
 
-from pcse_zoo.utils_soil.default_soil_variables import (
+from cropgymzoo.utils_soil.default_soil_variables import (
     default_soilgrid_variables,
     default_zs
 )

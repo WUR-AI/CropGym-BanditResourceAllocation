@@ -2,8 +2,8 @@ import numpy as np
 
 from abc import ABC, abstractmethod
 
-from pcse_zoo.utils.nitrogen_helpers import input_nue, get_surplus_n, get_n_deposition_pcse, get_nh4_deposition_pcse, get_no3_deposition_pcse
-import pcse_zoo.utils.process_pcse_output as process_pcse
+from cropgymzoo.utils.nitrogen_helpers import input_nue, get_surplus_n, get_n_deposition_pcse, get_nh4_deposition_pcse, get_no3_deposition_pcse
+import cropgymzoo.utils.process_pcse_output as process_pcse
 
 
 def reward_functions_without_baseline():

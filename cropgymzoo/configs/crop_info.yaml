@@ -1,0 +1,18 @@
+sugarbeet:
+  crop_name: sugarbeet
+  variety_name: Sugarbeet_601
+  sowing_date: [2001, 4, 15]
+  harvest_date: [2001, 9, 30]
+  start_type: sowing
+winterwheat:
+  crop_name: winterwheat
+  variety_name: Julius
+  sowing_date: [1999, 10, 3]
+  harvest_date: [2000, 8, 20]
+  start_type: sowing
+potato:
+  crop_name: potato
+  variety_name: Innovator
+  sowing_date: [1999, 10, 3]
+  harvest_date: [2000, 8, 20]
+  start_type: sowing

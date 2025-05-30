@@ -10,11 +10,11 @@ import pcse
 import numpy as np
 import yaml
 
-import pcse_zoo.envs.pcse_env as pcse_env
-import pcse_zoo.utils.defaults as defaults
-import pcse_zoo.utils.process_pcse_output as process_pcse
-from pcse_zoo.utils.rewards import Rewards
-from pcse_zoo.utils.nitrogen_helpers import get_aggregated_n_depo_days, m2_to_ha
+import cropgymzoo.envs.pcse_env as pcse_env
+import cropgymzoo.utils.defaults as defaults
+import cropgymzoo.utils.process_pcse_output as process_pcse
+from cropgymzoo.utils.rewards import Rewards
+from cropgymzoo.utils.nitrogen_helpers import get_aggregated_n_depo_days, m2_to_ha
 
 
 def to_weather_info(days, weather_data, weather_variables):
@@ -166,7 +166,7 @@ def get_model_kwargs(pcse_model, loc=defaults.get_default_location(), soil=None,
 
 class StableBaselinesWrapper(pcse_env.PCSEEnv):
     """
-    Establishes compatibility with Stable Baselines3
+    Subclasses PCSE Env.
 
     :param action_multiplier: conversion factor to map output node to g/m2 of nitrogen
         action_space=gym.spaces.Discrete(3), action_multiplier=2.0 gives {0, 2.0, 4.0}

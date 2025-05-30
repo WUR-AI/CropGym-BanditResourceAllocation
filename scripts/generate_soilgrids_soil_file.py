@@ -1,17 +1,17 @@
 import argparse
 import os
 import sys
-from pcse_zoo import BASE_PATH
+from cropgymzoo import _BASE_PATH
 
-from pcse_zoo.utils_soil.soilgrids import get_df_soilgrids
-from pcse_zoo.utils_soil.generate_soil_files import (
+from cropgymzoo.utils_soil.soilgrids import get_df_soilgrids
+from cropgymzoo.utils_soil.generate_soil_files import (
     calculate_van_genuchten,
     generate_df_soil_input,
     generate_soil_yaml,
     dump_soil_yaml
 )
 
-soil_save_dir = os.path.join(BASE_PATH, "pcse_zoo", "configs", "soil", "soilgrids")
+soil_save_dir = os.path.join(_BASE_PATH, "cropgymzoo", "configs", "soil", "soilgrids")
 
 def generate_soil_file(longitude, latitude):
     """
@@ -42,7 +42,7 @@ def main():
     if len(sys.argv) == 1:
         print("No arguments provided!")
         print("Usage: python generate_soil_file.py <longitude> <latitude>")
-        print("Example: python generate_soil_file.py 12.4924 41.8902")
+        print("Example: python generate_soil_file.py 6.656 52.966")
         sys.exit(1)
 
 

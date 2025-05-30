@@ -1,6 +1,6 @@
 import os
 import pcse
-from pcse_zoo import SOURCE_PATH
+from cropgymzoo import _SOURCE_PATH
 
 def get_pcse_args(
         crop: int = None,
@@ -8,11 +8,11 @@ def get_pcse_args(
         site=None,
 )->dict:
     kwargs = {
-        'model_config': os.path.join(SOURCE_PATH, 'Wofost81_NWLP_MLWB_SNOMIN.conf'),
-        'agro_config': os.path.join(SOURCE_PATH, 'agro'),
-        'crop_parameters': os.path.join(SOURCE_PATH, 'crop'),
-        'soil_parameters': os.path.join(SOURCE_PATH, 'soil'),
-        'site_parameters': os.path.join(SOURCE_PATH, 'site'),
+        'model_config': os.path.join(_SOURCE_PATH, 'Wofost81_NWLP_MLWB_SNOMIN.conf'),
+        'agro_config': os.path.join(_SOURCE_PATH, 'agro'),
+        'crop_parameters': os.path.join(_SOURCE_PATH, 'crop'),
+        'soil_parameters': os.path.join(_SOURCE_PATH, 'soil'),
+        'site_parameters': os.path.join(_SOURCE_PATH, 'site'),
     }
     return kwargs
 

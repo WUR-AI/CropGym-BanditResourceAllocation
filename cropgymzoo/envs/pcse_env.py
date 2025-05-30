@@ -15,9 +15,9 @@ import pcse
     Gym:  https://github.com/Farama-Foundation/Gymnasium
     PCSE: https://github.com/ajwdewit/pcse
 
-    Based on the PCSE-Gym environment built by Hiske Overweg (https://github.com/BigDataWUR/crop-gym)
-    With additional augments from Ron van Bree, Michiel Kallenberg, and Hilmy Baja
-
+    Based on the PCSE-Gym environment built by Hiske Overweg (https://github.com/WUR-AI/crop-gym)
+    and the extended cropgym.ai built by Michiel Kallenberg and Ron van Bree (https://github.com/WUR-AI/PCSE-Gym)
+    With additional augments from Hilmy Baja
 """
 
 
@@ -269,7 +269,8 @@ class PCSEEnv(gym.Env):
     """
 
     _PATH_TO_FILE = os.path.dirname(os.path.realpath(__file__))
-    _PATH_TO_SOURCE = os.path.dirname(_PATH_TO_FILE)
+    _PATH_TO_ENVS = os.path.dirname(_PATH_TO_FILE)
+    _PATH_TO_SOURCE = os.path.dirname(_PATH_TO_ENVS)
     _CONFIG_PATH = os.path.join(_PATH_TO_SOURCE, 'configs')
 
     _DEFAULT_AGRO_FILE = 'generic_cropcalendar.yaml'

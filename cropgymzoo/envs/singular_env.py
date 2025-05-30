@@ -4,12 +4,14 @@ import gymnasium as gym
 import numpy as np
 import datetime
 
-import pcse_zoo.utils.process_pcse_output as process_pcse
-from pcse_zoo.utils.rewards import Rewards, ActionsContainer, reward_functions_with_baseline, reward_functions_end, calculate_nue
-from pcse_zoo.utils.nitrogen_helpers import get_surplus_n, get_nh4_deposition_pcse, get_no3_deposition_pcse, convert_year_to_n_concentration
-import pcse_zoo.envs.pcse_env as common_env
+from cropgymzoo import _WOFOST_CONFIG, _AGRO_CALENDAR_CONFIG
 
-class ParcelEnv(gym.Env):
+import cropgymzoo.utils.process_pcse_output as process_pcse
+from cropgymzoo.utils.rewards import Rewards, ActionsContainer, reward_functions_with_baseline, reward_functions_end, calculate_nue
+from cropgymzoo.utils.nitrogen_helpers import get_surplus_n, get_nh4_deposition_pcse, get_no3_deposition_pcse, convert_year_to_n_concentration
+import cropgymzoo.envs.pcse_env as pcse_env
+
+class ParcelEnv(pcse_env.PCSEEnv):
     """
 
     """
@@ -25,15 +27,25 @@ class ParcelEnv(gym.Env):
                  action_multiplier = 1,
                  action_space = gym.spaces.Discrete(9),
                  costs_nitrogen = 2,
+                 crop = 'winterwheat',
+                 model_config: str  =_WOFOST_CONFIG,
+                 agro_config: str = _AGRO_CALENDAR_CONFIG,
                  seed = 107,
                  **kwargs,
-                 ):
+    ):
         self.crop_features = crop_features
-        self.action_features = action_features
         self.weather_features = weather_features
-        self.costs_nitrogen = costs_nitrogen
+        self.action_features = action_features
         self.years = [years] if isinstance(years, int) else years
         self.locations = [locations] if isinstance(locations, tuple) else locations
+        super(ParcelEnv, self).__init__(
+            model_config=model_config,
+            agro_config=agro_config,
+            crop_features=crop_features,
+            weather_features=weather_features,
+            action_features=action_features,
+            locations=locations,)
+        self.costs_nitrogen = costs_nitrogen
         self.action_multiplier = action_multiplier
         self.action_space = action_space
         self._timestep = timestep
@@ -275,10 +287,10 @@ class ParcelEnv(gym.Env):
         if self.reward_function in reward_functions_with_baseline():
             self.baseline_env.loc = location
             self.baseline_env.weather_data_provider = (
-                common_env.get_weather_data_provider(location, random_weather=self.random_weather))
+                pcse_env.get_weather_data_provider(location, random_weather=self.random_weather))
         self.sb3_env.loc = location
         self.sb3_env.weather_data_provider = (
-            common_env.get_weather_data_provider(location, random_weather=self.random_weather))
+            pcse_env.get_weather_data_provider(location, random_weather=self.random_weather))
 
     def overwrite_location(self, location):
         self.locations = location

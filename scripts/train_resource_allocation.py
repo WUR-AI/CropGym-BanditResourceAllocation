@@ -1,4 +1,4 @@
-import pcse_zoo
+import cropgymzoo
 
 import numpy as np
 import argparse

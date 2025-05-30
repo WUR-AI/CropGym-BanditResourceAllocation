@@ -5,7 +5,7 @@ import json
 import pandas as pd
 import numpy as np
 
-from pcse_zoo.utils_soil.default_soil_variables import (
+from cropgymzoo.utils_soil.default_soil_variables import (
     default_som_content,
     default_range_pf_values,
     default_pf_field_capacity,
