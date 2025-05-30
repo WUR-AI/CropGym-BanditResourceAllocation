@@ -4,7 +4,7 @@ import gymnasium as gym
 import numpy as np
 import datetime
 
-from cropgymzoo import _WOFOST_CONFIG, _AGRO_CALENDAR_CONFIG
+from cropgymzoo import _WOFOST_CONFIG, _AGRO_CALENDAR_CONFIG, _CROPS_LIST, _SOIL_PATH, _SITE_PATH
 
 import cropgymzoo.utils.process_pcse_output as process_pcse
 from cropgymzoo.utils.rewards import Rewards, ActionsContainer, reward_functions_with_baseline, reward_functions_end, calculate_nue
@@ -27,23 +27,32 @@ class ParcelEnv(pcse_env.PCSEEnv):
                  action_multiplier = 1,
                  action_space = gym.spaces.Discrete(9),
                  costs_nitrogen = 2,
-                 crop = 'winterwheat',
-                 model_config: str  =_WOFOST_CONFIG,
+                 crop: str = 'winterwheat',
+                 model_config: str = _WOFOST_CONFIG,
                  agro_config: str = _AGRO_CALENDAR_CONFIG,
+                 site_path: str = _SITE_PATH,
+                 soil_path: str = _SOIL_PATH,
                  seed = 107,
                  **kwargs,
     ):
+        self.crop = crop
         self.crop_features = crop_features
         self.weather_features = weather_features
         self.action_features = action_features
         self.years = [years] if isinstance(years, int) else years
         self.locations = [locations] if isinstance(locations, tuple) else locations
+
+        # TODO change agro config here
+        # TODO get parameters from yaml
+
+        crop_parameters, site_parameters, soil_parameters = self._init_configs(crop)
+
         super(ParcelEnv, self).__init__(
             model_config=model_config,
             agro_config=agro_config,
-            crop_features=crop_features,
-            weather_features=weather_features,
-            action_features=action_features,
+            crop_parameters=crop_parameters,
+            site_parameters=site_parameters,
+            soil_parameters=soil_parameters,
             locations=locations,)
         self.costs_nitrogen = costs_nitrogen
         self.action_multiplier = action_multiplier
@@ -438,12 +447,17 @@ class ParcelEnv(pcse_env.PCSEEnv):
         elif self.consecutive_mask_counter > 0:
             self.consecutive_mask_counter -= 1
 
+    def _init_configs(self):
+        crop = self.crop
+
+        crop_parameters = ...
+        site_parameters = ...
+        soil_parameters = ...
+
+        return crop_parameters, site_parameters, soil_parameters
+
     def render(self, mode="human"):
         pass
-
-    @property
-    def measure_features(self):
-        return self.__measure
 
     @property
     def get_len_soil_layers(self):
