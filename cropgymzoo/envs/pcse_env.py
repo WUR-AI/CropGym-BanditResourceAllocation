@@ -22,10 +22,20 @@ import pcse
 
 
 class AgroManagementContainer:
-    def __init__(self, agro_management: list):
+    _ALLOWED_FIELDS = {
+        "crop_name",
+        "crop_variety",
+        "crop_start_date",
+        "crop_start_type",
+        "crop_end_date",
+        "crop_end_type",
+        "max_duration",
+        "campaign_date",
+    }
+    def __init__(self, agro_management: list, crop: str):
         self.agro_structure = agro_management
         self.campaign_date: datetime.date = list(agro_management[0].keys())[0]
-        self.crop_name: str = agro_management[0][self.campaign_date]['CropCalendar']['crop_name']
+        self.crop_name: str = crop
         self.crop_variety: str = agro_management[0][self.campaign_date]['CropCalendar']['variety_name']
         self.crop_start_date: datetime.date = agro_management[0][self.campaign_date]['CropCalendar']['crop_start_date']
         self.crop_start_type: str = agro_management[0][self.campaign_date]['CropCalendar']['crop_start_type']
@@ -51,9 +61,35 @@ class AgroManagementContainer:
                         StateEvents: null
                 ''', Loader=yaml.SafeLoader)
 
+    def update(self, **changes: dict):
+        """
+        Update one or more attributes and rebuild the agro YAML.
+
+        Examples
+        --------
+        agmt.update(crop_name="maize", crop_start_date=datetime.date(2025, 4, 15))
+        agmt.update(crop_end_date=datetime.date(2026, 8, 30), max_duration=480)
+        """
+        invalid = [k for k in changes if k not in self._ALLOWED_FIELDS]
+        if invalid:
+            raise ValueError(f"Unknown field(s): {', '.join(invalid)}")
+
+        for k, v in changes.items():
+            setattr(self, k, v)
+
+        # Do some checks
+
+        if 'crop_start_date' in changes.keys():
+            if self.crop_start_date < self.campaign_date:
+                self.crop_start_date = self.campaign_date - datetime.timedelta(weeks=4)
+
+        self.build_structure()
+        return self.structure
+
+    # TODO change; made for winterwheat
     def replace_years(self, y):
         """
-            Years replaced are the harvest date. Campaign start and sow date starts a year before.
+            Years replaced are the harvest date.
         """
         if isinstance(y, list):
             y = y[0]
@@ -93,7 +129,7 @@ class AgroManagementContainer:
         self.build_structure()
         return self.structure
 
-    def replace_crop_name(self, name='Arminda'):
+    def replace_crop_name(self, name='winterwheat'):
         self.crop_name = name
 
         self.build_structure()
@@ -126,6 +162,10 @@ class AgroManagementContainer:
     @property
     def get_end_date(self):
         return self.crop_end_date
+
+    @property
+    def get_campaign_date(self):
+        return self.campaign_date
 
 
 def get_weather_data_provider(location: tuple,
@@ -294,11 +334,17 @@ class PCSEEnv(gym.Env):
                  years=None,
                  location=None,
                  seed: int = None,
-                 timestep: int = 1,
+                 timestep: int = 7,
+                 crop: str = 'winterwheat',
+                 crop_info: dict = None,
+                 wait_for_crop: bool = True,
                  **kwargs
                  ):
 
         assert timestep > 0
+
+        # For skipping campaign date and starting simulation when sowing
+        self._wait_for_crop = wait_for_crop
 
         # Optionally set the seed
         super().reset(seed=seed)
@@ -323,26 +369,23 @@ class PCSEEnv(gym.Env):
         self._site_params_ = site_parameters
         self._soil_params = soil_parameters
 
-        # Agent will have no access to weather
-        self.no_weather = kwargs.get('no_weather', False)
-
         # Store the agro-management config
         with open(agro_config, 'r') as f:
             self._agro_management = yaml.load(f, Loader=yaml.SafeLoader)
 
         # Initialize Agromanagement Container Class
-        self.agmt = AgroManagementContainer(self._agro_management)
+        self.agmt = AgroManagementContainer(self._agro_management, crop)
 
-        self.agmt.get_start_type(kwargs.get('start_type'))
+        self.crop_info = crop_info
 
-        if years is not None:
-            self._agro_management = self.agmt.replace_years(years)
+        if self.crop_info:
+            self._agro_management = self.agmt.update(self.crop_info[crop])
 
         # Store the PCSE Engine config
         self._model_config = model_config
 
         # Get the weather data source
-        self._weather_data_provider = get_weather_data_provider(self._location, kwargs.get('random_weather'))
+        self._weather_data_provider = get_openmeteo_provider(self._location)
 
         # Create a PCSE engine / crop growth model
         self._model = self._init_pcse_model()
@@ -382,6 +425,12 @@ class PCSEEnv(gym.Env):
                        self._agro_management,
                        config=self._model_config,
                        )
+
+        if self._wait_for_crop:
+            skip_days = max(0, (self._agro_management["crop_start_date"] - self._agro_management["campaign_date"]).days)
+            if skip_days:
+                model.run(days=skip_days, action=0)
+
         # The model starts with output values for the initial date
         # The initial observation should contain output values for an entire timestep
         # If the timestep > 1, generate the remaining outputs by running the model
@@ -421,7 +470,7 @@ class PCSEEnv(gym.Env):
 
     def _get_observation_space_crop_model(self) -> gym.spaces.Space:
         return gym.spaces.Dict(
-            {var: gym.spaces.Box(0, np.inf, shape=(self._timestep,)) for var in self._output_variables}
+            {var: gym.spaces.Box(-np.inf, np.inf, shape=(self._timestep,)) for var in self._output_variables}
         )
 
     def _get_action_space(self) -> gym.spaces.Space:
@@ -429,8 +478,6 @@ class PCSEEnv(gym.Env):
             {
                 'irrigation': gym.spaces.Box(0, np.inf, shape=()),
                 'N': gym.spaces.Box(0, np.inf, shape=()),
-                'P': gym.spaces.Box(0, np.inf, shape=()),
-                'K': gym.spaces.Box(0, np.inf, shape=()),
             }
         )
         return space
@@ -532,21 +579,15 @@ class PCSEEnv(gym.Env):
 
         irrigation = action.get('irrigation', 0)
         N = action.get('N', 0)
-        P = action.get('P', 0)
-        K = action.get('K', 0)
 
         self._model._send_signal(signal=pcse.signals.irrigate,
                                  amount=irrigation,
                                  efficiency=0.8,
                                  )
 
-        self._model._send_signal(signal=pcse.signals.apply_npk,
+        self._model._send_signal(signal=pcse.signals.apply_n,
                                  N_amount=N,
-                                 P_amount=P,
-                                 K_amount=K,
                                  N_recovery=0.7,
-                                 P_recovery=0.7,
-                                 K_recovery=0.7,
                                  )
 
     def _get_observation(self, output) -> dict:

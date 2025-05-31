@@ -8,12 +8,30 @@ from pcse.soil.snomin import SNOMIN
 from pcse.input.csvweatherdataprovider import CSVWeatherDataProvider
 from pcse.input.nasapower import NASAPowerWeatherDataProvider
 
-from pcse_gym.envs.common_env import AgroManagementContainer, get_weather_data_provider
-from pcse_gym.utils.weather_utils.weather_functions import generate_date_list
+from cropgymzoo.envs.pcse_env import AgroManagementContainer, get_weather_data_provider
 
 mg_to_kg = 1e-6
 L_to_m3 = 1e-3
 m2_to_ha = 1e-4
+
+
+def generate_date_list(start_date, end_date):
+    """
+    Generate a list of datetime.date objects for each day between start_date and end_date inclusive.
+
+    Args:
+    start_date (datetime.date): The starting date.
+    end_date (datetime.date): The ending date.
+
+    Returns:
+    list: A list of datetime.date objects from start_date to end_date.
+    """
+    date_list = []
+    current_date = start_date
+    while current_date <= end_date:
+        date_list.append(current_date)
+        current_date += datetime.timedelta(days=1)
+    return date_list
 
 
 def map_random_to_real_year(y_rand, test_year_start=1990, test_year_end=2022, train_year_start=4000,

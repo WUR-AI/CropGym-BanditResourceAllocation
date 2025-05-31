@@ -4,12 +4,18 @@ import gymnasium as gym
 import numpy as np
 import datetime
 
-from cropgymzoo import _WOFOST_CONFIG, _AGRO_CALENDAR_CONFIG, _CROPS_LIST, _SOIL_PATH, _SITE_PATH
+import yaml
+
+from pcse.input.sitedataproviders import WOFOST81SiteDataProvider_SNOMIN
+from pcse.input.yaml_cropdataprovider import YAMLCropDataProvider
+
+from cropgymzoo import _WOFOST_CONFIG, _AGRO_CALENDAR_CONFIG, _CROPS_PATH, _SOIL_PATH, _SITE_PATH, _SOILGRIDS_PATH, _CROPS_CONFIG
 
 import cropgymzoo.utils.process_pcse_output as process_pcse
 from cropgymzoo.utils.rewards import Rewards, ActionsContainer, reward_functions_with_baseline, reward_functions_end, calculate_nue
 from cropgymzoo.utils.nitrogen_helpers import get_surplus_n, get_nh4_deposition_pcse, get_no3_deposition_pcse, convert_year_to_n_concentration
 import cropgymzoo.envs.pcse_env as pcse_env
+from cropgymzoo.utils.defaults import get_wofost_default_crop_features, get_default_weather_features, get_default_action_features
 
 class ParcelEnv(pcse_env.PCSEEnv):
     """
@@ -17,9 +23,9 @@ class ParcelEnv(pcse_env.PCSEEnv):
     """
 
     def __init__(self,
-                 crop_features,
-                 weather_features,
-                 action_features,
+                 crop_features: list = get_wofost_default_crop_features(2),
+                 weather_features: list = get_default_weather_features(),
+                 action_features: list = get_default_action_features(),
                  locations = None,
                  years = None,
                  timestep = 7,
@@ -35,17 +41,21 @@ class ParcelEnv(pcse_env.PCSEEnv):
                  seed = 107,
                  **kwargs,
     ):
-        self.crop = crop
         self.crop_features = crop_features
         self.weather_features = weather_features
         self.action_features = action_features
         self.years = [years] if isinstance(years, int) else years
         self.locations = [locations] if isinstance(locations, tuple) else locations
 
+        self.agro_config = agro_config
+
         # TODO change agro config here
         # TODO get parameters from yaml
 
-        crop_parameters, site_parameters, soil_parameters = self._init_configs(crop)
+        crop_parameters, site_parameters, soil_parameters = self._init_configs()
+
+        with open(_CROPS_CONFIG, 'r') as f:
+            crop_info = yaml.safe_load(f)
 
         super(ParcelEnv, self).__init__(
             model_config=model_config,
@@ -53,7 +63,10 @@ class ParcelEnv(pcse_env.PCSEEnv):
             crop_parameters=crop_parameters,
             site_parameters=site_parameters,
             soil_parameters=soil_parameters,
-            locations=locations,)
+            locations=locations,
+            crop=crop,
+            crop_info=crop_info
+        )
         self.costs_nitrogen = costs_nitrogen
         self.action_multiplier = action_multiplier
         self.action_space = action_space
@@ -156,12 +169,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         return gym.spaces.Box(-10, np.inf, shape=(nvars,))
 
     def _get_obs_len(self):
-        if self.sb3_env.no_weather:
-            nvars = len(self.crop_features)
-        else:
-            nvars = len(self.crop_features) + len(self.action_features) + len(self.weather_features) * self.timestep
-        if self.mask_binary:  # TODO: test with weather features
-            nvars = nvars + len(self.po_features)
+        nvars = len(self.crop_features) + len(self.action_features) + len(self.weather_features) * self.timestep
         return nvars
 
     def step(self, action):
@@ -177,15 +185,6 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         # process output to get observation, reward and growth of winterwheat
         obs, reward, growth = self.process_output(action, output, obs, terminated)
-
-        # normalize observations and reward if not using VecNormalize wrapper
-        if self.normalize:
-            measure = None
-            if isinstance(action, np.ndarray):
-                measure = action[1:]
-            obs = self.norm.normalize_measure_obs(obs, measure)
-            self.norm.update_running_rew(reward)
-            reward = self.norm.normalize_reward(reward)
 
         info = self.grab_infos(output, info, reward, growth)
 
@@ -450,10 +449,16 @@ class ParcelEnv(pcse_env.PCSEEnv):
     def _init_configs(self):
         crop = self.crop
 
-        crop_parameters = ...
-        site_parameters = ...
-        soil_parameters = ...
-
+        crop_parameters = YAMLCropDataProvider(fpath=_CROPS_PATH, force_reload=True)
+        with open(os.path.join(_SOILGRIDS_PATH, f'soil_{self.locations[0][1]}_{self.locations[0][0]}.yaml'), 'r') as f:
+            soil_parameters = yaml.safe_load(f)
+        site_parameters = WOFOST81SiteDataProvider_SNOMIN(
+            WAV=30,
+            CO2=410,
+            # default init; need to change?
+            NH4I=len(soil_parameters['SoilProfileDescription']['SoilLayers'])*[5],
+            NO3I=len(soil_parameters['SoilProfileDescription']['SoilLayers'])*[5],
+        )
         return crop_parameters, site_parameters, soil_parameters
 
     def render(self, mode="human"):

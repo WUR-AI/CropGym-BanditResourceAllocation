@@ -4,8 +4,8 @@
         variety_name: Arminda
         crop_start_date: 1999-10-03
         crop_start_type: sowing
-        crop_end_date: 2000-08-20
-        crop_end_type: harvest
+        crop_end_date:
+        crop_end_type: maturity
         max_duration: 365
     TimedEvents: null
     StateEvents: null

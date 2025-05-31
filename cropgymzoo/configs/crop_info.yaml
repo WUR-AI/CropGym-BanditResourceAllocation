@@ -1,18 +1,18 @@
 sugarbeet:
+  campaign_date: 2001-2-15
   crop_name: sugarbeet
   variety_name: Sugarbeet_601
-  sowing_date: [2001, 4, 15]
-  harvest_date: [2001, 9, 30]
-  start_type: sowing
+  crop_start_date: 2001-4-15
+  crop_end_type: maturity
 winterwheat:
+  campaign_date: 1999-8-20
   crop_name: winterwheat
   variety_name: Julius
-  sowing_date: [1999, 10, 3]
-  harvest_date: [2000, 8, 20]
-  start_type: sowing
+  crop_start_date: 1999-10-3
+  crop_end_type: maturity
 potato:
+  campaign_date: 1999-2-1
   crop_name: potato
   variety_name: Innovator
-  sowing_date: [1999, 10, 3]
-  harvest_date: [2000, 8, 20]
-  start_type: sowing
+  crop_start_date: 1999-4-1
+  crop_end_type: maturity
