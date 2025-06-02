@@ -61,7 +61,7 @@ class AgroManagementContainer:
                         StateEvents: null
                 ''', Loader=yaml.SafeLoader)
 
-    def update(self, **changes: dict):
+    def update_attributes(self, **changes: dict):
         """
         Update one or more attributes and rebuild the agro YAML.
 
@@ -93,12 +93,8 @@ class AgroManagementContainer:
         """
         if isinstance(y, list):
             y = y[0]
-        if self.campaign_date.year == self.crop_end_date.year:
-            yprev = y
-        else:
-            yprev = y - 1
-        self.campaign_date = self.campaign_date.replace(year=yprev)
-        self.crop_start_date = self.crop_start_date.replace(year=yprev)
+        self.campaign_date = self.campaign_date.replace(year=y)
+        self.crop_start_date = self.crop_start_date.replace(year=y)
         self.crop_end_date = self.crop_end_date.replace(year=y)
 
         self.build_structure()
@@ -379,7 +375,7 @@ class PCSEEnv(gym.Env):
         self.crop_info = crop_info
 
         if self.crop_info:
-            self._agro_management = self.agmt.update(self.crop_info[crop])
+            self._agro_management = self.agmt.update_attributes(**self.crop_info[crop])
 
         # Store the PCSE Engine config
         self._model_config = model_config

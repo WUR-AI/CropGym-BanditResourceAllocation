@@ -209,7 +209,6 @@ class StableBaselinesWrapper(pcse_env.PCSEEnv):
         self.cost_measure = kwargs.get('cost_measure', 'real')
         self.start_type = kwargs.get('start_type')
         self.discrete_action_space = kwargs.get('discrete_space', None)
-        self.generated_action_space = self.generate_action_space(self.discrete_action_space)
 
         for i, feature in enumerate(self.crop_features):
             if feature in self.po_features:
@@ -224,30 +223,6 @@ class StableBaselinesWrapper(pcse_env.PCSEEnv):
             print('Using Wofost!')
         else:
             self.multiplier_amount = 1
-
-        super().reset(seed=seed)
-
-    def _get_observation_space(self):
-        if self.no_weather:
-            nvars = len(self.crop_features)
-        else:
-            nvars = len(self.crop_features) + len(self.action_features) + len(self.weather_features) * self.timestep
-            # if self.week is not None:
-            #     nvars = nvars + 1
-        if self.mask_binary:
-            nvars = nvars + len(self.po_features)
-        return gym.spaces.Box(-np.inf, np.inf, shape=(nvars,))
-
-    def _apply_action(self, action):
-        # action = action * self.action_multiplier
-        if self.discrete_action_space is not None:
-            action = self.generated_action_space[action]
-        action = action * 10  # kg N / ha
-        return action
-
-    def _get_reward(self):
-        # Reward gets overwritten in step()
-        return 0
 
     def step(self, action):
         """
@@ -356,6 +331,41 @@ class StableBaselinesWrapper(pcse_env.PCSEEnv):
                     obs[j] = observation['weather'][feature][d]
         return obs
 
+    def _observation(self, observation):
+        """
+        Converts observation into np array to facilitate integration with Stable Baseline3
+        """
+        obs = np.zeros(self.observation_space.shape)
+
+        if isinstance(observation, tuple):
+            observation = observation[0]
+
+        for i, feature in enumerate(self.crop_features):
+            # In WOFOST SNOMIN some variables are layered.
+            # Loop through some checks to grab correct obs
+            if feature in ['NH4', 'NO3']:
+                obs[i] = sum(observation['crop_model'][feature][-1]) / m2_to_ha
+            elif feature in ['SM', 'WC']:
+                obs[i] = sum(observation['crop_model'][feature][-1])
+            elif feature in ['RNO3DEPOSTT', 'RNH4DEPOSTT']:
+                obs[i] = observation['crop_model'][feature][-1] / m2_to_ha
+            elif feature in ['Naction']:
+                obs[i] = self.n_action
+            elif feature in ['last_zero_action']:
+                obs[i] = self.steps_since_last_action
+            else:
+                obs[i] = observation['crop_model'][feature][-1]
+
+        for i, feature in enumerate(self.action_features):
+            j = len(self.crop_features) + i
+            obs[j] = sum(observation['action_features'][feature])
+
+        for d in range(self.timestep):
+            for i, feature in enumerate(self.weather_features):
+                j = d * len(self.weather_features) + len(self.crop_features) + len(self.action_features) + i
+                obs[j] = observation['weather'][feature][d]
+        return obs
+
     def get_harvest_year(self):
         if self.agmt.campaign_date.year < self.agmt.crop_end_date.year:
             if date(self.date.year, 10, 1) < self.date < date(self.date.year, 12, 31):
@@ -400,63 +410,5 @@ class StableBaselinesWrapper(pcse_env.PCSEEnv):
     def weather_data_provider(self, weather):
         self._weather_data_provider = weather
 
-    def generate_action_space(self, n):
-        if n is not None:
-            if n <= 0:
-                return []
-
-            action_space = [0, 4]
-
-            for i in range(2, n):
-                action_space.append(4 + (i - 1) * .5)
-
-            return action_space
-        else:
-            return self.action_space
 
 
-class ZeroNitrogenEnvStorage:
-    """
-    Container to store results from zero nitrogen policy (for re-use)
-    """
-
-    def __init__(self):
-        self.results = {}
-
-    def run_episode(self, env):
-        env.reset()
-        terminated, truncated = False, False
-        infos_this_episode = []
-        while not terminated or truncated:
-            _, _, terminated, truncated, info = env.step(0)
-            infos_this_episode.append(info)
-        variables = infos_this_episode[0].keys()
-        episode_info = {}
-        for v in variables:
-            episode_info[v] = {}
-        for v in variables:
-            for info_dict in infos_this_episode:
-                episode_info[v].update(info_dict[v])
-        return episode_info
-
-    def get_key(self, env):
-        ''' We label the year based on the harvest date. e.g. sow in Oct 2002, harvest in Aug 2003, means that
-            the labelled year is 2003'''
-        # year = env.date.year
-        year = env.get_harvest_year()
-        location = env.loc
-        key = f'{year}-{location}'
-        assert 'None' not in key
-        return key
-
-    def get_episode_output(self, env):
-        key = self.get_key(env)
-        if key not in self.results.keys():
-            results = self.run_episode(env)
-            self.results[key] = results
-        assert bool(self.results[key]), "key empty; check PCSE output"
-        return self.results[key]
-
-    @property
-    def get_result(self):
-        return self.results

@@ -15,6 +15,11 @@ L_to_m3 = 1e-3
 m2_to_ha = 1e-4
 
 
+def is_leap(year: int) -> bool:
+    """True if *year* is a Gregorian leap year."""
+    return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+
+
 def generate_date_list(start_date, end_date):
     """
     Generate a list of datetime.date objects for each day between start_date and end_date inclusive.
