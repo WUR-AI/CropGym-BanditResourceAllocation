@@ -30,30 +30,46 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
     """
 
+    '''
+    Initialize Env for each RL agent
+    '''
     def __init__(self,
                  crop_features: list = get_wofost_default_crop_features(2),
                  weather_features: list = get_default_weather_features(),
                  action_features: list = get_default_action_features(),
-                 locations = None,
-                 years = None,
-                 timestep = 7,
-                 reward = 'NUE',
-                 action_multiplier = 1,
-                 action_space = gym.spaces.Discrete(9),
-                 costs_nitrogen = 2,
+                 location: list | tuple = None,
+                 year: list | tuple = None,
+                 timestep: int = 7,
+                 reward: str = 'NUE',
+                 action_multiplier: float = 1,
+                 action_space: gym.spaces = gym.spaces.Discrete(9),
+                 costs_nitrogen: int = 2,
                  crop: str = 'winterwheat',
                  model_config: str = _WOFOST_CONFIG,
                  agro_config: str = _AGRO_CALENDAR_CONFIG,
                  site_path: str = _SITE_PATH,
                  soil_path: str = _SOIL_PATH,
-                 seed = 107,
+                 seed: int = 107,
+                 training: bool = True,
+                 original: bool = True,
                  **kwargs,
     ):
+        self.original = original
+
+        self.crop = crop
         self.crop_features = crop_features
         self.weather_features = weather_features
         self.action_features = action_features
-        self.years = [years] if isinstance(years, int) else years
-        self.locations = [locations] if isinstance(locations, tuple) else locations
+        self.year = year
+        self.location = location
+
+        self._init_year_location_keys()
+
+        self.training = training
+
+        if self.training:
+            self.random_weather = False
+            self.random_init = False
 
         self.agro_config = agro_config
 
@@ -71,7 +87,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
             crop_parameters=crop_parameters,
             site_parameters=site_parameters,
             soil_parameters=soil_parameters,
-            locations=locations,
+            locations=location,
             crop=crop,
             crop_info=crop_info
         )
@@ -84,24 +100,32 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         self.rng, self.seed = gym.utils.seeding.np_random(seed=seed)
 
+        # initialize variables pertaining to RL agent actions
         self._init_action_variables()
 
+        # initialize soil variables
         self._init_soil_variables()
 
-        """ Initialize reward function """
-
+        # initialize reward function
         self._init_reward_function(costs_nitrogen, kwargs)
 
+        # initialize observation key list
         self._init_obs_keys()
 
+        # initialize infos
         self._init_infos()
+
+        # initialize Zero nitrogen simulations
+        self._init_zero_env(**kwargs)
 
         super().reset(seed=seed)
 
-        # init Zero nitrogen simulations
+        # self._env_baseline.get_key(self)
 
-        self._env_baseline = ZeroNitrogenEnvStorage
-        self._env_baseline.get_key(self)
+
+    '''
+    Gymnasium functions
+    '''
 
     def step(self, action):
         """
@@ -109,7 +133,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         """
 
         # advance one step of the PCSEEngine wrapper and apply action(s)
-        obs, _, terminated, truncated, info = super().step(action)
+        obs, _, terminated, truncated, _ = super().step(action)
 
         # transform and flatten observations
         obs = self._observation(obs)
@@ -118,25 +142,56 @@ class ParcelEnv(pcse_env.PCSEEnv):
         pcse_output = self.model.get_output()
 
         # process output to get observation, reward and growth of winterwheat
-        reward, growth = self.process_output(action, pcse_output, terminated)
+        reward, growth = self._process_output(action, pcse_output, terminated)
 
-        info = self._populate_infos(pcse_output)
+        self._populate_infos(pcse_output, action, reward, terminated)
 
         # info = self.grab_infos(pcse_output, info, reward, growth)
 
-        return obs, reward, terminated, truncated, info
+        return obs, reward, terminated, truncated, self.infos
 
-    def process_output(self, action, output, terminated):
+    def reset(self, seed=None, options=None, **kwargs):
+
+        assert 'year' in options
+
+        # Only for invalid action masking
+        # self.reset_non_zero_action_count()
+
+        site_params = self.special_init_conditions()
+
+        if 'NH4ConcR' or 'NO3ConcR' in options:
+            site_params['NH4Concr'] =  options['NH4ConcR']
+            site_params['NO3ConcR'] = options['NO3ConcR']
+
+        self.overwrite_year(year=options['year'])
+
+        self.reward_container.reset()
+        self.rewards_obj.reset()
+
+        if self.reward_function in reward_functions_with_baseline():
+            self.baseline_env.reset(seed=seed, options=site_params)
+        obs = super().reset(seed=seed, options=site_params)
+
+        # TODO: check whether info should/could be filled
+        info = {}
+
+        return obs, info
+
+    '''
+    Helper functions for various things
+    '''
+
+    def _process_output(self, action, output, terminated):
         if isinstance(action, np.ndarray):
             action = action.item()
 
-        amount = action * self.action_multiplier
+        amount = action * 10
 
-        reward, growth = self.get_reward_and_growth(output, amount, terminated)
+        reward, growth = self._get_reward_and_growth(output, amount, terminated)
 
         return reward, growth
 
-    def get_reward_and_growth(self, output, amount, terminated):
+    def _get_reward_and_growth(self, output, amount, terminated):
         output_baseline = []
         if self.reward_function in reward_functions_with_baseline():
 
@@ -152,14 +207,12 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         reward, growth = self.reward_class.return_reward(output, amount,
                                                          output_baseline=output_baseline,
-                                                         multiplier=self.sb3_env.multiplier_amount,
                                                          obj=self.reward_container)
-        self.rewards_obj.update_profit(output, amount, year=self.sb3_env.date.year,
-                                       multiplier=self.sb3_env.multiplier_amount)
-        reward += self.terminate_reward_signal(output, reward, terminated)
+        self.rewards_obj.update_profit(output, amount, year=self.date.year)
+        reward += self._terminated_reward_signal(output, reward, terminated)
         return reward, growth
 
-    def terminate_reward_signal(self, output, reward, terminated):
+    def _terminated_reward_signal(self, output, reward, terminated):
         if terminated and self.reward_function in reward_functions_end():
             reward = self.reward_container.dump_cumulative_positive_reward - abs(reward)
 
@@ -175,47 +228,12 @@ class ParcelEnv(pcse_env.PCSEEnv):
             )
         return reward
 
-    def grab_infos(self, output, info, reward, growth):
-        # fill in infos
-        if 'reward' not in info.keys(): info['reward'] = {}
-        info['reward'][self.date] = reward
-        if 'growth' not in info.keys(): info['growth'] = {}
-        info['growth'][self.date] = growth
-
-        if 'NUE' not in info.keys():
-            info['NUE'] = {}
-        info['NUE'][self.date] = self.rewards_obj.calculate_nue_on_terminate(
-            n_input=self.reward_container.get_total_fertilization * 10,
-            n_so=process_pcse.get_n_storage_organ(output),
-            year=self.date.year,
-            no3_depo=get_no3_deposition_pcse(output),
-            nh4_depo=get_nh4_deposition_pcse(output),)
-        if 'Nsurplus' not in info.keys():
-            info['Nsurplus'] = {}
-        info['Nsurplus'][self.date] = get_surplus_n(self.reward_container.get_total_fertilization * 10,
-                                                    n_so=process_pcse.get_n_storage_organ(output),
-                                                    year=self.date.year,
-                                                    no3_depo=get_no3_deposition_pcse(output),
-                                                    nh4_depo=get_nh4_deposition_pcse(output),)
-
-        if 'profit' not in info.keys():
-            info['profit'] = {}
-        info['profit'][self.date] = self.rewards_obj.profit
-
-        # save info of random initial conditions
-        # if terminated and self.random_init:
-        #     if 'init_n' not in info.keys():
-        #         info['init_n'] = {}
-        #     info['init_n']['no3'] = self.eval_no3i
-        #     info['init_n']['nh4'] = self.eval_nh4i
-
-        return info
-
     def overwrite_year(self, year):
-        self.years = year
+        self.agro_management = self.agmt.update_attributes(crop_start_date=lambda d: d.replace(year=year),
+                                                           campaign_date=lambda d: d.replace(year=year),)
         if self.reward_function in reward_functions_with_baseline():
-            self.baseline_env.agro_management = self.sb3_env.agmt.replace_years(year)
-        self.sb3_env.agro_management = self.sb3_env.agmt.replace_years(year)
+            self.baseline_env.agro_management = self.agmt.update_attributes(crop_start_date=lambda d: d.replace(year=year),
+                                                                            campaign_date=lambda d: d.replace(year=year),)
 
     def set_location(self, location):
         if self.reward_function in reward_functions_with_baseline():
@@ -226,25 +244,22 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self.sb3_env.weather_data_provider = (
             pcse_env.get_weather_data_provider(location, random_weather=self.random_weather))
 
-    def overwrite_location(self, location):
-        self.locations = location
-        self.set_location(location)
-
-    def overwrite_initial_conditions(self):
+    def _overwrite_initial_conditions(self):
         # N initial conditions
-        list_nh4i, list_no3i = self.generate_realistic_n()
+        list_nh4i, list_no3i = self._generate_realistic_n()
         self.eval_nh4i = list_nh4i
         self.eval_no3i = list_no3i
 
         site_parameters = {'NH4I': list_nh4i, 'NO3I': list_no3i, }
         return site_parameters
 
-    def overwrite_nitrogen_rain_concentration(self):
+    def _overwrite_nitrogen_rain_concentration(self):
         # N concentration in rain for deposition
-        nh4concr, no3concr = convert_year_to_n_concentration(self.sb3_env.agmt.crop_end_date.year,
-                                                             agmt=self.sb3_env.agmt,
+        nh4concr, no3concr = convert_year_to_n_concentration(self.date.year,
+                                                             agmt=self.agmt,
                                                              random_weather=self.random_weather,
-                                                             loc=self.loc)
+                                                             loc=self.loc,
+                                                             wdp=self.model.wdp,)
 
         site_parameters = {'NH4ConcR': nh4concr, 'NO3ConcR': no3concr, }
         return site_parameters
@@ -260,7 +275,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         # If soil profile is 1m, 30% will have 70% of the total inorganic N
         self.len_top_layers = int(np.ceil(self.len_soil_layers * 0.3))
 
-    def generate_realistic_n(self) -> tuple[list, list]:
+    def _generate_realistic_n(self) -> tuple[list, list]:
         """ method to overwrite a random N initial condition for every call of reset()
             Implemented based on discussions with Herman Berghuijs, for NL conditions
         """
@@ -303,74 +318,14 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
     def special_init_conditions(self):
         site_params = None
-        if self.random_init and self.pcse_env == 2:
-            site_params = self.overwrite_initial_conditions()
+        if self.random_init:
+            site_params = self._overwrite_initial_conditions()
             # for N deposition
-            site_params = site_params | self.overwrite_nitrogen_rain_concentration()
-        elif not self.random_init and self.pcse_env == 2:
-            site_params = self.overwrite_nitrogen_rain_concentration()
+            site_params = site_params | self._overwrite_nitrogen_rain_concentration()
+        elif not self.random_init:
+            site_params = self._overwrite_nitrogen_rain_concentration()
 
         return site_params
-
-    def reset(self, seed=None, options=None, **kwargs):
-
-        # Only for invalid action masking
-        self.reset_non_zero_action_count()
-
-        site_params = self.special_init_conditions()
-
-        if isinstance(options, dict):
-            site_params = self.special_init_conditions() | options
-
-        if isinstance(self.years, list):
-            year = self.np_random.choice(self.years)
-            if self.reward_function in reward_functions_with_baseline():
-                self.baseline_env.agro_management = self.sb3_env.agmt.replace_years(year)
-            self.sb3_env.agro_management = self.sb3_env.agmt.replace_years(year)
-
-        if isinstance(self.locations, list):
-            location = self.locations[self.np_random.choice(len(self.locations), 1)[0]]
-            self.set_location(location)
-
-        self.reward_container.reset()
-        self.rewards_obj.reset()
-
-        if self.reward_function in reward_functions_with_baseline():
-            self.baseline_env.reset(seed=seed, options=site_params)
-        obs = self.sb3_env.reset(seed=seed, options=site_params)
-
-        # TODO: check whether info should/could be filled
-        info = {}
-
-        if self.normalize:
-            obs = self.norm.normalize_measure_obs(obs, None)
-
-        return obs, info
-
-    def action_masks(self):
-        assert isinstance(self.action_space, gym.spaces.Discrete)
-        if (self.non_zero_action_count >= self.max_non_zero_actions or
-            self.consecutive_mask_counter > 0 or
-            self.n_steps < self.start_actions or
-            self.n_steps >= self.end_actions):
-            mask = [False for _ in range(self.action_space.n)]
-            mask[0] = True
-            return mask
-        else:
-            return [True for _ in range(self.action_space.n)]
-
-    def reset_non_zero_action_count(self):
-        self.non_zero_action_count = 0
-        self.consecutive_mask_counter = 0
-        self.n_steps = 0
-
-    def update_non_zero_action_count(self, actions):
-        self.n_steps += 1
-        if np.any(actions != 0):
-            self.non_zero_action_count += np.sum(actions != 0).item()
-            self.consecutive_mask_counter = self.mask_duration
-        elif self.consecutive_mask_counter > 0:
-            self.consecutive_mask_counter -= 1
 
     @staticmethod
     def encode_doy(date: datetime.date | datetime.datetime, period: float | None = None):
@@ -383,7 +338,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         return math.sin(angle), math.cos(angle)
 
-    def _populate_infos(self, pcse_output, reward, action, wso, profit, terminate):
+    def _populate_infos(self, pcse_output, action, reward, terminate):
 
         self.infos["Date"].append(pcse_output['date'][-1])
 
@@ -403,26 +358,32 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         self.infos['Reward'].append(reward)
         self.infos['Action'].append(action)
-        self.infos['Yield'].append(wso)
-        self.infos['Nue'].append(None if not terminate else calculate_nue(n_input=self.infos['ActionHistory'][-1],
-                                                                          n_so=pcse_output['NamountSO'][-1],
-                                                                          year=self.model.date,
-                                                                          nh4_depo=pcse_output['RNH4DEPOSTT'][-1],
-                                                                          no3_depo=pcse_output['RNNO3DEPOSTT'][-1],
-                                                                          ))
-        self.infos['Nsurp'].append(None if not terminate else get_surplus_n(n_input=self.infos['ActionHistory'][-1],
-                                                                            n_so=pcse_output['NamountSO'][-1],
-                                                                            year=self.date.year,
-                                                                            nh4_depo=pcse_output['RNH4DEPOSTT'][-1],
-                                                                            no3_depo=pcse_output['RNNO3DEPOSTT'][-1]))
-        self.infos['Profit'].append(profit)
+        self.infos['Yield'].append(pcse_output['WSO'][-1])
+        self.infos['Nue'].append(None if not terminate
+                                 else calculate_nue(n_input=self.infos['ActionHistory'][-1],
+                                                      n_so=pcse_output['NamountSO'][-1],
+                                                      year=self.date.year,
+                                                      nh4_depo=pcse_output['RNH4DEPOSTT'][-1],
+                                                      no3_depo=pcse_output['RNNO3DEPOSTT'][-1],
+                                                      ))
+        self.infos['Nsurp'].append(None if not terminate
+                                   else get_surplus_n(n_input=self.infos['ActionHistory'][-1],
+                                                        n_so=pcse_output['NamountSO'][-1],
+                                                        year=self.date.year,
+                                                        nh4_depo=pcse_output['RNH4DEPOSTT'][-1],
+                                                        no3_depo=pcse_output['RNNO3DEPOSTT'][-1]))
+        self.infos['Profit'].append(self.rewards_obj.profit)
+
+    '''
+    Init helpers
+    '''
 
     def _init_configs(self):
-        crop = self.crop
-
         crop_parameters = YAMLCropDataProvider(fpath=_CROPS_PATH, force_reload=True)
+
         with open(os.path.join(_SOILGRIDS_PATH, f'soil_{self.locations[0][1]}_{self.locations[0][0]}.yaml'), 'r') as f:
             soil_parameters = yaml.safe_load(f)
+
         site_parameters = WOFOST81SiteDataProvider_SNOMIN(
             WAV=30,
             CO2=410,
@@ -435,7 +396,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
     def _init_reward_function(self, costs_nitrogen, kwargs):
 
         self.rewards_obj = Rewards(kwargs.get('reward_var'), self.timestep, costs_nitrogen)
-        self.reward_container = ActionsContainer()
+        self.reward_container: ActionsContainer | Rewards.__class__ = ActionsContainer()
 
         if self.reward_function == 'ANE':
             self.reward_class = self.rewards_obj.DEF(self.timestep, costs_nitrogen)
@@ -521,17 +482,39 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self.mask_duration = 3
         self.consecutive_mask_counter = 0
 
-        self.action_features += ['Nsteps', 'Naction', 'StepsSinceLastAction']
+        self.action_features = ['Nsteps', 'Naction', 'StepsSinceLastAction']
+
+    def _init_zero_env(self, **kwargs):
+        if self.reward_function in reward_functions_with_baseline and self.original is not False:
+            self._env_baseline = ParcelEnv(
+                crop_features=self.crop_features,
+                weather_features=self.weather_features,
+                locations=self.locations,
+                years=self.years,
+                timestep=self._timestep,
+                reward='NUE',
+                action_space=self.action_space,
+                crop='winterwheat',
+                model_config=self._model_config,
+                agro_config=self.agro_config,
+                seed=self.seed,
+                original=False,
+                **kwargs,
+            )
+            self.zero_nitrogen_env_storage = ZeroNitrogenEnvStorage()
 
     def _init_obs_keys(self):
         self.obs_keys = self.crop_features + self.action_features + self.weather_features
+
+    def _init_year_location_keys(self):
+        self.year_location_keys = [f"{year}_{loc[0]}_{loc[1]}" for year in self.years for loc in self.locations]
 
     def _get_obs_len(self):
         nvars = (len(self.crop_features) + len(self.action_features) + len(self.weather_features) * self.timestep)
         return nvars
 
     @staticmethod
-    def _crop_model_sum_last(self, pcse, var, normalise=1.0):
+    def _crop_model_sum_last(pcse, var, normalise=1.0):
         return np.sum(pcse[var][-1]) / normalise
 
     def _get_key_transformations(self, crop_model):
@@ -594,15 +577,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
     @property
     def model(self):
-        return self.model
-
-    @property
-    def norm(self):
-        return self._norm
-
-    @property
-    def norm_rew(self):
-        return self._rew_norm
+        return self._model
 
     @property
     def sb3_env(self):
@@ -617,10 +592,6 @@ class ParcelEnv(pcse_env.PCSEEnv):
         return self.model.day
 
     @property
-    def loc(self) -> tuple:
-        return self.sb3_env.loc
-
-    @property
     def timestep(self):
         return self._timestep
 
@@ -632,6 +603,29 @@ class ParcelEnv(pcse_env.PCSEEnv):
     def act_len(self):
         return len(self.action_space.shape)
 
+    @property
+    def loc(self):
+        return self._location
+
+    @loc.setter
+    def loc(self, location):
+        self._location = location
+
+    @property
+    def agro_management(self):
+        return self._agro_management
+
+    @agro_management.setter
+    def agro_management(self, agro):
+        self._agro_management = agro
+
+    @property
+    def weather_data_provider(self):
+        return self._weather_data_provider
+
+    @weather_data_provider.setter
+    def weather_data_provider(self, weather):
+        self._weather_data_provider = weather
 
 class ZeroNitrogenEnvStorage:
     """

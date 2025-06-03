@@ -74,8 +74,28 @@ class AgroManagementContainer:
         if invalid:
             raise ValueError(f"Unknown field(s): {', '.join(invalid)}")
 
-        for k, v in changes.items():
-            setattr(self, k, v)
+        for attr, spec in changes.items():
+            current = getattr(self, attr)
+
+            # transformer function --> attr = spec(attr)
+            if callable(spec):
+                new_val = spec(current)
+
+            # dict with kwargs for .replace(**spec)
+            elif isinstance(spec, dict):
+                if hasattr(current, "replace"):
+                    new_val = current.replace(**spec)
+                else:
+                    raise TypeError(
+                        f"{attr} does not support .replace(**kwargs); "
+                        f"pass a callable instead."
+                    )
+
+            # 3️⃣ plain overwrite
+            else:
+                new_val = spec
+
+            setattr(self, attr, new_val)
 
         # Do some checks
 
@@ -525,6 +545,10 @@ class PCSEEnv(gym.Env):
     @property
     def date(self) -> datetime.date:
         return self._model.day
+
+    @property
+    def wdp(self) -> pcse.input.NASAPowerWeatherDataProvider or pcse.input.OpenMeteoWeatherDataProvider:
+        return self._weather_data_provider
 
     """
     Gym functions

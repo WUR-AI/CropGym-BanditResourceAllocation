@@ -56,6 +56,7 @@ def calculate_year_n_deposition(
         agmt: AgroManagementContainer,
         site_params: dict,
         random_weather: bool = False,
+        wdp = None,
 ) -> tuple[float, float]:
     assert year == agmt.crop_end_date.year
 
@@ -70,7 +71,9 @@ def calculate_year_n_deposition(
     nh4depo_year = 0.0
     conv = 1
 
-    wdp = get_weather_data_provider(loc, random_weather)
+    if wdp is None:
+        wdp = get_weather_data_provider(location=loc, random_weather=random_weather)
+
     if isinstance(wdp, NASAPowerWeatherDataProvider):
         conv = 10
     elif isinstance(wdp, CSVWeatherDataProvider):
@@ -127,12 +130,14 @@ def get_aggregated_n_depo_days(
 def convert_year_to_n_concentration(year: int,
                                     agmt: AgroManagementContainer = None,
                                     loc: tuple = (52.0, 5.5),
-                                    random_weather: bool = False) -> tuple[float, float]:
+                                    random_weather: bool = False,
+                                    wdp = None) -> tuple[float, float]:
     """
     Function to calculate year in NL to N concentration in rain water
     """
 
-    wdp = get_weather_data_provider(loc, random_weather)
+    if wdp is None:
+        wdp = get_weather_data_provider(location=loc, random_weather=random_weather)
 
     if agmt is not None:
         # calculate N deposition based on the length that the crop is in the soil

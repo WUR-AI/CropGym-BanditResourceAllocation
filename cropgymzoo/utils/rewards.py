@@ -128,7 +128,7 @@ class Rewards:
 
         return profit
 
-    def update_profit(self, output, amount, year, multiplier, country='NL'):
+    def update_profit(self, output, amount, year, multiplier=1, country='NL'):
         self.profit += self.calculate_profit(output, amount, year, multiplier, with_year=self.with_year)
 
     def calculate_nue_on_terminate(self, n_input, n_so, year, start=None, end=None, no3_depo=None, nh4_depo=None):
