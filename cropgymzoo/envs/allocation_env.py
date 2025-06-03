@@ -73,7 +73,7 @@ class AllocationBandit(gym.Env):
 # Minimal CUCB-style loop (works for any n_fields)
 # ---------------------------------------------------------------------
 if __name__ == "__main__":
-    env = FertilizerAllocBandit(n_fields=8, total_kg=200, delta_kg=10)
+    env = AllocationBandit(n_fields=8, total_kg=200, delta_kg=10)
     Q, n = env.Q, env.n_fields
 
     counts  = np.zeros((n, Q + 1))

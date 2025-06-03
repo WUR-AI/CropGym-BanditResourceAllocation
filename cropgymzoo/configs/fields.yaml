@@ -1,24 +1,24 @@
-field1:
+field-1:
   soil_lon: 5.54
   soil_lat: 52.5
   crop: sugarbeet
-field2:
+field-2:
   soil_lon: 5.54
   soil_lat: 52.49
   crop: winterwheat
-field3:
+field-3:
   soil_lon: 5.55
   soil_lat: 52.5
   crop: potato
-field4:
+field-4:
   soil_lon: 5.56
   soil_lat: 52.5
   crop: sugarbeet
-field5:
+field-5:
   soil_lon: 5.54
   soil_lat: 52.49
   crop: winterwheat
-field6:
+field-6:
   soil_lon: 5.54
   soil_lat: 52.49
   crop: potato

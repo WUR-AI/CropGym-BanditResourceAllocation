@@ -27,18 +27,20 @@ import torch.nn as nn
 
 class ParcelEnv(pcse_env.PCSEEnv):
     """
-
+    This is a class that inherits PCSE.
+    It will be instantiated multiple times for the MARL environment.
     """
 
     '''
     Initialize Env for each RL agent
     '''
     def __init__(self,
-                 crop_features: list = get_wofost_default_crop_features(2),
+                 crop_features: list = get_wofost_default_crop_features(),
                  weather_features: list = get_default_weather_features(),
                  action_features: list = get_default_action_features(),
                  location: list | tuple = None,
                  year: list | tuple = None,
+                 year_list: list = None,
                  timestep: int = 7,
                  reward: str = 'NUE',
                  action_multiplier: float = 1,
@@ -62,8 +64,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self.action_features = action_features
         self.year = year
         self.location = location
-
-        self._init_year_location_keys()
+        self.year_list = year_list
 
         self.training = training
 
@@ -133,17 +134,18 @@ class ParcelEnv(pcse_env.PCSEEnv):
         """
 
         # advance one step of the PCSEEngine wrapper and apply action(s)
-        obs, _, terminated, truncated, _ = super().step(action)
+        obs_raw, _, terminated, truncated, _ = super().step(action)
 
         # transform and flatten observations
-        obs = self._observation(obs)
+        obs = self._observation(obs_raw)
 
         # populate reward
         pcse_output = self.model.get_output()
 
-        # process output to get observation, reward and growth of winterwheat
+        # process output to get the observation, reward and growth of the crop
         reward, growth = self._process_output(action, pcse_output, terminated)
 
+        # append new information to the infos dict
         self._populate_infos(pcse_output, action, reward, terminated)
 
         # info = self.grab_infos(pcse_output, info, reward, growth)
@@ -151,26 +153,27 @@ class ParcelEnv(pcse_env.PCSEEnv):
         return obs, reward, terminated, truncated, self.infos
 
     def reset(self, seed=None, options=None, **kwargs):
+        """
+        Resets parcel episode. The key `year` must be in the ::options dictionary.
+        """
 
-        assert 'year' in options
+        assert 'year' in options, "Please reset environment with a year"
 
         # Only for invalid action masking
         # self.reset_non_zero_action_count()
 
         site_params = self.special_init_conditions()
 
-        if 'NH4ConcR' or 'NO3ConcR' in options:
-            site_params['NH4Concr'] =  options['NH4ConcR']
-            site_params['NO3ConcR'] = options['NO3ConcR']
-
-        self.overwrite_year(year=options['year'])
+        options['site_params'] = site_params
 
         self.reward_container.reset()
         self.rewards_obj.reset()
 
-        if self.reward_function in reward_functions_with_baseline():
-            self.baseline_env.reset(seed=seed, options=site_params)
-        obs = super().reset(seed=seed, options=site_params)
+        self.overwrite_year(year=options['year'])
+
+        if self.reward_function in reward_functions_with_baseline() and self.original is True:
+            self.baseline_env.reset(seed=seed, options=options)
+        obs = super().reset(seed=seed, options=options)
 
         # TODO: check whether info should/could be filled
         info = {}
@@ -187,11 +190,6 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         amount = action * 10
 
-        reward, growth = self._get_reward_and_growth(output, amount, terminated)
-
-        return reward, growth
-
-    def _get_reward_and_growth(self, output, amount, terminated):
         output_baseline = []
         if self.reward_function in reward_functions_with_baseline():
 
@@ -210,6 +208,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
                                                          obj=self.reward_container)
         self.rewards_obj.update_profit(output, amount, year=self.date.year)
         reward += self._terminated_reward_signal(output, reward, terminated)
+
         return reward, growth
 
     def _terminated_reward_signal(self, output, reward, terminated):
@@ -263,6 +262,65 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         site_parameters = {'NH4ConcR': nh4concr, 'NO3ConcR': no3concr, }
         return site_parameters
+
+    def _get_obs_len(self):
+        nvars = (len(self.crop_features) + len(self.action_features) + len(self.weather_features) * self.timestep)
+        return nvars
+
+    @staticmethod
+    def _crop_model_sum_last(pcse, var, normalise=1.0):
+        return np.sum(pcse[var][-1]) / normalise
+
+    def _get_key_transformations(self, crop_model):
+        return {
+            "NH4": lambda: self._crop_model_sum_last(crop_model, "NH4", m2_to_ha),
+            "NO3": lambda: self._crop_model_sum_last(crop_model, "NO3", m2_to_ha),
+            "SM": lambda: self._crop_model_sum_last(crop_model, "SM"),
+            "WC": lambda: self._crop_model_sum_last(crop_model, "WC"),
+            "RNO3DEPOSTT": lambda: self._crop_model_sum_last(crop_model, "RNO3DEPOSTT", m2_to_ha),
+            "RNH4DEPOSTT": lambda: self._crop_model_sum_last(crop_model, "RNH4DEPOSTT", m2_to_ha),
+        }
+
+    def _observation(self, observation):
+        """
+        Flatten the structured `observation` dict into a 1-D numpy array that
+        matches `self.observation_space.shape`.
+        """
+
+        if isinstance(observation, tuple):
+            observation = observation[0]
+
+        crop_model = observation["crop_model"]
+        act = observation["action_features"]
+        weather = observation["weather"]
+
+        crop_values = [
+            self._get_key_transformations(crop_model).get(f, lambda: crop_model[f][-1])()  # fall back to plain last value
+            for f in self.crop_features
+        ]
+
+        action_values = [np.sum(act[f]) for f in self.action_features]
+
+        # shape = (n_timesteps, n_weather_vars)  →  ravel() = row-major flatten
+        weather_matrix = np.vstack([weather[f][:self.timestep] for f in self.weather_features]).T
+        weather_values = weather_matrix.ravel()
+
+        return np.array(crop_values + action_values + list(weather_values), dtype=np.float32)
+
+    def _get_observation_space(self):
+        nvars = self._get_obs_len()
+        return gym.spaces.Box(-np.inf, np.inf, shape=(nvars,))
+
+    def _apply_action(self, action):
+        action = action * 10  # kg N / ha
+        return action
+
+    def _get_reward(self):
+        # Reward gets overwritten in step()
+        return 0.0
+
+    def render(self, mode="human"):
+        pass
 
     def _init_random_init_conditions_params(self):
         self.mean_total_N = 50  # kg/ha
@@ -505,68 +563,6 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
     def _init_obs_keys(self):
         self.obs_keys = self.crop_features + self.action_features + self.weather_features
-
-    def _init_year_location_keys(self):
-        self.year_location_keys = [f"{year}_{loc[0]}_{loc[1]}" for year in self.years for loc in self.locations]
-
-    def _get_obs_len(self):
-        nvars = (len(self.crop_features) + len(self.action_features) + len(self.weather_features) * self.timestep)
-        return nvars
-
-    @staticmethod
-    def _crop_model_sum_last(pcse, var, normalise=1.0):
-        return np.sum(pcse[var][-1]) / normalise
-
-    def _get_key_transformations(self, crop_model):
-        return {
-            "NH4": lambda: self._crop_model_sum_last(crop_model, "NH4", m2_to_ha),
-            "NO3": lambda: self._crop_model_sum_last(crop_model, "NO3", m2_to_ha),
-            "SM": lambda: self._crop_model_sum_last(crop_model, "SM"),
-            "WC": lambda: self._crop_model_sum_last(crop_model, "WC"),
-            "RNO3DEPOSTT": lambda: self._crop_model_sum_last(crop_model, "RNO3DEPOSTT", m2_to_ha),
-            "RNH4DEPOSTT": lambda: self._crop_model_sum_last(crop_model, "RNH4DEPOSTT", m2_to_ha),
-        }
-
-    def _observation(self, observation):
-        """
-        Flatten the structured `observation` dict into a 1-D numpy array that
-        matches `self.observation_space.shape`.
-        """
-
-        if isinstance(observation, tuple):
-            observation = observation[0]
-
-        crop_model = observation["crop_model"]
-        act = observation["action_features"]
-        weather = observation["weather"]
-
-        crop_values = [
-            self._get_key_transformations(crop_model).get(f, lambda: crop_model[f][-1])()  # fall back to plain last value
-            for f in self.crop_features
-        ]
-
-        action_values = [np.sum(act[f]) for f in self.action_features]
-
-        # shape = (n_timesteps, n_weather_vars)  →  ravel() = row-major flatten
-        weather_matrix = np.vstack([weather[f][:self.timestep] for f in self.weather_features]).T
-        weather_values = weather_matrix.ravel()
-
-        return np.array(crop_values + action_values + list(weather_values), dtype=np.float32)
-
-    def _get_observation_space(self):
-        nvars = self._get_obs_len()
-        return gym.spaces.Box(-np.inf, np.inf, shape=(nvars,))
-
-    def _apply_action(self, action):
-        action = action * 10  # kg N / ha
-        return action
-
-    def _get_reward(self):
-        # Reward gets overwritten in step()
-        return 0.0
-
-    def render(self, mode="human"):
-        pass
 
     def get_harvest_year(self):
         return self.agmt.crop_start_date

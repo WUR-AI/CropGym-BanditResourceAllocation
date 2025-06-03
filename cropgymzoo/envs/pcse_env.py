@@ -392,10 +392,12 @@ class PCSEEnv(gym.Env):
         # Initialize Agromanagement Container Class
         self.agmt = AgroManagementContainer(self._agro_management, crop)
 
+        # Crop infos
+        self.crop = crop
         self.crop_info = crop_info
 
         if self.crop_info:
-            self._agro_management = self.agmt.update_attributes(**self.crop_info[crop])
+            self._agro_management = self.agmt.update_attributes(**self.crop_info[self.crop])
 
         # Store the PCSE Engine config
         self._model_config = model_config
@@ -419,16 +421,16 @@ class PCSEEnv(gym.Env):
         # Define Gym action space
         self.action_space = self._get_action_space()
 
-    def _init_pcse_model(self, options=None, *args, **kwargs) -> Engine:
+    def _init_pcse_model(self, options={}, *args, **kwargs) -> Engine:
 
         # Inject different initial condition every episode if it specified in args
-        if options is not None:
+        if 'site_params' in options:
             if 'NH4I' in options:
-                self._site_params['NH4I'] = options['NH4I']
-                self._site_params['NO3I'] = options['NO3I']
+                self._site_params['NH4I'] = options['site_params']['NH4I']
+                self._site_params['NO3I'] = options['site_params']['NO3I']
             if 'NH4ConcR' in options:
-                self._site_params['NH4ConcR'] = options['NH4ConcR']
-                self._site_params['NO3ConcR'] = options['NO3ConcR']
+                self._site_params['NH4ConcR'] = options['site_params']['NH4ConcR']
+                self._site_params['NO3ConcR'] = options['site_params']['NO3ConcR']
 
         # Combine the config files in a single PCSE ParameterProvider object
         self._parameter_provider = pcse.base.ParameterProvider(cropdata=self._crop_params,
@@ -442,6 +444,7 @@ class PCSEEnv(gym.Env):
                        config=self._model_config,
                        )
 
+        # Let simulation run until crop start date
         if self._wait_for_crop:
             skip_days = max(0, (self._agro_management["crop_start_date"] - self._agro_management["campaign_date"]).days)
             if skip_days:

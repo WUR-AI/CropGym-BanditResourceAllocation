@@ -3,13 +3,10 @@ def get_lintul_default_crop_features():
     return ["DVS", "TGROWTH", "LAI", "NUPTT", "TRAN", "TNSOIL", "TRAIN", "TRANRF", "WSO"]
 
 
-def get_wofost_default_crop_features(pcse_env):
+def get_wofost_default_crop_features():
     # See get_titles() for description of variables
-    if pcse_env == 1:
-        return ["DVS", "TAGP", "LAI", "NuptakeTotal", "TRA", "NAVAIL", "SM", "RFTRA", "WSO"]
-    elif pcse_env == 2:
-        return ["DVS", "TAGP", "LAI", "NuptakeTotal", "TRA", "NO3", "NH4", "WC", "WSO", "NLOSSCUM",
-                'RNO3DEPOSTT', 'RNH4DEPOSTT', 'NamountSO']
+    return ["DVS", "TAGP", "LAI", "NuptakeTotal", "TRA", "NO3", "NH4", "WC", "WSO", "NLOSSCUM",
+            'RNO3DEPOSTT', 'RNH4DEPOSTT', 'NamountSO']
 
 
 def get_wofost_minimal_crop_features(pcse_env):
