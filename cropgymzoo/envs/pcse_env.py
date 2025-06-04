@@ -634,10 +634,7 @@ class PCSEEnv(gym.Env):
         weather_observation = {var: [getattr(weather_data[d], var) for d in range(len(days))] for var in
                                self._weather_variables}
         # Get action history through action features
-        if 'SNOMIN' in self._model_config:
-            action_features = {'action_history': [day['RNH4AMTT'] / 1e-3 + day["RNO3AMTT"] / 1e-3 for day in output]}
-        else:
-            action_features = {}
+        action_features = {'action_history': [day['RNH4AMTT'] / 1e-3 + day["RNO3AMTT"] / 1e-3 for day in output]}
 
         o = {
             'crop_model': crop_model_observation,

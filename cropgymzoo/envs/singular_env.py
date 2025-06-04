@@ -1,12 +1,13 @@
 import os
+import math
+
+import yaml
+
+import functools
 import gymnasium as gym
 
 import numpy as np
 import datetime
-
-import math
-
-import yaml
 
 from pcse.input.sitedataproviders import WOFOST81SiteDataProvider_SNOMIN
 from pcse.input.yaml_cropdataprovider import YAMLCropDataProvider
@@ -54,10 +55,21 @@ class ParcelEnv(pcse_env.PCSEEnv):
                  seed: int = 107,
                  training: bool = True,
                  original: bool = True,
+                 flatten_obs: bool = True,
                  **kwargs,
     ):
+        # instance metadata
         self.original = original
+        self.training = training
+        self.flatten_obs = flatten_obs
+        self.budget_n = 180
+        self.budget_left = self.budget_n
 
+        if self.training:
+            self.random_weather = False
+            self.random_init = False
+
+        # pcse variables
         self.crop = crop
         self.crop_features = crop_features
         self.weather_features = weather_features
@@ -66,16 +78,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self.location = location
         self.year_list = year_list
 
-        self.training = training
-
-        if self.training:
-            self.random_weather = False
-            self.random_init = False
-
         self.agro_config = agro_config
-
-        # TODO change agro config here
-        # TODO get parameters from yaml
 
         crop_parameters, site_parameters, soil_parameters = self._init_configs()
 
@@ -114,12 +117,14 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self._init_obs_keys()
 
         # initialize infos
-        self._init_infos()
+        self._get_empty_infos()
 
         # initialize Zero nitrogen simulations
         self._init_zero_env(**kwargs)
 
-        super().reset(seed=seed)
+        # reset the env at start
+        # Need to change?
+        super().reset(seed=seed, options={'year': self.year, 'budget_n': 100})
 
         # self._env_baseline.get_key(self)
 
@@ -134,15 +139,18 @@ class ParcelEnv(pcse_env.PCSEEnv):
         """
 
         # advance one step of the PCSEEngine wrapper and apply action(s)
-        obs_raw, _, terminated, truncated, _ = super().step(action)
+        obs_pcse, _, terminated, truncated, _ = super().step(action)
+
+        # update actions
+        self._update_action_variables(action)
 
         # transform and flatten observations
-        obs = self._observation(obs_raw)
+        obs = self._observation(obs_pcse)
 
         # populate reward
         pcse_output = self.model.get_output()
 
-        # process output to get the observation, reward and growth of the crop
+        # process output to get the reward and growth of the crop
         reward, growth = self._process_output(action, pcse_output, terminated)
 
         # append new information to the infos dict
@@ -155,34 +163,76 @@ class ParcelEnv(pcse_env.PCSEEnv):
     def reset(self, seed=None, options=None, **kwargs):
         """
         Resets parcel episode. The key `year` must be in the ::options dictionary.
+        Here, growing season budget is also determined.
         """
 
         assert 'year' in options, "Please reset environment with a year"
+        assert 'budget_n' in options, "Please reset environment with an N_budget"
 
         # Only for invalid action masking
         # self.reset_non_zero_action_count()
 
-        site_params = self.special_init_conditions()
+        site_params = self._special_init_conditions()
 
         options['site_params'] = site_params
 
         self.reward_container.reset()
         self.rewards_obj.reset()
 
+        # overwrite for new eps
         self.overwrite_year(year=options['year'])
+        self.budget_n = options['budget_n']
+
+        self._reset_action_variables()
 
         if self.reward_function in reward_functions_with_baseline() and self.original is True:
             self.baseline_env.reset(seed=seed, options=options)
         obs = super().reset(seed=seed, options=options)
 
-        # TODO: check whether info should/could be filled
-        info = {}
+        return obs, self._init_infos()
 
-        return obs, info
+    def action_mask(self):
+        # TODO do masking logic
+        pass
+
+    '''
+    Callable class methods
+    '''
+
+    def overwrite_year(self, year):
+        self.agro_management = self.agmt.update_attributes(crop_start_date=lambda d: d.replace(year=year),
+                                                           campaign_date=lambda d: d.replace(year=year),)
+        if self.reward_function in reward_functions_with_baseline():
+            self.baseline_env.agro_management = self.agmt.update_attributes(crop_start_date=lambda d: d.replace(year=year),
+                                                                            campaign_date=lambda d: d.replace(year=year),)
+
+    def render(self, mode="human"):
+        pass
 
     '''
     Helper functions for various things
     '''
+
+    def _update_action_variables(self, action):
+        if isinstance(action, np.ndarray):
+            action = action[0]
+
+        if action > 0:
+            self.n_action += action
+            self.non_zero_action_count += action
+            self.steps_since_last_action = 0
+
+            # budget count
+            self.budget_left -= action * 10         # Convert to kg/ha
+        else:
+            self.steps_since_last_action += 1
+
+    def _reset_action_variables(self, budget):
+        self.n_action = 0
+        self.non_zero_action_count = 0
+        self.steps_since_last_action = 0
+        self.budget_left = self.budget_n
+
 
     def _process_output(self, action, output, terminated):
         if isinstance(action, np.ndarray):
@@ -227,22 +277,6 @@ class ParcelEnv(pcse_env.PCSEEnv):
             )
         return reward
 
-    def overwrite_year(self, year):
-        self.agro_management = self.agmt.update_attributes(crop_start_date=lambda d: d.replace(year=year),
-                                                           campaign_date=lambda d: d.replace(year=year),)
-        if self.reward_function in reward_functions_with_baseline():
-            self.baseline_env.agro_management = self.agmt.update_attributes(crop_start_date=lambda d: d.replace(year=year),
-                                                                            campaign_date=lambda d: d.replace(year=year),)
-
-    def set_location(self, location):
-        if self.reward_function in reward_functions_with_baseline():
-            self.baseline_env.loc = location
-            self.baseline_env.weather_data_provider = (
-                pcse_env.get_weather_data_provider(location, random_weather=self.random_weather))
-        self.sb3_env.loc = location
-        self.sb3_env.weather_data_provider = (
-            pcse_env.get_weather_data_provider(location, random_weather=self.random_weather))
-
     def _overwrite_initial_conditions(self):
         # N initial conditions
         list_nh4i, list_no3i = self._generate_realistic_n()
@@ -262,10 +296,6 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         site_parameters = {'NH4ConcR': nh4concr, 'NO3ConcR': no3concr, }
         return site_parameters
-
-    def _get_obs_len(self):
-        nvars = (len(self.crop_features) + len(self.action_features) + len(self.weather_features) * self.timestep)
-        return nvars
 
     @staticmethod
     def _crop_model_sum_last(pcse, var, normalise=1.0):
@@ -290,6 +320,11 @@ class ParcelEnv(pcse_env.PCSEEnv):
         if isinstance(observation, tuple):
             observation = observation[0]
 
+        # add action features in the dict
+        observation["action_features"].update({self.action_features[i]: v
+                                               for i, v in enumerate([self.n_steps, self.n_action, self.steps_since_last_action, self.budget_left])})
+
+        # flattened to vector
         crop_model = observation["crop_model"]
         act = observation["action_features"]
         weather = observation["weather"]
@@ -305,11 +340,43 @@ class ParcelEnv(pcse_env.PCSEEnv):
         weather_matrix = np.vstack([weather[f][:self.timestep] for f in self.weather_features]).T
         weather_values = weather_matrix.ravel()
 
-        return np.array(crop_values + action_values + list(weather_values), dtype=np.float32)
+        if self.flatten_obs:
+            return np.array(crop_values + action_values + list(weather_values), dtype=np.float32)
 
+        obs = {}
+
+        # crop scalars
+        for k, v in zip(self.crop_features, crop_values):
+            obs[k] = float(v)
+
+        # action scalars
+        for k, v in zip(self.action_features, action_values):
+            obs[k] = float(v)
+
+        # weather scalars — unroll the (time, variable) matrix
+        # key format: "<weather_feature>_<time_index>"
+        for var_idx, var_name in enumerate(self.weather_features):
+            for t in range(self.timestep):
+                obs[f"{var_name}_{t}"] = float(weather_matrix[t, var_idx])
+
+        return obs
+
+    @functools.lru_cache(maxsize=None)
     def _get_observation_space(self):
         nvars = self._get_obs_len()
-        return gym.spaces.Box(-np.inf, np.inf, shape=(nvars,))
+        if self.flatten_obs:
+            return gym.spaces.Box(-np.inf, np.inf, shape=(nvars,), dtype=np.float32)
+        else:
+            return gym.spaces.Dict({name: gym.spaces.Box(-np.inf, np.inf, shape=(), dtype=np.float32)
+                                   for name in self._get_obs_keys()})
+
+    def _get_obs_len(self):
+        nvars = (len(self.crop_features) + len(self.action_features) + len(self.weather_features) * self.timestep)
+        return nvars
+
+    def _get_obs_keys(self):
+        return (self.crop_features + self.action_features +
+                [f"{self.weather_features[i]}_{t}" for t in range(self.timestep) for i, _ in enumerate(self.weather_features)])
 
     def _apply_action(self, action):
         action = action * 10  # kg N / ha
@@ -319,8 +386,14 @@ class ParcelEnv(pcse_env.PCSEEnv):
         # Reward gets overwritten in step()
         return 0.0
 
-    def render(self, mode="human"):
-        pass
+    def _init_infos(self):
+        self.infos = {"Date": [], "SinDay": [], "CosDay": [],
+                      **{name: [] for name in self.crop_features},
+                      **{name: [] for name in self.weather_features},
+                      **{name: [] for name in self.action_features},
+                      'Reward': [], 'Action': [], 'Yield': [],
+                      'Nue': [], 'Nsurp': [], 'Profit': []
+                      }
 
     def _init_random_init_conditions_params(self):
         self.mean_total_N = 50  # kg/ha
@@ -374,7 +447,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         return list_nh4i, list_no3i
 
-    def special_init_conditions(self):
+    def _special_init_conditions(self):
         site_params = None
         if self.random_init:
             site_params = self._overwrite_initial_conditions()
@@ -439,7 +512,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
     def _init_configs(self):
         crop_parameters = YAMLCropDataProvider(fpath=_CROPS_PATH, force_reload=True)
 
-        with open(os.path.join(_SOILGRIDS_PATH, f'soil_{self.locations[0][1]}_{self.locations[0][0]}.yaml'), 'r') as f:
+        with open(os.path.join(_SOILGRIDS_PATH, f'soil_{self.location[0][1]}_{self.location[0][0]}.yaml'), 'r') as f:
             soil_parameters = yaml.safe_load(f)
 
         site_parameters = WOFOST81SiteDataProvider_SNOMIN(
@@ -505,15 +578,6 @@ class ParcelEnv(pcse_env.PCSEEnv):
         else:
             raise Exception('please choose valid reward function')
 
-    def _init_infos(self):
-        self.infos = {"Date": [], "SinDay": [], "CosDay": [],
-                      **{name: [] for name in self.crop_features},
-                      **{name: [] for name in self.weather_features},
-                      **{name: [] for name in self.action_features},
-                      'Reward': [], 'Action': [], 'Yield': [],
-                      'Nue': [], 'Nsurp': [], 'Profit': []
-                      }
-
     def _init_soil_variables(self):
         """ Get number of soil layers if using WOFOST snomin"""
         self.mean_total_N = None
@@ -539,8 +603,6 @@ class ParcelEnv(pcse_env.PCSEEnv):
         # Consecutive constraint
         self.mask_duration = 3
         self.consecutive_mask_counter = 0
-
-        self.action_features = ['Nsteps', 'Naction', 'StepsSinceLastAction']
 
     def _init_zero_env(self, **kwargs):
         if self.reward_function in reward_functions_with_baseline and self.original is not False:

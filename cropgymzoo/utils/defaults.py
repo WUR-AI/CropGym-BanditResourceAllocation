@@ -57,8 +57,8 @@ def get_default_weather_features():
     return ["IRRAD", "TMIN", "RAIN"]
 
 
-def get_default_action_features(history=True):
-    return ["action_history"] if history else []
+def get_default_action_features():
+    return ['Nsteps', 'Naction', 'StepsSinceLastAction', 'TotalBudget', 'BudgetLeft']
 
 
 def get_default_location():

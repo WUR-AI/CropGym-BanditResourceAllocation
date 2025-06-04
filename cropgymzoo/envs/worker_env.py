@@ -16,7 +16,8 @@ class ParallelRLWorkers(ParallelEnv):
     }
 
     def __init__(self,
-                 seed: int = 107,):
+                 seed: int = 107,
+                 allocator: str = 'random'):
 
         self.seed = seed
 
