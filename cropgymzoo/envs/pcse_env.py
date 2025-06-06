@@ -316,6 +316,10 @@ class Engine(pcse.engine.Engine):
     def terminated(self):
         return self._flag_terminated
 
+    @property
+    def wdp(self):
+        return self.weatherdataprovider
+
     def _terminate_simulation(self, day):
         super()._terminate_simulation(day)
         self._flag_terminated = True
@@ -655,7 +659,8 @@ class PCSEEnv(gym.Env):
         weather_observation = {var: [getattr(weather_data[d], var) for d in range(len(days))] for var in
                                self._weather_variables}
         # Get action history through action features
-        action_features = {'action_history': [day['RNH4AMTT'] / 1e-3 + day["RNO3AMTT"] / 1e-3 for day in output]}
+        action_features = {}
+            # {'ActionHistory': [day['RNH4AMTT'] / 1e-3 + day["RNO3AMTT"] / 1e-3 for day in output]}
 
         o = {
             'crop_model': crop_model_observation,

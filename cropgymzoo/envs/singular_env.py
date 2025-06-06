@@ -194,7 +194,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         self._init_infos()
 
-        return obs, self.infos
+        return self._observation(obs), self.infos
 
     def action_mask(self, action):
         # TODO do masking logic
@@ -211,6 +211,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         if self.reward_function in reward_functions_with_baseline() and self.original is True:
             self.baseline_env.agro_management = self.agmt.update_attributes(crop_start_date=lambda d: d.replace(year=year),
                                                                             campaign_date=lambda d: d.replace(year=year),)
+        self.year = year
 
     def render(self, mode="human"):
         pass
@@ -305,7 +306,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
     @staticmethod
     def _crop_model_sum_last(pcse, var, normalise=1.0):
-        return np.sum(pcse[var][-1]) / normalise
+        return np.sum(pcse[var]) / normalise
 
     def _get_key_transformations(self, crop_model):
         return {
@@ -316,6 +317,13 @@ class ParcelEnv(pcse_env.PCSEEnv):
             "RNO3DEPOSTT": lambda: self._crop_model_sum_last(crop_model, "RNO3DEPOSTT", m2_to_ha),
             "RNH4DEPOSTT": lambda: self._crop_model_sum_last(crop_model, "RNH4DEPOSTT", m2_to_ha),
         }
+
+    def _transform_crop_feature(self, pcse_output, feature):
+        if feature in ["NH4", "NO3", "RNO3DEPOSTT", "RNH4DEPOSTT"]:
+            return np.sum(pcse_output[feature]) / m2_to_ha
+        if feature in ["SM", "WC"]:
+            return np.sum(pcse_output[feature])
+        return pcse_output[feature]
 
     def _observation(self, observation):
         """
@@ -328,7 +336,10 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         # add action features in the dict
         observation["action_features"].update({self.action_features[i]: v
-                                               for i, v in enumerate([self.n_steps, self.n_action, self.steps_since_last_action, self.budget_left])})
+                                               for i, v in enumerate([self.n_steps, self.n_action,
+                                                                      self.steps_since_last_action,
+                                                                      self.budget_n,
+                                                                      self.budget_left])})
 
         # flattened to vector
         crop_model = observation["crop_model"]
@@ -480,39 +491,48 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
     def _populate_infos(self, pcse_output, action, reward, terminate):
 
-        self.infos["Date"].append(pcse_output['date'][-1])
+        self.infos["Date"].append(pcse_output[-1]['day'])
 
-        self.infos["SinDay"].append(self.encode_doy(pcse_output['date'][-1])[0])
+        self.infos["SinDay"].append(self.encode_doy(pcse_output[-1]['day'])[0])
 
-        self.infos["CosDay"].append(self.encode_doy(pcse_output['date'][-1])[1])
+        self.infos["CosDay"].append(self.encode_doy(pcse_output[-1]['day'])[1])
 
         for feature in self.crop_features:
-            f = self._get_key_transformations(pcse_output).get(pcse_output, lambda: pcse_output[feature][-1])
+            f = self._transform_crop_feature(pcse_output[-1], feature)
             self.infos[feature].append(f)
 
         for feature in self.weather_features:
-            self.infos[feature].append(pcse_output[feature][-1])
+            self.infos[feature].append(self.wdp(self.infos["Date"][-1]))
 
         for feature in self.action_features:
-            self.infos[feature].append(feature)
+            self.infos[feature].append(self._action_features_mapper()[feature])
 
         self.infos['Reward'].append(reward)
         self.infos['Action'].append(action)
-        self.infos['Yield'].append(pcse_output['WSO'][-1])
+        self.infos['Yield'].append(pcse_output[-1]['WSO'])
         self.infos['Nue'].append(None if not terminate
-                                 else calculate_nue(n_input=self.infos['ActionHistory'][-1],
-                                                      n_so=pcse_output['NamountSO'][-1],
+                                 else calculate_nue(n_input=self.reward_container.actions * 10,
+                                                      n_so=pcse_output[-1]['NamountSO'],
                                                       year=self.date.year,
-                                                      nh4_depo=pcse_output['RNH4DEPOSTT'][-1],
-                                                      no3_depo=pcse_output['RNNO3DEPOSTT'][-1],
+                                                      nh4_depo=pcse_output[-1]['RNH4DEPOSTT'],
+                                                      no3_depo=pcse_output[-1]['RNO3DEPOSTT'],
                                                       ))
         self.infos['Nsurp'].append(None if not terminate
-                                   else get_surplus_n(n_input=self.infos['ActionHistory'][-1],
-                                                        n_so=pcse_output['NamountSO'][-1],
+                                   else get_surplus_n(n_input=self.reward_container.actions * 10,
+                                                        n_so=pcse_output[-1]['NamountSO'],
                                                         year=self.date.year,
-                                                        nh4_depo=pcse_output['RNH4DEPOSTT'][-1],
-                                                        no3_depo=pcse_output['RNNO3DEPOSTT'][-1]))
+                                                        nh4_depo=pcse_output[-1]['RNH4DEPOSTT'],
+                                                        no3_depo=pcse_output[-1]['RNO3DEPOSTT']))
         self.infos['Profit'].append(self.rewards_obj.profit)
+
+    def _action_features_mapper(self):
+        return {
+            'Naction': self.n_action,
+            'Nsteps': self.n_steps,
+            'StepsSinceLastAction': self.steps_since_last_action,
+            'BudgetTotal': self.budget_n,
+            'BudgetLeft': self.budget_left,
+        }
 
     '''
     Init helpers

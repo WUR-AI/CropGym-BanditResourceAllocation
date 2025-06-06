@@ -58,7 +58,7 @@ def get_default_weather_features():
 
 
 def get_default_action_features():
-    return ['Nsteps', 'Naction', 'StepsSinceLastAction', 'TotalBudget', 'BudgetLeft']
+    return ['Nsteps', 'Naction', 'StepsSinceLastAction', 'BudgetTotal', 'BudgetLeft']
 
 
 def get_default_location():

@@ -40,6 +40,7 @@ def register_predefined_cropgym_instances() -> None:
                 'year': 2000,
                 'original': True,
                 'training': True,
+                'flatten_obs': False,
             },
 
         )
