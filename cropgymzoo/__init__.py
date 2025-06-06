@@ -35,7 +35,7 @@ def register_predefined_cropgym_instances() -> None:
                 'crop_features': get_wofost_default_crop_features(),
                 'weather_features': get_default_weather_features(),
                 'action_features': get_default_action_features(),
-                'locations': (field['soil_lat'], field['soil_lon']),
+                'location': (field['soil_lat'], field['soil_lon']),
                 'crop': field['crop'],
                 'year': 2000,
                 'original': True,

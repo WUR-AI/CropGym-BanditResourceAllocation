@@ -2,6 +2,7 @@
 # crop simulation model
 #
 # Creation date: 2017-07-06
+# Last update: 2022-10-07
 #
 # Contact: Allard de Wit (allard.dewit@wur.nl)
 #          Wageningen University and Research Centre
@@ -14,24 +15,23 @@
 Version: 1.0.0
 Metadata: &meta
     Creator: Allard de Wit
-    Contributor: E.R. Boons-Prins, G.H.J. de Koning, CA. van Diepen, F.W.T. Penning de Vries
+    Contributor: H.D.J. van Heemst
     Contact: allard.dewit@wur.nl
     Publisher: Wageningen Environmental Research
-    Title: Parameter sets for the WOFOST7.2/WOFOST8.0 model for simulating barley
-    Date: 2022-02-13
+    Title: Parameter sets for the WOFOST cropping system model for millet
+    Date: 1988-01-01
     Language: EN
     Format: YAML
-    Subject: WOFOST parameters for barley
-    Description: This file provides parameters for one or more barley varieties calibrated on
-        local experimental data or regional cropping calendars
+    Subject: Generic crop parameters for millet
+    Description: This file provides WOFOST parameters for millet as collected by Van Heemst (1988)
     Identifier:
     Relation:
-    Source: https://edepot.wur.nl/308997
+    Source: https://edepot.wur.nl/218353
     Type: Report
     Coverage:
-       Region: Europe, global
+       Region: No specific region
     Rights: European Union Public License (EUPL)
-    Keyword: barley; Hordeum vulgare
+    Keyword: millet, WOFOST, Pennisetum typhoides
 CropParameters:
     GenericC3: &GenericC3
         CO2EFFTB:
@@ -92,21 +92,21 @@ CropParameters:
          - multiplication factor for AMAX to account for an increasing CO2 concentration
          - ['PPM', '-']
     EcoTypes:
-        springbarley: &springbarley
-            <<: *GenericC3
+        millet: &millet
+            <<: *GenericC4
             #
             # EMERGENCE
             #
             TBASEM:
-            -  0.0
+            - 12.0
             - Lower threshold temperature for emergence
             - ['C']
             TEFFMX:
-            - 30.0
+            - 32.0
             - maximum effective temperature for emergence
             - ['C']
             TSUMEM:
-            -  110
+            -   60
             - temperature sum from sowing to emergence
             - ['C.d']
             #
@@ -117,25 +117,27 @@ CropParameters:
             - indicates whether pre-anthesis development depends on temperature (=0), plus daylength (=1) , plus vernalization (=2)
             - ['NA']
             DLO:
-            - -99.0
+            -  1.0
             - optimum daylength for development
             - ['hr']
             DLC:
-            - -99.0
+            -  0.0
             - critical daylength (lower threshold)
             - ['hr']
             TSUM1:
-            -  800
+            -  772
             - temperature sum from emergence to anthesis
             - ['C.d']
             TSUM2:
-            -  750
+            -  483
             - temperature sum from anthesis to maturity
             - ['C.d']
             DTSMTB:
             - [ 0.0,  0.0,
-               35.0, 35.0,
-               45.0, 35.0]
+               10.0,  0.0,
+               27.0, 17.0,
+               35.0, 17.0,
+               45.0,  0.0]
             - daily increase in temperature sum as function of daily average temperature
             - ['C', 'C']
             DVSI:
@@ -171,22 +173,22 @@ CropParameters:
             # INITIAL STATES
             #
             TDWI:
-            -  60.00
+            -  12.00
             - initial total crop dry weight
             - ['kg.ha-1']
             RGRLAI:
-            - 0.0075
+            - 0.0500
             - maximum relative increase in LAI
             - ['d-1']
             #
             # CROP GREEN AREA
             #
             SLATB:
-            - [0.00, 0.00200,
-               0.30, 0.00350,
-               0.90, 0.00250,
-               1.45, 0.00220,
-               2.00, 0.00220]
+            - [0.00, 0.00180,
+               0.15, 0.00200,
+               0.40, 0.00270,
+               0.85, 0.00180,
+               2.00, 0.00180]
             - specific leaf area as a function of DVS
             - ['-', 'ha.kg-1']
             SPA:
@@ -199,28 +201,28 @@ CropParameters:
             - specific stem area as function of DVS
             - ['-', 'ha.kg-1']
             SPAN:
-            - 25.0
+            - 59.0
             - life span of leaves growing at 35 Celsius
             - ['d']
             TBASE:
-            -  0.0
+            - 10.0
             - lower threshold temperature for ageing of leaves
             - ['C']
             #
             # CO2 ASSIMILATION
             #
             KDIFTB:
-            - [0.00, 0.440,
-               2.00, 0.440]
+            - [0.00, 0.500,
+               2.00, 0.500]
             - extinction coefficient for diffuse visible light as function of DVS
             - ['-', '-']
             EFFTB:
-            - [ 0.0, 0.400,
-               40.0, 0.400]
+            - [ 0.0, 0.380,
+               40.0, 0.380]
             - initial light-use efficiency single leaf as function of daily mean temperature
             - ['C', 'kg.ha-1.hr-1.J-1.m2.s1']
             AMAX_REF:
-            - 35.00
+            - 85.0
             - maximum leaf CO2 assimilation rate
             - ['kg.ha-1.hr-1']
             KN:
@@ -233,14 +235,18 @@ CropParameters:
             - ['PPM']
             TMPFTB:
             - [ 0.0, 0.000,
-               10.0, 1.000,
-               30.0, 1.000,
-               35.0, 0.000]
+                4.0, 0.000,
+               15.0, 0.370,
+               25.0, 0.720,
+               35.0, 1.000,
+               40.0, 1.000,
+               50.0, 0.580,
+               64.0, 0.000]
             - reduction factor of AMAX as function of average daytime (*not* daily)  temperature
             - ['C', '-']
             TMNFTB:
-            - [ 0.0, 0.000,
-                3.0, 1.000]
+            - [ 5.0, 0.000,
+               12.0, 1.000]
             - reduction factor of gross assimilation rate as function of low minimum temperature
             - ['C', '-']
             #
@@ -270,19 +276,19 @@ CropParameters:
             - relative increase in respiration rate per 10 degrees Celsius temperature increase
             - ['-']
             RML:
-            - 0.0300
+            - 0.0200
             - relative maintenance respiration rate of leaves
             - ['d-1']
             RMO:
-            - 0.0100
+            - 0.0070
             - relative maintenance respiration rate of storage organs
             - ['d-1']
             RMR:
-            - 0.0100
+            - 0.0070
             - relative maintenance respiration rate of roots
             - ['d-1']
             RMS:
-            - 0.0150
+            - 0.0100
             - relative maintenance respiration rate of stems
             - ['d-1']
             RFSETB:
@@ -295,34 +301,35 @@ CropParameters:
             #
             FRTB:
             - [0.000, 0.600,
-               0.400, 0.550,
-               1.000, 0.000,
+               1.000, 0.140,
+               1.300, 0.000,
                2.000, 0.000]
             - fraction of total dry matter to roots as a function of DVS
             - ['-', 'mass.mass-1']
             FLTB:
-            - [0.000, 1.000,
-               0.330, 1.000,
-               0.800, 0.400,
-               1.000, 0.100,
-               1.010, 0.000,
+            - [0.000, 0.800,
+               0.200, 0.800,
+               1.130, 0.120,
+               1.300, 0.000,
+               1.600, 0.000,
                2.000, 0.000]
             - fraction of total dry matter to leaves as a function of DVS
             - ['-', 'mass.mass-1']
             FSTB:
-            - [0.000, 0.000,
-               0.330, 0.000,
-               0.800, 0.600,
-               1.000, 0.900,
-               1.010, 0.150,
+            - [0.000, 0.200,
+               0.200, 0.200,
+               1.130, 0.880,
+               1.300, 0.640,
+               1.600, 0.000,
                2.000, 0.000]
             - fraction of total dry matter to stems as a function of DVS
             - ['-', 'mass.mass-1']
             FOTB:
             - [0.000, 0.000,
-               0.800, 0.000,
-               1.000, 0.000,
-               1.010, 0.850,
+               0.200, 0.000,
+               1.130, 0.000,
+               1.300, 0.360,
+               1.600, 1.000,
                2.000, 1.000]
             - fraction of total dry matter to storage organs as a function of DVS
             - ['-', 'mass.mass-1']
@@ -374,11 +381,11 @@ CropParameters:
             - initial rooting depth
             - ['cm']
             RRI:
-            - 2.00
+            - 4.00
             - maximum daily increase in rooting depth
             - ['cm.d-1']
             RDMCR:
-            - 125.0
+            - 220.0
             - maximum rooting depth
             - ['cm']
             #
@@ -389,8 +396,8 @@ CropParameters:
                0.40, 0.0400,
                0.70, 0.0300,
                1.00, 0.0200,
-               2.00, 0.0160,
-               2.10, 0.0160]
+               2.00, 0.0140,
+               2.10, 0.0140]
             - maximum N concentration in leaves as function of development stage in kg N kg-1 dry biomass
             - ['-', 'mass.mass-1']
             NMAXRT_FR:
@@ -402,7 +409,7 @@ CropParameters:
             - maximum N concentration in stems as fraction of maximum N concentration in leaves
             - ['-']
             NMAXSO:
-            - 0.0176
+            - 0.0160
             - maximum P concentration in storage organs [kg N kg-1 dry biomass]
             - ['mass.mass-1']
             NCRIT_FR:
@@ -410,15 +417,15 @@ CropParameters:
             - Critical N concentration as fraction of maximum N concentration
             - ['-']
             NRESIDLV:
-            - 0.0047
+            - 0.0043
             - residual N fraction in leaves [kg N kg-1 dry biomass]
             - ['mass.mass-1']
             NRESIDST:
-            - 0.0023
+            - 0.0021
             - residual N fraction in stems [kg N kg-1 dry biomass]
             - ['mass.mass-1']
             NRESIDRT:
-            - 0.0023
+            - 0.0021
             - residual N fraction in roots [kg N kg-1 dry biomass]
             - ['mass.mass-1']
             TCNT:
@@ -478,19 +485,15 @@ CropParameters:
             - Conversion efficiency of reallocated stem and leaf dry matter into storage organ dry matter
             - ['kg.kg-1']
     Varieties:
-        Spring_barley_301:
-            <<: *springbarley
+        Millet_VanHeemst_1988:
+            <<: *millet
             Metadata:
                 <<: *meta
-                Description: Spring barley calibrated for the whole of the EU15. Sowing date varying from 9 Feb in
-                    Greece and southern Spain, to 26 Mar in southern Germany. Mean date of flowering varying from 1
-                    May in the south to 19 June in the north. Mean date of maturity varying from 20 June in the south
-                    to 15 Aug in the north.
             TSUM1:
-            -  800
+            -  772
             - temperature sum from emergence to anthesis
             - ['C.d']
             TSUM2:
-            -  750
+            -  483
             - temperature sum from anthesis to maturity
             - ['C.d']

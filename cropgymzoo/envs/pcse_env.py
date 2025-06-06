@@ -24,7 +24,7 @@ import pcse
 class AgroManagementContainer:
     _ALLOWED_FIELDS = {
         "crop_name",
-        "crop_variety",
+        "variety_name",
         "crop_start_date",
         "crop_start_type",
         "crop_end_date",
@@ -32,11 +32,18 @@ class AgroManagementContainer:
         "max_duration",
         "campaign_date",
     }
-    def __init__(self, agro_management: list, crop: str):
+
+    _DATES_FIELDS = {
+        "crop_start_date",
+        "crop_end_date",
+        "campaign_date",
+    }
+
+    def __init__(self, agro_management: list, crop: str = None):
         self.agro_structure = agro_management
         self.campaign_date: datetime.date = list(agro_management[0].keys())[0]
-        self.crop_name: str = crop
-        self.crop_variety: str = agro_management[0][self.campaign_date]['CropCalendar']['variety_name']
+        self.crop_name: str = crop if crop is not None else agro_management[0][self.campaign_date]['CropCalendar']['crop_name']
+        self.variety_name: str = agro_management[0][self.campaign_date]['CropCalendar']['variety_name']
         self.crop_start_date: datetime.date = agro_management[0][self.campaign_date]['CropCalendar']['crop_start_date']
         self.crop_start_type: str = agro_management[0][self.campaign_date]['CropCalendar']['crop_start_type']
         self.crop_end_date: datetime.date = agro_management[0][self.campaign_date]['CropCalendar']['crop_end_date']
@@ -51,10 +58,10 @@ class AgroManagementContainer:
                     - {self.campaign_date}:
                         CropCalendar:
                             crop_name: {self.crop_name}
-                            variety_name: {self.crop_variety}
+                            variety_name: {self.variety_name}
                             crop_start_date: {self.crop_start_date}
                             crop_start_type: {self.crop_start_type}
-                            crop_end_date: {self.crop_end_date}
+                            crop_end_date: {self._yaml_value(self.crop_end_date)}
                             crop_end_type: {self.crop_end_type}
                             max_duration: {self.max_duration}
                         TimedEvents: null
@@ -95,6 +102,8 @@ class AgroManagementContainer:
             else:
                 new_val = spec
 
+            new_val = self.str_to_datetime(new_val) if attr in self._DATES_FIELDS else new_val
+
             setattr(self, attr, new_val)
 
         # Do some checks
@@ -105,6 +114,14 @@ class AgroManagementContainer:
 
         self.build_structure()
         return self.structure
+
+    @staticmethod
+    def str_to_datetime(date_str: str | None) -> datetime.date | None | str:
+        if isinstance(date_str, datetime.date):
+            return date_str
+        if date_str is None:
+            return ''
+        return datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
 
     # TODO change; made for winterwheat
     def replace_years(self, y):
@@ -140,7 +157,7 @@ class AgroManagementContainer:
         return self.structure
 
     def replace_variety_name(self, name='Julius'):
-        self.crop_variety = name
+        self.variety_name = name
 
         self.build_structure()
         return self.structure
@@ -182,6 +199,10 @@ class AgroManagementContainer:
     @property
     def get_campaign_date(self):
         return self.campaign_date
+
+    @staticmethod
+    def _yaml_value(val):
+        return 'null' if val is None else val
 
 
 def get_weather_data_provider(location: tuple,
@@ -446,7 +467,7 @@ class PCSEEnv(gym.Env):
 
         # Let simulation run until crop start date
         if self._wait_for_crop:
-            skip_days = max(0, (self._agro_management["crop_start_date"] - self._agro_management["campaign_date"]).days)
+            skip_days = max(0, (self.agmt.get_start_date - self.agmt.get_campaign_date).days)
             if skip_days:
                 model.run(days=skip_days, action=0)
 

@@ -40,7 +40,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
                  weather_features: list = get_default_weather_features(),
                  action_features: list = get_default_action_features(),
                  location: list | tuple = None,
-                 year: list | tuple = None,
+                 year: int = None,
                  year_list: list = None,
                  timestep: int = 7,
                  reward: str = 'NUE',
@@ -117,7 +117,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self._init_obs_keys()
 
         # initialize infos
-        self._get_empty_infos()
+        self._init_infos()
 
         # initialize Zero nitrogen simulations
         self._init_zero_env(**kwargs)
@@ -137,6 +137,9 @@ class ParcelEnv(pcse_env.PCSEEnv):
         """
         Computes customized reward and populates info
         """
+
+        # pass through action masker
+        action = self.action_mask(action)
 
         # advance one step of the PCSEEngine wrapper and apply action(s)
         obs_pcse, _, terminated, truncated, _ = super().step(action)
@@ -189,11 +192,14 @@ class ParcelEnv(pcse_env.PCSEEnv):
             self.baseline_env.reset(seed=seed, options=options)
         obs = super().reset(seed=seed, options=options)
 
-        return obs, self._init_infos()
+        self._init_infos()
 
-    def action_mask(self):
+        return obs, self.infos
+
+    def action_mask(self, action):
         # TODO do masking logic
-        pass
+        return action
+
 
     '''
     Callable class methods
@@ -202,7 +208,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
     def overwrite_year(self, year):
         self.agro_management = self.agmt.update_attributes(crop_start_date=lambda d: d.replace(year=year),
                                                            campaign_date=lambda d: d.replace(year=year),)
-        if self.reward_function in reward_functions_with_baseline():
+        if self.reward_function in reward_functions_with_baseline() and self.original is True:
             self.baseline_env.agro_management = self.agmt.update_attributes(crop_start_date=lambda d: d.replace(year=year),
                                                                             campaign_date=lambda d: d.replace(year=year),)
 
@@ -227,7 +233,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         else:
             self.steps_since_last_action += 1
 
-    def _reset_action_variables(self, budget):
+    def _reset_action_variables(self):
         self.n_action = 0
         self.non_zero_action_count = 0
         self.steps_since_last_action = 0
@@ -370,10 +376,12 @@ class ParcelEnv(pcse_env.PCSEEnv):
             return gym.spaces.Dict({name: gym.spaces.Box(-np.inf, np.inf, shape=(), dtype=np.float32)
                                    for name in self._get_obs_keys()})
 
+    @functools.lru_cache(maxsize=None)
     def _get_obs_len(self):
         nvars = (len(self.crop_features) + len(self.action_features) + len(self.weather_features) * self.timestep)
         return nvars
 
+    @functools.lru_cache(maxsize=None)
     def _get_obs_keys(self):
         return (self.crop_features + self.action_features +
                 [f"{self.weather_features[i]}_{t}" for t in range(self.timestep) for i, _ in enumerate(self.weather_features)])
@@ -392,6 +400,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
                       **{name: [] for name in self.weather_features},
                       **{name: [] for name in self.action_features},
                       'Reward': [], 'Action': [], 'Yield': [],
+                      'BudgetTotal': [], 'BudgetLeft': [],
                       'Nue': [], 'Nsurp': [], 'Profit': []
                       }
 
@@ -512,7 +521,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
     def _init_configs(self):
         crop_parameters = YAMLCropDataProvider(fpath=_CROPS_PATH, force_reload=True)
 
-        with open(os.path.join(_SOILGRIDS_PATH, f'soil_{self.location[0][1]}_{self.location[0][0]}.yaml'), 'r') as f:
+        with open(os.path.join(_SOILGRIDS_PATH, f'soil_{self.location[1]}_{self.location[0]}.yaml'), 'r') as f:
             soil_parameters = yaml.safe_load(f)
 
         site_parameters = WOFOST81SiteDataProvider_SNOMIN(
@@ -605,7 +614,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self.consecutive_mask_counter = 0
 
     def _init_zero_env(self, **kwargs):
-        if self.reward_function in reward_functions_with_baseline and self.original is not False:
+        if self.reward_function in reward_functions_with_baseline() and self.original is not False:
             self._env_baseline = ParcelEnv(
                 crop_features=self.crop_features,
                 weather_features=self.weather_features,

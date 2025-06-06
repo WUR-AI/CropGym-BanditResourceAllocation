@@ -54,7 +54,7 @@ def get_default_crop_features(pcse_env=1, vision=None):
 
 def get_default_weather_features():
     # See get_titles() for description of variables
-    return ["IRRAD", "TMIN", "RAIN"]
+    return ["IRRAD", "TMIN", "TMAX", "RAIN"]
 
 
 def get_default_action_features():

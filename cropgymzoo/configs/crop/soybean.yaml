@@ -14,24 +14,19 @@
 Version: 1.0.0
 Metadata: &meta
     Creator: Allard de Wit
-    Contributor: E.R. Boons-Prins, G.H.J. de Koning, CA. van Diepen, F.W.T. Penning de Vries
     Contact: allard.dewit@wur.nl
     Publisher: Wageningen Environmental Research
-    Title: Parameter sets for the WOFOST7.2/WOFOST8.0 model for simulating sugar beet
+    Title: Parameter sets for the WOFOST7.2/WOFOST8.0 model for simulating soybean
     Date: 2022-02-13
     Language: EN
     Format: YAML
-    Subject: WOFOST parameters for sugar beet
-    Description: This file provides parameters for several sugarbeet varieties calibrated on
-        local experimental data or regional cropping calendars
-    Identifier:
-    Relation:
-    Source: https://edepot.wur.nl/308997
-    Type: Report
+    Subject: WOFOST parameters for soybean
+    Description: This file provides parameters for several soybean varieties which were collected
+        for Europe in the framework of the MARS project as well as by Van Heemst (1988)
     Coverage:
-       Region: Europe
+       Region: Europe, global
     Rights: European Union Public License (EUPL)
-    Keyword: sugar beet; beta vulgaris
+    Keyword: soybean; Glycine max
 CropParameters:
     GenericC3: &GenericC3
         CO2EFFTB:
@@ -92,21 +87,21 @@ CropParameters:
          - multiplication factor for AMAX to account for an increasing CO2 concentration
          - ['PPM', '-']
     EcoTypes:
-        sugarbeet: &sugarbeet
+        soybean: &soybean
             <<: *GenericC3
             #
             # EMERGENCE
             #
             TBASEM:
-            -  3.0
+            -  7.0
             - Lower threshold temperature for emergence
             - ['C']
             TEFFMX:
-            - 20.0
+            - 22.0
             - maximum effective temperature for emergence
             - ['C']
             TSUMEM:
-            -   90
+            -   70
             - temperature sum from sowing to emergence
             - ['C.d']
             #
@@ -125,18 +120,18 @@ CropParameters:
             - critical daylength (lower threshold)
             - ['hr']
             TSUM1:
-            -  650
+            -  350
             - temperature sum from emergence to anthesis
             - ['C.d']
             TSUM2:
-            - 1400
+            -  850
             - temperature sum from anthesis to maturity
             - ['C.d']
             DTSMTB:
             - [ 0.0,  0.0,
-                3.0,  0.0,
-               21.0, 18.0,
-               35.0, 18.0]
+                7.0,  0.0,
+               30.0, 23.0,
+               45.0, 38.0]
             - daily increase in temperature sum as function of daily average temperature
             - ['C', 'C']
             DVSI:
@@ -172,19 +167,21 @@ CropParameters:
             # INITIAL STATES
             #
             TDWI:
-            -   0.51
+            - 120.00
             - initial total crop dry weight
             - ['kg.ha-1']
             RGRLAI:
-            - 0.0160
+            - 0.0100
             - maximum relative increase in LAI
             - ['d-1']
             #
             # CROP GREEN AREA
             #
             SLATB:
-            - [0.00, 0.00200,
-               2.00, 0.00200]
+            - [0.00, 0.00140,
+               0.45, 0.00250,
+               0.90, 0.00250,
+               2.00, 0.00070]
             - specific leaf area as a function of DVS
             - ['-', 'ha.kg-1']
             SPA:
@@ -197,28 +194,28 @@ CropParameters:
             - specific stem area as function of DVS
             - ['-', 'ha.kg-1']
             SPAN:
-            - 35.0
+            - 23.0
             - life span of leaves growing at 35 Celsius
             - ['d']
             TBASE:
-            -  3.0
+            -  7.0
             - lower threshold temperature for ageing of leaves
             - ['C']
             #
             # CO2 ASSIMILATION
             #
             KDIFTB:
-            - [0.00, 0.690,
-               2.00, 0.690]
+            - [0.00, 0.800,
+               2.00, 0.800]
             - extinction coefficient for diffuse visible light as function of DVS
             - ['-', '-']
             EFFTB:
-            - [ 0.0, 0.450,
-               40.0, 0.450]
+            - [ 0.0, 0.400,
+               40.0, 0.400]
             - initial light-use efficiency single leaf as function of daily mean temperature
             - ['C', 'kg.ha-1.hr-1.J-1.m2.s1']
             AMAX_REF:
-            - 45.0
+            - 29.0
             - maximum leaf CO2 assimilation rate
             - ['kg.ha-1.hr-1']
             KN:
@@ -230,14 +227,12 @@ CropParameters:
             - CO2 level at which AMAX and EFF were measured
             - ['PPM']
             TMPFTB:
-            - [ 0.0, 0.010,
-                3.0, 0.010,
-               10.0, 0.800,
-               15.0, 1.000,
-               20.0, 1.000,
-               30.0, 0.950,
-               35.0, 0.830,
-               40.0, 0.600]
+            - [ 0.0, 0.000,
+               10.0, 0.300,
+               20.0, 0.600,
+               25.0, 0.800,
+               30.0, 1.000,
+               35.0, 1.000]
             - reduction factor of AMAX as function of average daytime (*not* daily)  temperature
             - ['C', '-']
             TMNFTB:
@@ -253,7 +248,7 @@ CropParameters:
             - efficiency of conversion into leaves
             - ['mass.mass-1']
             CVO:
-            - 0.820
+            - 0.480
             - efficiency of conversion into storage organs
             - ['mass.mass-1']
             CVR:
@@ -276,11 +271,11 @@ CropParameters:
             - relative maintenance respiration rate of leaves
             - ['d-1']
             RMO:
-            - 0.0030
+            - 0.0170
             - relative maintenance respiration rate of storage organs
             - ['d-1']
             RMR:
-            - 0.0150
+            - 0.0100
             - relative maintenance respiration rate of roots
             - ['d-1']
             RMS:
@@ -296,41 +291,38 @@ CropParameters:
             # PARTITIONING
             #
             FRTB:
-            - [0.000, 0.200,
-               0.910, 0.290,
-               1.000, 0.300,
-               1.150, 0.150,
-               1.290, 0.090,
-               1.300, 0.090,
-               1.570, 0.080,
-               1.920, 0.010,
-               2.000, 0.020]
+            - [0.000, 0.650,
+               0.750, 0.350,
+               1.000, 0.150,
+               1.500, 0.000,
+               2.000, 0.000]
             - fraction of total dry matter to roots as a function of DVS
             - ['-', 'mass.mass-1']
             FLTB:
-            - [0.000, 0.850,
-               1.000, 0.500,
-               1.300, 0.050,
-               1.570, 0.050,
-               2.000, 0.050]
+            - [0.000, 0.700,
+               1.000, 0.700,
+               1.150, 0.600,
+               1.300, 0.430,
+               1.500, 0.150,
+               2.000, 0.000]
             - fraction of total dry matter to leaves as a function of DVS
             - ['-', 'mass.mass-1']
             FSTB:
-            - [0.000, 0.150,
-               1.000, 0.500,
+            - [0.000, 0.300,
+               1.000, 0.300,
+               1.150, 0.250,
                1.300, 0.100,
-               1.570, 0.100,
-               1.920, 0.050,
-               2.000, 0.050]
+               1.500, 0.100,
+               2.000, 0.000]
             - fraction of total dry matter to stems as a function of DVS
             - ['-', 'mass.mass-1']
             FOTB:
             - [0.000, 0.000,
                1.000, 0.000,
-               1.300, 0.850,
-               1.570, 0.850,
-               1.920, 0.900,
-               2.000, 0.900]
+               1.150, 0.150,
+               1.300, 0.470,
+               1.500, 0.750,
+               2.000, 1.000]
             - fraction of total dry matter to storage organs as a function of DVS
             - ['-', 'mass.mass-1']
             #
@@ -362,7 +354,7 @@ CropParameters:
             - correction factor transpiration rate
             - ['-']
             DEPNR:
-            - 2.00
+            - 5.00
             - crop group number for soil water depletion
             - ['-']
             IAIRDU:
@@ -381,11 +373,11 @@ CropParameters:
             - initial rooting depth
             - ['cm']
             RRI:
-            - 1.00
+            - 1.20
             - maximum daily increase in rooting depth
             - ['cm.d-1']
             RDMCR:
-            - 100.0
+            - 120.0
             - maximum rooting depth
             - ['cm']
             #
@@ -393,11 +385,11 @@ CropParameters:
             #
             NMAXLV_TB:
             - [0.00, 0.0600,
-               0.40, 0.0500,
-               0.70, 0.0450,
-               1.00, 0.0400,
-               2.00, 0.0373,
-               2.10, 0.0373]
+               0.40, 0.0400,
+               0.70, 0.0350,
+               1.00, 0.0300,
+               2.00, 0.0293,
+               2.10, 0.0293]
             - maximum N concentration in leaves as function of development stage in kg N kg-1 dry biomass
             - ['-', 'mass.mass-1']
             NMAXRT_FR:
@@ -409,7 +401,7 @@ CropParameters:
             - maximum N concentration in stems as fraction of maximum N concentration in leaves
             - ['-']
             NMAXSO:
-            - 0.0096
+            - 0.0560
             - maximum P concentration in storage organs [kg N kg-1 dry biomass]
             - ['mass.mass-1']
             NCRIT_FR:
@@ -417,15 +409,15 @@ CropParameters:
             - Critical N concentration as fraction of maximum N concentration
             - ['-']
             NRESIDLV:
-            - 0.0240
+            - 0.00933
             - residual N fraction in leaves [kg N kg-1 dry biomass]
             - ['mass.mass-1']
             NRESIDST:
-            - 0.0120
+            - 0.00467
             - residual N fraction in stems [kg N kg-1 dry biomass]
             - ['mass.mass-1']
             NRESIDRT:
-            - 0.0120
+            - 0.00467
             - residual N fraction in roots [kg N kg-1 dry biomass]
             - ['mass.mass-1']
             TCNT:
@@ -433,7 +425,7 @@ CropParameters:
             - time coefficient for N translocation to storage organs
             - ['d']
             NFIX_FR:
-            - 0.00
+            - 0.80
             - fraction of crop nitrogen uptake by biological fixation
             - ['-']
             RNUPTAKEMAX:
@@ -485,89 +477,366 @@ CropParameters:
             - Conversion efficiency of reallocated stem and leaf dry matter into storage organ dry matter
             - ['kg.kg-1']
     Varieties:
-        Sugarbeet_601:
-            <<: *sugarbeet
+        Soybean_901:
+            <<: *soybean
             Metadata:
                 <<: *meta
-                Description: Sugar beet variety calibrated for Germany, Northern and Central France,
-                    Netherlands, Belgium, Luxembourg, UK, Ireland, Denmark with sowing date between 1 and 10 April
-                    and a date of harvest between 17 and 27 October
+                Contributor: E.R. Boons-Prins, G.H.J. de Koning, CA. van Diepen, F.W.T. Penning de Vries
+                Description: This file provides parameters for a soybean variety calibrated for Northern France with
+                    a sowing date on 28 April, a flowering date on 25 June and a mean date of harvest on 25 September
+                Source: https://edepot.wur.nl/308997
+                Type: Report
                 Coverage:
-                   Region: Germany, Northern and Central France, Netherlands, Belgium, Luxembourg, UK, Ireland, Denmark
+                   Region: Northern-France
             TSUM1:
-            -  650
+            -  350
             - temperature sum from emergence to anthesis
             - ['C.d']
             TSUM2:
-            - 1400
-            - temperature sum from anthesis to maturity
-            - ['C.d']
-        Sugarbeet_602:
-            <<: *sugarbeet
-            Metadata:
-                <<: *meta
-                Description: Sugar beet variety calibrated for Southern France, Northern and Central Italy, Spain and
-                    Portugal with a sowing date between 26 March and 5 April and a harvest date between 27 September
-                    and 27 October.
-                Coverage:
-                   Region: Southern France, Northern and Central Italy, Spain and Portugal
-            TSUM1:
-            -  700
-            - temperature sum from emergence to anthesis
-            - ['C.d']
-            TSUM2:
-            - 1400
-            - temperature sum from anthesis to maturity
-            - ['C.d']
-            DVSEND:
-            -  3.0
-            - development stage at harvest (= 2.0 at maturity)
-            - ['-']
-        Sugarbeet_603:
-            <<: *sugarbeet
-            Metadata:
-                <<: *meta
-                Description: Sugar beet variety calibrated for Southern Spain and Southern Italy with a sowing
-                    date around 26 March and a harvest date between 17 September to 27 October.
-                Coverage:
-                   Region: Southern Spain and Southern Italy
-            TSUM1:
-            -  800
-            - temperature sum from emergence to anthesis
-            - ['C.d']
-            TSUM2:
-            - 1400
-            - temperature sum from anthesis to maturity
-            - ['C.d']
-            DVSEND:
-            -  3.0
-            - development stage at harvest (= 2.0 at maturity)
-            - ['-']
-            SPAN:
-            - 37.0
-            - life span of leaves growing at 35 Celsius
-            - ['d']
-        Sugarbeet_604:
-            <<: *sugarbeet
-            Metadata:
-                <<: *meta
-                Description: Sugar beet variety calibrated for Greece with a sowing date around 26 March and
-                    harvest date around 27 October
-                Coverage:
-                   Region: Greece
-            TSUM1:
             -  850
+            - temperature sum from anthesis to maturity
+            - ['C.d']
+        Soybean_902:
+            <<: *soybean
+            Metadata:
+                <<: *meta
+                Contributor: E.R. Boons-Prins, G.H.J. de Koning, CA. van Diepen, F.W.T. Penning de Vries
+                Description: This file provides parameters for a soybean variety calibrated for Central France with
+                    a sowing date on 28 April, a flowering date on 25 June and a mean date of harvest on 25 September
+                Source: https://edepot.wur.nl/308997
+                Type: Report
+                Coverage:
+                   Region: Central-France
+            TSUM1:
+            -  350
             - temperature sum from emergence to anthesis
             - ['C.d']
             TSUM2:
-            - 1400
+            -  950
             - temperature sum from anthesis to maturity
             - ['C.d']
-            DVSEND:
-            -  3.0
-            - development stage at harvest (= 2.0 at maturity)
-            - ['-']
-            SPAN:
-            - 36.0
-            - life span of leaves growing at 35 Celsius
-            - ['d']
+        Soybean_903:
+            <<: *soybean
+            Metadata:
+                <<: *meta
+                Contributor: E.R. Boons-Prins, G.H.J. de Koning, CA. van Diepen, F.W.T. Penning de Vries
+                Description: This file provides parameters for a soybean variety calibrated for Northern Spain with
+                    a sowing date on 30 April, a flowering date on 15 June and a mean date of harvest on 5 September
+                Source: https://edepot.wur.nl/308997
+                Type: Report
+                Coverage:
+                   Region: Northern-Spain
+            TSUM1:
+            -  300
+            - temperature sum from emergence to anthesis
+            - ['C.d']
+            TSUM2:
+            -  900
+            - temperature sum from anthesis to maturity
+            - ['C.d']
+        Soybean_904:
+            <<: *soybean
+            Metadata:
+                <<: *meta
+                Contributor: E.R. Boons-Prins, G.H.J. de Koning, CA. van Diepen, F.W.T. Penning de Vries
+                Description: This file provides parameters for a soybean variety calibrated for Southern France with
+                    a sowing date on 20 April, a flowering date on 20 June and a mean date of harvest on 25 September
+                Source: https://edepot.wur.nl/308997
+                Type: Report
+                Coverage:
+                   Region: Southern-France
+            TSUM1:
+            -  500
+            - temperature sum from emergence to anthesis
+            - ['C.d']
+            TSUM2:
+            - 1100
+            - temperature sum from anthesis to maturity
+            - ['C.d']
+            RGRLAI:
+            - 0.0070
+            - maximum relative increase in LAI
+            - ['d-1']
+            FRTB:
+            - [0.000, 0.650,
+               0.750, 0.450,
+               1.000, 0.200,
+               1.500, 0.000,
+               2.000, 0.000]
+            - fraction of total dry matter to roots as a function of DVS
+            - ['-', 'mass.mass-1']
+            FLTB:
+            - [0.000, 0.700,
+               1.000, 0.700,
+               1.150, 0.600,
+               1.300, 0.430,
+               1.500, 0.150,
+               1.700, 0.070,
+               2.000, 0.000]
+            - fraction of total dry matter to leaves as a function of DVS
+            - ['-', 'mass.mass-1']
+            FSTB:
+            - [0.000, 0.300,
+               1.000, 0.300,
+               1.150, 0.250,
+               1.300, 0.100,
+               1.500, 0.100,
+               1.700, 0.030,
+               2.000, 0.000]
+            - fraction of total dry matter to stems as a function of DVS
+            - ['-', 'mass.mass-1']
+            FOTB:
+            - [0.000, 0.000,
+               1.000, 0.000,
+               1.150, 0.150,
+               1.300, 0.470,
+               1.500, 0.750,
+               1.700, 0.900,
+               2.000, 1.000]
+            - fraction of total dry matter to storage organs as a function of DVS
+            - ['-', 'mass.mass-1']
+        Soybean_905:
+            <<: *soybean
+            Metadata:
+                <<: *meta
+                Contributor: E.R. Boons-Prins, G.H.J. de Koning, CA. van Diepen, F.W.T. Penning de Vries
+                Description: This file provides parameters for a soybean variety calibrated for Italy with
+                    a sowing date on 30 April, a flowering date on 15 June and a mean date of harvest on 25 August.
+                Source: https://edepot.wur.nl/308997
+                Type: Report
+                Coverage:
+                   Region: Italy
+            TSUMEM:
+            -   80
+            - temperature sum from sowing to emergence
+            - ['C.d']
+            TSUM1:
+            -  500
+            - temperature sum from emergence to anthesis
+            - ['C.d']
+            TSUM2:
+            - 1100
+            - temperature sum from anthesis to maturity
+            - ['C.d']
+            RGRLAI:
+            - 0.0070
+            - maximum relative increase in LAI
+            - ['d-1']
+            FRTB:
+            - [0.000, 0.650,
+               0.750, 0.450,
+               1.000, 0.200,
+               1.500, 0.000,
+               2.000, 0.000]
+            - fraction of total dry matter to roots as a function of DVS
+            - ['-', 'mass.mass-1']
+            FLTB:
+            - [0.000, 0.700,
+               1.000, 0.700,
+               1.150, 0.600,
+               1.300, 0.430,
+               1.500, 0.150,
+               1.700, 0.070,
+               2.000, 0.000]
+            - fraction of total dry matter to leaves as a function of DVS
+            - ['-', 'mass.mass-1']
+            FSTB:
+            - [0.000, 0.300,
+               1.000, 0.300,
+               1.150, 0.250,
+               1.300, 0.100,
+               1.500, 0.100,
+               1.700, 0.030,
+               2.000, 0.000]
+            - fraction of total dry matter to stems as a function of DVS
+            - ['-', 'mass.mass-1']
+            FOTB:
+            - [0.000, 0.000,
+               1.000, 0.000,
+               1.150, 0.150,
+               1.300, 0.470,
+               1.500, 0.750,
+               1.700, 0.900,
+               2.000, 1.000]
+            - fraction of total dry matter to storage organs as a function of DVS
+            - ['-', 'mass.mass-1']
+        Soybean_906:
+            <<: *soybean
+            Metadata:
+                <<: *meta
+                Contributor: E.R. Boons-Prins, G.H.J. de Koning, CA. van Diepen, F.W.T. Penning de Vries
+                Description: This file provides parameters for a soybean variety calibrated for Spain and Greece with
+                    a sowing date on 20-30 April, a flowering date on 15-25 June and a mean date of harvest on 5-15
+                    September.
+                Source: https://edepot.wur.nl/308997
+                Type: Report
+                Coverage:
+                   Region: Spain, Greece
+            TSUMEM:
+            -   90
+            - temperature sum from sowing to emergence
+            - ['C.d']
+            TSUM1:
+            -  500
+            - temperature sum from emergence to anthesis
+            - ['C.d']
+            TSUM2:
+            - 1300
+            - temperature sum from anthesis to maturity
+            - ['C.d']
+            RGRLAI:
+            - 0.0070
+            - maximum relative increase in LAI
+            - ['d-1']
+            FRTB:
+            - [0.000, 0.650,
+               0.750, 0.450,
+               1.000, 0.200,
+               1.500, 0.000,
+               2.000, 0.000]
+            - fraction of total dry matter to roots as a function of DVS
+            - ['-', 'mass.mass-1']
+            FLTB:
+            - [0.000, 0.700,
+               1.000, 0.700,
+               1.150, 0.600,
+               1.300, 0.430,
+               1.500, 0.150,
+               1.700, 0.070,
+               2.000, 0.000]
+            - fraction of total dry matter to leaves as a function of DVS
+            - ['-', 'mass.mass-1']
+            FSTB:
+            - [0.000, 0.300,
+               1.000, 0.300,
+               1.150, 0.250,
+               1.300, 0.100,
+               1.500, 0.100,
+               1.700, 0.030,
+               2.000, 0.000]
+            - fraction of total dry matter to stems as a function of DVS
+            - ['-', 'mass.mass-1']
+            FOTB:
+            - [0.000, 0.000,
+               1.000, 0.000,
+               1.150, 0.150,
+               1.300, 0.470,
+               1.500, 0.750,
+               1.700, 0.900,
+               2.000, 1.000]
+            - fraction of total dry matter to storage organs as a function of DVS
+            - ['-', 'mass.mass-1']
+        Soybean_VanHeemst_1988:
+            <<: *soybean
+            Metadata:
+                <<: *meta
+                Contributor: H.D.J. van Heemst
+                Description: Soybean variety based on the parameters collected by Van Heemst (1988). This variety
+                    is more representative for tropical soybean varieties.
+                Source: https://edepot.wur.nl/218353
+                Type: Report
+                Coverage:
+                   Region: Tropical regions
+            TBASEM:
+            - 10.0
+            - Lower threshold temperature for emergence
+            - ['C']
+            TEFFMX:
+            - 30.0
+            - maximum effective temperature for emergence
+            - ['C']
+            DLO:
+            -  1.0
+            - optimum daylength for development
+            - ['hr']
+            DLC:
+            -  0.0
+            - critical daylength (lower threshold)
+            - ['hr']
+            TSUM1:
+            -  699
+            - temperature sum from emergence to anthesis
+            - ['C.d']
+            TSUM2:
+            - 1050
+            - temperature sum from anthesis to maturity
+            - ['C.d']
+            DTSMTB:
+            - [ 0.0,  0.0,
+                7.0,  0.0,
+               30.0, 23.0,
+               45.0, 23.0]
+            - daily increase in temperature sum as function of daily average temperature
+            - ['C', 'C']
+            RGRLAI:
+            - 0.0500
+            - maximum relative increase in LAI
+            - ['d-1']
+            KDIFTB:
+            - [0.00, 0.500,
+               2.00, 0.500]
+            - extinction coefficient for diffuse visible light as function of DVS
+            - ['-', '-']
+            AMAXTB:
+            - [0.00, 37.00,
+               1.70, 37.00,
+               2.00, 0.00]
+            - maximum leaf CO2 assimilation rate as function of DVS
+            - ['-', 'kg.ha-1.hr-1']
+            TMPFTB:
+            - [ 0.0, 0.000,
+               10.0, 0.000,
+               24.0, 1.000,
+               39.0, 1.000,
+               42.0, 0.630]
+            - reduction factor of AMAX as function of average daytime (*not* daily)  temperature
+            - ['C', '-']
+            CVL:
+            - 0.680
+            - efficiency of conversion into leaves
+            - ['mass.mass-1']
+            CVO:
+            - 0.720
+            - efficiency of conversion into storage organs
+            - ['mass.mass-1']
+            RMO:
+            - 0.0100
+            - relative maintenance respiration rate of storage organs
+            - ['d-1']
+            FRTB:
+            - [0.000, 0.500,
+               0.750, 0.100,
+               1.500, 0.000,
+               2.000, 0.000]
+            - fraction of total dry matter to roots as a function of DVS
+            - ['-', 'mass.mass-1']
+            FLTB:
+            - [0.000, 0.750,
+               1.000, 0.750,
+               1.150, 0.600,
+               1.300, 0.460,
+               1.500, 0.270,
+               1.700, 0.000,
+               2.000, 0.000]
+            - fraction of total dry matter to leaves as a function of DVS
+            - ['-', 'mass.mass-1']
+            FSTB:
+            - [0.000, 0.250,
+               1.000, 0.250,
+               1.150, 0.270,
+               1.300, 0.270,
+               1.500, 0.280,
+               1.700, 0.000,
+               2.000, 0.000]
+            - fraction of total dry matter to stems as a function of DVS
+            - ['-', 'mass.mass-1']
+            FOTB:
+            - [0.000, 0.000,
+               1.000, 0.000,
+               1.150, 0.130,
+               1.300, 0.270,
+               1.500, 0.450,
+               1.700, 1.000,
+               2.000, 1.000]
+            - fraction of total dry matter to storage organs as a function of DVS
+            - ['-', 'mass.mass-1']
