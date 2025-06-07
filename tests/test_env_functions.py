@@ -15,6 +15,8 @@ class TestEnvFunctions(unittest.TestCase):
         self.assertEqual(isinstance(obs, dict), True)
         self.assertEqual(isinstance(info, dict), True)
 
+        print(obs)
+
         # check reset options
         self.assertEqual(self.env.unwrapped.year, 2010)
         self.assertEqual(self.env.unwrapped.budget_n, 200)
@@ -39,7 +41,6 @@ class TestEnvFunctions(unittest.TestCase):
         term = False
         while not term:
             obs, rew, term, trunc, info = self.env.step(1)
-            print(self.env.unwrapped.n_steps)
 
         # again
         self.assertEqual(obs['NO3'], info['NO3'][-1])

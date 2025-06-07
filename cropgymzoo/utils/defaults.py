@@ -61,6 +61,10 @@ def get_default_action_features():
     return ['Nsteps', 'Naction', 'StepsSinceLastAction', 'BudgetTotal', 'BudgetLeft']
 
 
+def get_default_misc_features():
+    return ['SinDay', 'CosDay', 'FertilizerPrice', 'CropPrice', 'CropCode']
+
+
 def get_default_location():
     return (52, 5.5)
 

@@ -24,7 +24,10 @@ from cropgymzoo.utils.nitrogen_helpers import (get_surplus_n, get_nh4_deposition
                                                get_no3_deposition_pcse, convert_year_to_n_concentration, m2_to_ha,
                                                is_leap)
 import cropgymzoo.envs.pcse_env as pcse_env
-from cropgymzoo.utils.defaults import get_wofost_default_crop_features, get_default_weather_features, get_default_action_features
+from cropgymzoo.utils.defaults import (get_wofost_default_crop_features,
+                                       get_default_weather_features,
+                                       get_default_action_features,
+                                       get_default_misc_features)
 
 import torch as th
 import torch.nn as nn
@@ -42,6 +45,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
                  crop_features: list = get_wofost_default_crop_features(),
                  weather_features: list = get_default_weather_features(),
                  action_features: list = get_default_action_features(),
+                 misc_features: list = get_default_misc_features(),
                  location: list | tuple = None,
                  year: int = None,
                  year_list: list = None,
@@ -77,6 +81,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self.crop_features = crop_features
         self.weather_features = weather_features
         self.action_features = action_features
+        self.misc_features = misc_features
         self.year = year
         self.location = location
         self.year_list = year_list
@@ -348,6 +353,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
                                                                       self.steps_since_last_action,
                                                                       self.budget_n,
                                                                       self.budget_left])})
+        misc = self._misc_features_mapper()
 
         # flattened to vector
         crop_model = observation["crop_model"]
@@ -361,12 +367,14 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         action_values = [np.sum(act[f]) for f in self.action_features]
 
+        misc_values = [misc[m] for m in self.misc_features]
+
         # shape = (n_timesteps, n_weather_vars)  →  ravel() = row-major flatten
         weather_matrix = np.vstack([weather[f][:self.timestep] for f in self.weather_features]).T
         weather_values = weather_matrix.ravel()
 
         if self.flatten_obs:
-            return np.array(crop_values + action_values + list(weather_values), dtype=np.float32)
+            return np.array(crop_values + action_values + misc_values + list(weather_values), dtype=np.float32)
 
         obs = {}
 
@@ -376,6 +384,10 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         # action scalars
         for k, v in zip(self.action_features, action_values):
+            obs[k] = float(v)
+
+        # misc scalars
+        for k, v in zip(self.misc_features, misc_values):
             obs[k] = float(v)
 
         # weather scalars — unroll the (time, variable) matrix
@@ -397,13 +409,14 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
     @functools.lru_cache(maxsize=None)
     def _get_obs_len(self):
-        nvars = (len(self.crop_features) + len(self.action_features) + len(self.weather_features) * self.timestep)
+        nvars = (len(self.crop_features) + len(self.action_features) + len(self.misc_features) + len(self.weather_features) * self.timestep)
         return nvars
 
     @functools.lru_cache(maxsize=None)
     def _get_obs_keys(self):
-        return (self.crop_features + self.action_features +
-                [f"{self.weather_features[i]}_{t}" for t in range(self.timestep) for i, _ in enumerate(self.weather_features)])
+        return (self.crop_features + self.action_features + self.misc_features +
+                [f"{self.weather_features[i]}_{t}" for t in range(self.timestep) for i, _ in enumerate(self.weather_features)]
+                )
 
     def _apply_action(self, action):
         action = action * 10  # kg N / ha
@@ -487,7 +500,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         return site_params
 
     @staticmethod
-    def encode_doy(date: datetime.date | datetime.datetime, period: float | None = None):
+    def _encode_doy(date: datetime.date | datetime.datetime, period: float | None = None):
         if isinstance(date, datetime.datetime):
             date = date.date()
 
@@ -497,13 +510,47 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         return math.sin(angle), math.cos(angle)
 
+    @functools.lru_cache(maxsize=None)
+    def _get_crop_code(self):
+        crop_code_map = {
+            'winterwheat': 1,
+            'sugarbeet': 2,
+            'potato': 3,
+            'soybean': 4,
+            'barley': 5,
+            'seed_onion': 6,
+            'sunflower': 7,
+            'fababean': 8,
+            'chickpea': 9,
+            'sweetpotato': 10,
+            'cowpea': 11,
+            'rapeseed': 12,
+            'rice': 13,
+            'groundnut': 14,
+            'cassava': 15
+        }
+        return crop_code_map[self.crop]
+
+    def _get_fertilizer_price(self):
+        # TODO IMPLEMENT LOGIC... Price table?
+        year = self.year
+        return 1
+
+    def _get_crop_price(self):
+        # TODO Same as above
+        year = self.year
+        crop = self.crop
+        return 1
+
     def _populate_infos(self, pcse_output, action, reward, terminate):
 
         self.infos["Date"].append(pcse_output[-1]['day'])
 
-        self.infos["SinDay"].append(self.encode_doy(pcse_output[-1]['day'])[0])
+        encode_day = self._encode_doy(pcse_output[-1]['day'])
 
-        self.infos["CosDay"].append(self.encode_doy(pcse_output[-1]['day'])[1])
+        self.infos["SinDay"].append(encode_day[0])
+
+        self.infos["CosDay"].append(encode_day[1])
 
         for feature in self.crop_features:
             f = self._transform_crop_feature(pcse_output[-1], feature)
@@ -540,6 +587,16 @@ class ParcelEnv(pcse_env.PCSEEnv):
             'StepsSinceLastAction': self.steps_since_last_action,
             'BudgetTotal': self.budget_n,
             'BudgetLeft': self.budget_left,
+        }
+
+    def _misc_features_mapper(self):
+        encode_day = self._encode_doy(self.date)
+        return {
+            'SinDay': encode_day[0],
+            'CosDay': encode_day[1],
+            'FertilizerPrice': self._get_fertilizer_price(),
+            'CropPrice': self._get_crop_price(),
+            'CropCode': self._get_crop_code()
         }
 
     '''
