@@ -46,7 +46,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
                  reward: str = 'NUE',
                  action_multiplier: float = 1,
                  action_space: gym.spaces = gym.spaces.Discrete(9),
-                 costs_nitrogen: int = 2,
+                 costs_nitrogen: int = 0,
                  crop: str = 'winterwheat',
                  model_config: str = _WOFOST_CONFIG,
                  agro_config: str = _AGRO_CALENDAR_CONFIG,
@@ -137,6 +137,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         """
         Computes customized reward and populates info
         """
+        self.n_steps += 1
 
         # pass through action masker
         action = self.action_mask(action)
@@ -277,7 +278,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         elif terminated and self.reward_function in ['NUE', 'DNE']:
             reward = (self.reward_container.calculate_reward_nue(
-                n_fertilized=self.reward_container.get_total_fertilization * 10,
+                n_fertilized=self.reward_container.get_total_fertilization,
                 n_output=process_pcse.get_n_storage_organ(output),
                 no3_depo=get_no3_deposition_pcse(output),
                 nh4_depo=get_nh4_deposition_pcse(output),)
@@ -306,7 +307,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
     @staticmethod
     def _crop_model_sum_last(pcse, var, normalise=1.0):
-        return np.sum(pcse[var]) / normalise
+        return np.sum(pcse[var][-1]) / normalise
 
     def _get_key_transformations(self, crop_model):
         return {
@@ -318,7 +319,8 @@ class ParcelEnv(pcse_env.PCSEEnv):
             "RNH4DEPOSTT": lambda: self._crop_model_sum_last(crop_model, "RNH4DEPOSTT", m2_to_ha),
         }
 
-    def _transform_crop_feature(self, pcse_output, feature):
+    @staticmethod
+    def _transform_crop_feature(pcse_output, feature):
         if feature in ["NH4", "NO3", "RNO3DEPOSTT", "RNH4DEPOSTT"]:
             return np.sum(pcse_output[feature]) / m2_to_ha
         if feature in ["SM", "WC"]:

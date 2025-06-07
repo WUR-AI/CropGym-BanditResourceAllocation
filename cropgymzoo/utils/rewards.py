@@ -24,16 +24,16 @@ def reward_functions_end():
 
 def get_min_yield(loc="52.57-5.63"):
     if loc == "52.57-5.63":
-        return 5484.75
+        return 0
     else:
-        return 5484.75
+        return 0
 
 
 def get_max_yield(loc="52.57-5.63"):
     if loc == "52.57-5.63":
-        return 9500
+        return 10_000
     else:
-        return 9500
+        return 10_000
 
 
 class Rewards:
