@@ -142,9 +142,6 @@ class ParcelEnv(pcse_env.PCSEEnv):
         """
         self.n_steps += 1
 
-        # pass through action masker
-        action = self.action_mask(action)
-
         # advance one step of the PCSEEngine wrapper and apply action(s)
         obs_pcse, _, terminated, truncated, _ = super().step(action)
 
@@ -200,9 +197,14 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         return self._observation(obs), self.infos
 
-    def action_mask(self, action):
-        # TODO do masking logic
-        return action
+    def action_mask(self) -> list | np.ndarray:
+        """
+        Returns a list of valid actions based on the budget left!
+        """
+        max_units = max(int(self.budget_left // 10), 0)
+        mask = np.zeros(self.action_space.n, dtype=bool)
+        mask[: max_units + 1] = True  # valid actions are 0 … max_units
+        return mask
 
 
     '''
@@ -239,6 +241,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
             self.steps_since_last_action += 1
 
     def _reset_action_variables(self):
+        self.n_steps = 0
         self.n_action = 0
         self.non_zero_action_count = 0
         self.steps_since_last_action = 0

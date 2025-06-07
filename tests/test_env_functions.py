@@ -44,6 +44,23 @@ class TestEnvFunctions(unittest.TestCase):
         # again
         self.assertEqual(obs['NO3'], info['NO3'][-1])
 
+    def test_replace_year_every_terminate_singular(self):
+        obs, info = self.env.reset(options={'year': 2010, 'budget_n': 200})
+
+        term = False
+        while not term:
+            obs, rew, term, trunc, info = self.env.step(0)
+
+        self.assertEqual(self.env.unwrapped.year, 2010)
+
+        obs, info = self.env.reset(options={'year': 1985, 'budget_n': 200})
+
+        term = False
+        while not term:
+            obs, rew, term, trunc, info = self.env.step(0)
+
+        self.assertEqual(self.env.unwrapped.year, 1985)
+
 
 
 if __name__ == '__main__':
