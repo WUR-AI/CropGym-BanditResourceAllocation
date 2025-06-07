@@ -1,11 +1,7 @@
 import unittest
 
-import numpy as np
-
 import cropgymzoo  # for gym make
 import gymnasium as gym
-
-from cropgymzoo.envs.singular_env import ParcelEnv
 
 
 class TestEnvFunctions(unittest.TestCase):
@@ -15,23 +11,25 @@ class TestEnvFunctions(unittest.TestCase):
     def test_reset_singular(self):
         obs, info = self.env.reset(options={'year': 2010, 'budget_n': 200})
 
+        # check obs and info type
         self.assertEqual(isinstance(obs, dict), True)
         self.assertEqual(isinstance(info, dict), True)
+
+        # check reset options
         self.assertEqual(self.env.unwrapped.year, 2010)
         self.assertEqual(self.env.unwrapped.budget_n, 200)
-        # self.assertIn(env.unwrapped.crop_features, list(obs.keys()))
-        # self.assertIn(env.unwrapped.action_features, list(obs.keys()))
 
     def test_step_singular(self):
         obs, info = self.env.reset(options={'year': 2010, 'budget_n': 200})
         obs, rew, term, trunc, info = self.env.step(1)
 
-        print(obs)
-        print(rew)
-        print(info)
 
         self.assertEqual(isinstance(obs, dict), True)
+
+        # check NUE reward
         self.assertEqual(rew, 0)
+
+        # check whether obs and info align
         self.assertEqual(obs['NO3'], info['NO3'][-1])
 
     def test_terminate_singular(self):
@@ -43,6 +41,7 @@ class TestEnvFunctions(unittest.TestCase):
             obs, rew, term, trunc, info = self.env.step(1)
             print(self.env.unwrapped.n_steps)
 
+        # again
         self.assertEqual(obs['NO3'], info['NO3'][-1])
 
 
