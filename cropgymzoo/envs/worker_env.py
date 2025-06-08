@@ -12,7 +12,8 @@ from pettingzoo import ParallelEnv
 from cropgymzoo import _FIELDS_CONFIG
 
 from cropgymzoo.envs.singular_env import ParcelEnv
-from cropgymzoo.envs.allocation_env import AllocationBandit
+from cropgymzoo.utils.defaults import get_default_years
+
 
 class ParallelRLWorkers(ParallelEnv):
     metadata = {
@@ -23,10 +24,10 @@ class ParallelRLWorkers(ParallelEnv):
                  seed: int = 107,
                  warm_up: int = 100,
                  global_budget: int = 400,
-                 allocator: str = 'random',
-                 allocator_env: AllocationBandit = None,):
+                 years: list = get_default_years(),):
 
         self.seed = seed
+        self.years = years
 
         with open(_FIELDS_CONFIG) as f:
             dict_fields = yaml.load(f, Loader=yaml.SafeLoader)
@@ -35,28 +36,20 @@ class ParallelRLWorkers(ParallelEnv):
         self.agents = [i for i in dict_fields.keys()]
         self.possible_agents = self.agents.copy()
 
-        # either 'random' or 'bandit'
-        self.allocation_type = allocator
-        self.allocator_agent = allocator_env
-        if self.allocator_agent == 'bandit':
-            assert self.allocator_agent is not None
-
         self.global_budget = global_budget
 
         self._init_fields()
         self._init_spaces()
         self._init_farm_variables()
 
-        if warm_up:
-            self._warm_up()
+        if warm_up > 0:
+            self.warm_up_infos = self._warm_up(warm_up)
 
 
 
     def reset(self, seed=None, options=None):
-        assert 'global_budget' in options, "Please reset env with global_budget key!"
-
-        self.global_budget = options.get('global_budget')
-
+        # reinitialize agents
+        self.agents = self.possible_agents.copy()
         locals_, infos = {}, {}
         for ag, env in self.fields.items():
             o, i = env.reset(seed=seed, options=options)
@@ -67,34 +60,29 @@ class ParallelRLWorkers(ParallelEnv):
                     "action_mask": self._get_mask(ag)}
                for ag in self.agents}
 
-        if self.allocation_type == 'random':
-            # please fill in here
-            allocations = self._allocate_random_budgets()
-        else:
-            context = self._build_context(obs)
-            allocations = self.allocator_agent.reset(options=context)
-
         return obs, infos
 
     def step(self, actions: dict[str, int]):
 
         # init dict for each variable
-        locals_, rews, terms, truncs, infos = {}, {}, {}, {}, {}
+        local_obs, rewards, terminateds, truncateds, infos = {}, {}, {}, {}, {}
 
         # loop through agent steps
-        for ag, env in self.fields.items():
-            o, r, t, tr, i = env.step(actions[ag])
-            # self._apply_dose(ag, actions[ag])          # update budget
-            locals_[ag], rews[ag] = o, r
-            terms[ag], truncs[ag], infos[ag] = t, tr, i
+        for agent, env in self.fields.items():
+            if agent in self.agents:  # has agent terminated?
+                o, r, t, tr, i = env.step(actions[agent])
+                local_obs[agent], rewards[agent] = o, r
+                terminateds[agent], truncateds[agent], infos[agent] = t, tr, i
 
-        obs = {ag: {"local": locals_[ag],
-                    "shared": self.shared_space,
+        # build MARL obs dictionary
+        obs = {ag: {"local": local_obs[ag],
+                    "shared": self._build_shared(),
                     "action_mask": self._get_mask(ag)}
                for ag in self.agents}
 
-        self.agents = [ag for ag in self.agents if not (terms[ag] or truncs[ag])]
-        return obs, rews, terms, truncs, infos
+        # rebuild available agents
+        self.agents = [agent for agent in self.agents if not (terminateds[agent] or truncateds[agent])]
+        return obs, rewards, terminateds, truncateds, infos
 
     def render(self):
         pass
@@ -111,28 +99,36 @@ class ParallelRLWorkers(ParallelEnv):
     def get_field_env(self, n: int):
         return self.fields[self.agents[n]]
 
+    def set_global_budget(self, budget: int):
+        self.global_budget = budget
+
     def _init_farm_variables(self):
         self.global_budget_left = self.global_budget
 
     def _init_fields(self):
         self.fields = {}
-        # create each gymnasium env
+        # create each gymnasium cropgym env
         for n in self.agents:
-            env = gym.make(n, seed=self.seed)  # set same seed for each field. Change?
+            env = gym.make(n, seed=self.seed)  # set same seed for each parcel. Change?
             self.fields[n] : dict[ParcelEnv] = env
+        print("Parcels initialized!")
 
     def _init_spaces(self):
-        # TODO
+        self.shared_space = gym.spaces.Dict(
+            {k: gym.spaces.Box(-np.inf, np.inf, shape=(), dtype=np.float32)
+            for k in self._get_shared_obs_keys()}
+        )
 
-        self.shared_space = self._build_shared()
-
+        # observation_spaces from locals, shared and action mask
         self.observation_spaces = {
             ag: gym.spaces.Dict({
                 "local": env.observation_space,
                 "shared": self.shared_space,
-                "action_mask": env.unwrapped.action_mask(),
+                "action_mask": gym.spaces.MultiBinary(env.unwrapped.action_space.n),
             }) for ag, env in self.fields.items()
         }
+
+        # action space from individual parcels
         self.action_spaces = {agent: env.action_space
                               for agent, env in self.fields.items()}
 
@@ -152,66 +148,144 @@ class ParallelRLWorkers(ParallelEnv):
     def _build_context(self, obs):
         ...
 
-    def _warm_up(self):
-        ...
+    def _warm_up(self, warm_up_counter):
+        warm_up_infos, infos = {}, {}
+        options = {}
+        print('Starting warm up...')
+        for i, _ in enumerate(range(warm_up_counter)):
+            options['year'] = np.random.choice(self.years)
+            _, _ = self.reset(seed=self.seed, options=options)
+            while self.agents is not False:
+                actions = self._get_each_agent_actions()
+                _, _, _, _, infos = self.step(actions=actions)
+            warm_up_infos[i] = infos
+        print('Finished warm up...')
+        return warm_up_infos
+
+    def _get_each_agent_actions(self) -> dict[str, int]:
+        """Rule-based fertiliser policy for warm-up episodes."""
+
+        # today_doy = self.shared_space["DayOfYear"]
+        actions = {}
+
+        for ag, env in self.fields.items():
+            info = env.unwrapped.get_latest_info
+            crop = info("CropCode")
+            n_applied_so_far = info("Naction_total")  # kg N ha-¹ already used
+            cap = self._get_crop_caps()[crop]
+
+            # Figure out which split the parcel is currently in
+            pending_dose = 0
+            for trigger, frac in self._get_schedule()[crop]:
+                if "doy" in trigger:
+                    low, high = trigger["doy"]
+                    if low <= env.unwrapped.date.timetuple().tm_yday <= high:
+                        planned_total_by_now = cap * frac
+                elif "days_after_emerg" in trigger:
+                    dae = info("DaysAfterEmergence")
+                    low, high = trigger["days_after_emerg"]
+                    if low <= dae <= high:
+                        planned_total_by_now = cap * frac
+                elif "leaf_stage" in trigger:
+                    leaves = info("LeafStage")
+                    low, high = trigger["leaf_stage"]
+                    if low <= leaves <= high:
+                        planned_total_by_now = cap * frac
+                else:
+                    continue
+
+            # how much more N does this parcel still need today?
+            deficit = max(0, planned_total_by_now - n_applied_so_far)
+            # clip by remaining farm-level budget
+            dose_today = min(deficit, self.global_budget_left, env.unwrapped.max_single_dose)
+
+            if dose_today > 0:
+                act = self._dose_to_action(env, dose_today)
+                self.global_budget_left -= env.unwrapped.available_doses[act]
+            else:
+                act = 0  # no-op
+
+            actions[ag] = act
+
+        return actions
+
+    def _dose_to_action(self, env, desired_kg):
+        """Map kg N to the closest allowed discrete action ID."""
+        doses = list(env.unwrapped.budget_left)  # e.g. [0, 30, 60, 90]
+        # pick the smallest dose ≥ desired, else highest available
+        target = min((d for d in doses if d >= desired_kg), default=max(doses))
+        return doses.index(target)  # assumes ascending order
 
     def _get_shared_obs_keys(self):
         return ["NO3", "NH4", "Yield", "BudgetLeft", "Naction", "NamountSO", "FertilizerPrice", "CropCode"]
 
-    def _allocate_random_budgets(self) -> dict[str, float]:
-        """
-        Return a dict {agent_id: kg_budget} that d sums to self.global_budget
-        and d never exceeds each field’s legal ceiling.
-        Requires:
-            • self.fields        : dict[str, ParcelEnv]
-            • self.global_budget : float   (kg for this season)
-            • self.crop_caps     : dict[str, float]  # e.g. {'wheat':240,…}
-        """
-        rng = np.random.default_rng()  # or use self.np_random
-        agents = list(self.fields.keys())
-        n = len(agents)
-        q = 10 # kg/ha
-
-        # ----------------------------------------------------------------
-        # 1) find per-field ceiling  m_j  from either the parcel or a lookup
-        # ----------------------------------------------------------------
-        cap_q = np.empty(n, dtype=int)
-        for k, ag in enumerate(agents):
-            env = self.fields[ag]
-            # priority 1: an attribute on the parcel env
-            # TODO check this logic
-            if hasattr(env, "max_allowed_kg"):
-                caps = env.max_allowed_kg
-            else:  # fallback from crop type
-                caps = self._get_crop_caps[env.unwrapped.crop]  # e.g. 240, 150 …
-            cap_q[k] = int(np.floor(caps / q))
-
-        # ---- 2) global budget in quanta -------------------------------
-        Q_total = int(np.round(self.global_budget / q))
-        if Q_total > cap_q.sum():
-            raise ValueError("Budget exceeds joint crop ceilings")
-
-        alloc_q = np.zeros(n, dtype=int)
-        remaining_q = Q_total
-        remaining_idx = np.arange(n)
-
-        # ---- 3) iterative multinomial with clipping -------------------
-        while remaining_q > 0 and remaining_idx.size:
-            probs = rng.dirichlet(np.ones(remaining_idx.size))
-            # sample how many quanta each remaining field *would* get
-            proposal_q = rng.multinomial(remaining_q, probs)
-            room_q = cap_q[remaining_idx] - alloc_q[remaining_idx]
-            applied_q = np.minimum(proposal_q, room_q)  # clip
-            alloc_q[remaining_idx] += applied_q
-            remaining_q -= applied_q.sum()
-            # keep only fields that can still accept quanta
-            remaining_idx = remaining_idx[(room_q - applied_q) > 0]
-
-        if remaining_q > 0:
-            raise RuntimeError("Could not allocate all quanta; all fields full")
-
-        return {ag: float(alloc_q[k] * q) for k, ag in enumerate(agents)}
-
     @functools.lru_cache(maxsize=None)
     def _get_crop_caps(self):
-            return {"wheat": 240, "potato": 240, "beet": 150}
+            return {"winterwheat": 240, "potato": 240, "sugarbeet": 150}
+
+    @functools.lru_cache(maxsize=None)
+    def _get_schedule(self):
+        return {
+            "winterwheat": [               # :contentReference[oaicite:0]{index=0}
+                ({"doy": (45, 90)}, 0.17),   # late Feb – early Apr (tillering GS22-25)  ~40 kg
+                ({"doy": (90, 120)}, 0.50),  # stem elong. GS31-32                     ~120 kg
+                ({"doy": (120, 140)}, 0.33), # flag-leaf GS37-39                       ~80 kg
+            ],
+            "potato": [                    # :contentReference[oaicite:1]{index=1}
+                ({"days_after_emerg": (0, 7)}, 0.40),   # at planting / emergence
+                ({"days_after_emerg": (25, 40)}, 0.60), # tuber initiation / bulking
+            ],
+            "sugarbeet": [                 # :contentReference[oaicite:2]{index=2}
+                ({"doy": (80, 105)}, 0.50),   # pre-plant – 4-leaf
+                ({"leaf_stage": (6, 9)}, 0.50) # 6- to 8-leaf (≈ canopy closure)
+            ],
+        }
+
+    def __str__(self) -> str:
+        from collections import Counter
+        """
+        Return a multiline string such as
+
+            Farm status – budget left: 350 / 400 kg N
+            Field          Crop        N applied   Yield (t/ha)
+            ---------------------------------------------------
+            parcel_001     winterwheat       80          3.5
+            parcel_002     potato            30            –
+            parcel_003     sugarbeet          –            –
+
+            Crop distribution → winterwheat:1 | potato:1 | sugarbeet:1
+        """
+
+        # small helper for “safe” look-ups
+        def safe(env, key, default="–"):
+            try:
+                return env.unwrapped.get_latest_info(key)
+            except Exception:
+                return default
+
+        header = f"Farm status – budget left: {self.global_budget_left} / {self.global_budget} kg N"
+        cols = ("Field", "Crop", "N applied", "Yield (t/ha)")
+        fmt = "{:15} {:12} {:>10} {:>12}"
+        lines = [header, fmt.format(*cols), "-" * 55]
+
+        # build one row per parcel
+        crop_counts = Counter()
+        for field_id, env in self.fields.items():
+            crop = safe(env, "CropCode")
+            crop_counts[crop] += 1
+
+            line = fmt.format(
+                field_id,
+                crop,
+                safe(env, "Naction_total"),
+                safe(env, "Yield"),
+            )
+            lines.append(line)
+
+        # add a small summary line
+        summary = " | ".join(f"{c}:{n}" for c, n in sorted(crop_counts.items()))
+        lines.append(f"\nCrop distribution → {summary}")
+
+        return "\n".join(lines)
+
+

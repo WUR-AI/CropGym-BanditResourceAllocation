@@ -3,8 +3,10 @@ import unittest
 import cropgymzoo  # for gym make
 import gymnasium as gym
 
+from cropgymzoo.envs.worker_env import ParallelRLWorkers
 
-class TestEnvFunctions(unittest.TestCase):
+
+class TestSingularEnvFunctions(unittest.TestCase):
     def setUp(self):
         self.env = gym.make('field-1')
 
@@ -65,7 +67,50 @@ class TestEnvFunctions(unittest.TestCase):
 
         self.assertEqual(self.env.unwrapped.year, 1985)
 
+    def test_infos_shape_singular(self):
+        obs, info = self.env.reset(options={'year': 2010})
 
+        term = False
+        while not term:
+            obs, rew, term, trunc, info = self.env.step(0)
+
+        for feature in info:
+            self.assertEqual(isinstance(info[feature], list), True)
+
+class TestMultiEnvFunctions(unittest.TestCase):
+    def setUp(self):
+        self.env = ParallelRLWorkers(
+            warm_up=0,
+            global_budget=500,
+        )
+
+    def test_reset_multi(self):
+        obs, info = self.env.reset(options={'year': 2010})
+
+        self.assertEqual(isinstance(obs, dict), True)
+        self.assertEqual(isinstance(info, dict), True)
+
+    def test_step_multi(self):
+        obs, info = self.env.reset(options={'year': 2010})
+        obs, rew, term, trunc, info = self.env.step({
+            agent: 0 for agent in self.env.unwrapped.agents
+        })
+
+        self.assertEqual(isinstance(obs, dict), True)
+        self.assertEqual(isinstance(info, dict), True)
+
+    def test_terminate_multi(self):
+        obs, info = self.env.reset(options={'year': 2010})
+
+        # terminateds = {False for _ in self.env.unwrapped.agents}
+        while self.env.agents:
+            obs, rew, term, trunc, info = self.env.step({
+                agent: 0 for agent in self.env.unwrapped.agents
+            })
+        print(info)
+
+        self.assertEqual(isinstance(obs, dict), True)
+        self.assertEqual(isinstance(info, dict), True)
 
 if __name__ == '__main__':
     unittest.main()

@@ -356,25 +356,19 @@ class ParcelEnv(pcse_env.PCSEEnv):
         if isinstance(observation, tuple):
             observation = observation[0]
 
-        # add action features in the dict
-        observation["action_features"].update({self.action_features[i]: v
-                                               for i, v in enumerate([self.n_steps, self.n_action,
-                                                                      self.steps_since_last_action,
-                                                                      self.budget_n,
-                                                                      self.budget_left])})
-        misc = self._misc_features_mapper()
-
         # flattened to vector
         crop_model = observation["crop_model"]
-        act = observation["action_features"]
+        act = self._action_features_mapper()
         weather = observation["weather"]
+        misc = self._misc_features_mapper()
 
+        # perform some transformations
         crop_values = [
             self._get_key_transformations(crop_model).get(f, lambda: crop_model[f][-1])()  # fall back to plain last value
             for f in self.crop_features
         ]
 
-        action_values = [np.sum(act[f]) for f in self.action_features]
+        action_values = [act[a] for a in self.action_features]
 
         misc_values = [misc[m] for m in self.misc_features]
 
@@ -440,6 +434,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
                       **{name: [] for name in self.crop_features},
                       **{name: [] for name in self.weather_features},
                       **{name: [] for name in self.action_features},
+                      **{name: [] for name in self.misc_features},
                       'Reward': [], 'Action': [], 'Yield': [],
                       'BudgetTotal': [], 'BudgetLeft': [],
                       'Nue': [], 'Nsurp': [], 'Profit': []
@@ -570,6 +565,9 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         for feature in self.action_features:
             self.infos[feature].append(self._action_features_mapper()[feature])
+
+        for feature in self.misc_features:
+            self.infos[feature].append(self._misc_features_mapper()[feature])
 
         self.infos['Reward'].append(reward)
         self.infos['Action'].append(action)
