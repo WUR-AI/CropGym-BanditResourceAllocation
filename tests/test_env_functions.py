@@ -9,7 +9,8 @@ class TestEnvFunctions(unittest.TestCase):
         self.env = gym.make('field-1')
 
     def test_reset_singular(self):
-        obs, info = self.env.reset(options={'year': 2010, 'budget_n': 200})
+        obs, info = self.env.reset(options={'year': 2010})
+        self.env.unwrapped.set_budget(200)
 
         # check obs and info type
         self.assertEqual(isinstance(obs, dict), True)
@@ -22,7 +23,7 @@ class TestEnvFunctions(unittest.TestCase):
         self.assertEqual(self.env.unwrapped.budget_n, 200)
 
     def test_step_singular(self):
-        obs, info = self.env.reset(options={'year': 2010, 'budget_n': 200})
+        obs, info = self.env.reset(options={'year': 2010})
         obs, rew, term, trunc, info = self.env.step(1)
 
 
@@ -35,18 +36,20 @@ class TestEnvFunctions(unittest.TestCase):
         self.assertEqual(obs['NO3'], info['NO3'][-1])
 
     def test_terminate_singular(self):
-        obs, info = self.env.reset(options={'year': 2010, 'budget_n': 200})
+        obs, info = self.env.reset(options={'year': 2010})
 
         rew = 0
         term = False
         while not term:
             obs, rew, term, trunc, info = self.env.step(1)
 
+        print(info)
+
         # again
         self.assertEqual(obs['NO3'], info['NO3'][-1])
 
     def test_replace_year_every_terminate_singular(self):
-        obs, info = self.env.reset(options={'year': 2010, 'budget_n': 200})
+        obs, info = self.env.reset(options={'year': 2010})
 
         term = False
         while not term:
@@ -54,7 +57,7 @@ class TestEnvFunctions(unittest.TestCase):
 
         self.assertEqual(self.env.unwrapped.year, 2010)
 
-        obs, info = self.env.reset(options={'year': 1985, 'budget_n': 200})
+        obs, info = self.env.reset(options={'year': 1985})
 
         term = False
         while not term:

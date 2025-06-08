@@ -176,7 +176,6 @@ class ParcelEnv(pcse_env.PCSEEnv):
         """
 
         assert 'year' in options, "Please reset environment with a year"
-        assert 'budget_n' in options, "Please reset environment with an N_budget"
 
         # Only for invalid action masking
         # self.reset_non_zero_action_count()
@@ -190,7 +189,6 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         # overwrite for new eps
         self.overwrite_year(year=options['year'])
-        self.budget_n = options['budget_n']
 
         self._reset_action_variables()
 
@@ -229,6 +227,14 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
     def get_latest_info(self, feature):
         return self.infos[feature][-1]
+
+    def set_budget(self, budget):
+        self.budget_n = budget
+        self.budget_left = self.budget_n
+
+    def get_max_allowed(self):
+        # TODO fill in
+        ...
 
     '''
     Helper functions for various things
@@ -560,7 +566,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
             self.infos[feature].append(f)
 
         for feature in self.weather_features:
-            self.infos[feature].append(self.wdp(self.infos["Date"][-1]))
+            self.infos[feature].append(getattr(self.wdp(self.infos["Date"][-1]), feature))
 
         for feature in self.action_features:
             self.infos[feature].append(self._action_features_mapper()[feature])
