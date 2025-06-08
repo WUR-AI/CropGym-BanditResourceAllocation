@@ -227,6 +227,9 @@ class ParcelEnv(pcse_env.PCSEEnv):
     def render(self, mode="human"):
         pass
 
+    def get_latest_info(self, feature):
+        return self.infos[feature][-1]
+
     '''
     Helper functions for various things
     '''
