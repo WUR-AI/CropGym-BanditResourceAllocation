@@ -37,6 +37,29 @@ class ParcelEnv(pcse_env.PCSEEnv):
     This is a class that inherits PCSE.
     It will be instantiated multiple times for the MARL environment.
     """
+    '''
+    Some class variables, so they do not get copied for each instance of this class.
+    '''
+    """
+    WARNING! Learned agents rely on this crop code mapping; don't inadvertently change it!
+    """
+    CROP_CODE_MAP = {
+        'winterwheat': 1,
+        'sugarbeet': 2,
+        'potato': 3,
+        'soybean': 4,
+        'barley': 5,
+        'seed_onion': 6,
+        'sunflower': 7,
+        'fababean': 8,
+        'chickpea': 9,
+        'sweetpotato': 10,
+        'cowpea': 11,
+        'rapeseed': 12,
+        'rice': 13,
+        'groundnut': 14,
+        'cassava': 15
+    }
 
     '''
     Initialize Env for each RL agent
@@ -156,7 +179,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         # transform and flatten observations
         obs = self._observation(obs_pcse)
 
-        # populate reward
+        # get pcse output
         pcse_output = self.model.get_output()
 
         # process output to get the reward and growth of the crop
@@ -197,6 +220,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         obs = super().reset(seed=seed, options=options)
 
         self._init_infos()
+        self._populate_infos(self.model.get_output(), 0, 0, False)
 
         return self._observation(obs), self.infos
 
@@ -245,7 +269,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
             action = action[0]
 
         if action > 0:
-            self.n_action += action
+            self.n_action += action * 10
             self.non_zero_action_count += action
             self.steps_since_last_action = 0
 
@@ -412,14 +436,16 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
     @functools.lru_cache(maxsize=None)
     def _get_obs_len(self):
-        nvars = (len(self.crop_features) + len(self.action_features) + len(self.misc_features) + len(self.weather_features) * self.timestep)
+        nvars = (len(self.crop_features) + len(self.action_features) +
+                 len(self.misc_features) + len(self.weather_features) * self.timestep)
         return nvars
 
     @functools.lru_cache(maxsize=None)
     def _get_obs_keys(self):
-        return (self.crop_features + self.action_features + self.misc_features +
-                [f"{self.weather_features[i]}_{t}" for t in range(self.timestep) for i, _ in enumerate(self.weather_features)]
-                )
+        return (
+            self.crop_features + self.action_features + self.misc_features +
+            [f"{self.weather_features[i]}_{t}" for t in range(self.timestep) for i, _ in enumerate(self.weather_features)]
+        )
 
     def _apply_action(self, action):
         action = action * 10  # kg N / ha
@@ -429,6 +455,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         # Reward gets overwritten in step()
         return 0.0
 
+    @functools.lru_cache(maxsize=None)
     def _init_infos(self):
         self.infos = {"Date": [], "SinDay": [], "CosDay": [],
                       **{name: [] for name in self.crop_features},
@@ -516,24 +543,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
     @functools.lru_cache(maxsize=None)
     def _get_crop_code(self):
-        crop_code_map = {
-            'winterwheat': 1,
-            'sugarbeet': 2,
-            'potato': 3,
-            'soybean': 4,
-            'barley': 5,
-            'seed_onion': 6,
-            'sunflower': 7,
-            'fababean': 8,
-            'chickpea': 9,
-            'sweetpotato': 10,
-            'cowpea': 11,
-            'rapeseed': 12,
-            'rice': 13,
-            'groundnut': 14,
-            'cassava': 15
-        }
-        return crop_code_map[self.crop]
+        return self.CROP_CODE_MAP[self.crop]
 
     def _get_fertilizer_price(self):
         # TODO IMPLEMENT LOGIC... Price table?
@@ -549,12 +559,6 @@ class ParcelEnv(pcse_env.PCSEEnv):
     def _populate_infos(self, pcse_output, action, reward, terminate):
 
         self.infos["Date"].append(pcse_output[-1]['day'])
-
-        encode_day = self._encode_doy(pcse_output[-1]['day'])
-
-        self.infos["SinDay"].append(encode_day[0])
-
-        self.infos["CosDay"].append(encode_day[1])
 
         for feature in self.crop_features:
             f = self._transform_crop_feature(pcse_output[-1], feature)
@@ -785,6 +789,14 @@ class ParcelEnv(pcse_env.PCSEEnv):
     @weather_data_provider.setter
     def weather_data_provider(self, weather):
         self._weather_data_provider = weather
+
+    @property
+    def max_single_dose(self):
+        return self.action_space.n - 1
+
+    @property
+    def available_doses(self):
+        return [a * 10 for a in range(self.action_space.n)]
 
 class ZeroNitrogenEnvStorage:
     """

@@ -112,5 +112,50 @@ class TestMultiEnvFunctions(unittest.TestCase):
         self.assertEqual(isinstance(obs, dict), True)
         self.assertEqual(isinstance(info, dict), True)
 
+    def test_print_multi(self):
+        obs, info = self.env.reset(options={'year': 2010})
+
+        while self.env.agents:
+            obs, rew, term, trunc, info = self.env.step({
+                agent: 0 for agent in self.env.unwrapped.agents
+            })
+
+        print(self.env)
+
+        self.assertIn("Farm", self.env.__str__())
+
+    def test_multi_years(self):
+        obs, info = self.env.reset(options={'year': 2010})
+
+        while self.env.agents:
+            obs, rew, term, trunc, info = self.env.step({
+                agent: 0 for agent in self.env.unwrapped.agents
+            })
+
+        obs, info = self.env.reset(options={'year': 1999})
+
+        while self.env.agents:
+            obs, rew, term, trunc, info = self.env.step({
+                agent: 0 for agent in self.env.unwrapped.agents
+            })
+
+        print(self.env)
+
+        self.assertIn("Farm", self.env.__str__())
+
+class TestMultiEnvWarmUp(unittest.TestCase):
+    def setUp(self):
+        self.env = ParallelRLWorkers(
+            warm_up=10,
+            global_budget=500,
+        )
+
+    def test_warm_multi(self):
+        obs, info = self.env.reset(options={'year': 2010})
+
+        print(next(iter(self.env.warm_up_infos.values()))['field-2']['Naction'])
+
+        self.assertNotEqual(self.env.warm_up_infos, None)
+
 if __name__ == '__main__':
     unittest.main()

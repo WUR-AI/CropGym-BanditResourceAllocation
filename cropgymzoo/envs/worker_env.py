@@ -1,6 +1,7 @@
 import os
 import yaml
 import functools
+import pickle
 
 import numpy as np
 
@@ -9,7 +10,7 @@ from gymnasium.spaces import Discrete
 
 from pettingzoo import ParallelEnv
 
-from cropgymzoo import _FIELDS_CONFIG
+from cropgymzoo import _FIELDS_CONFIG, _CONFIG_PATH
 
 from cropgymzoo.envs.singular_env import ParcelEnv
 from cropgymzoo.utils.defaults import get_default_years
@@ -22,7 +23,7 @@ class ParallelRLWorkers(ParallelEnv):
 
     def __init__(self,
                  seed: int = 107,
-                 warm_up: int = 100,
+                 warm_up: int = 0,
                  global_budget: int = 400,
                  years: list = get_default_years(),):
 
@@ -41,24 +42,28 @@ class ParallelRLWorkers(ParallelEnv):
         self._init_fields()
         self._init_spaces()
         self._init_farm_variables()
+        self._init_infos()
 
+        # Do some warm up episodes
+        self.warm_up_infos = None
         if warm_up > 0:
             self.warm_up_infos = self._warm_up(warm_up)
 
-
-
     def reset(self, seed=None, options=None):
+        self._init_infos()
         # reinitialize agents
         self.agents = self.possible_agents.copy()
-        locals_, infos = {}, {}
+        local_obs, infos = {}, {}
         for ag, env in self.fields.items():
             o, i = env.reset(seed=seed, options=options)
-            locals_[ag], infos[ag] = o, i
+            local_obs[ag], infos[ag] = o, i
 
-        obs = {ag: {"local": locals_[ag],
+        obs = {ag: {"local": local_obs[ag],
                     "shared": self.shared_space,
                     "action_mask": self._get_mask(ag)}
                for ag in self.agents}
+
+        self.infos.update(infos)
 
         return obs, infos
 
@@ -82,7 +87,10 @@ class ParallelRLWorkers(ParallelEnv):
 
         # rebuild available agents
         self.agents = [agent for agent in self.agents if not (terminateds[agent] or truncateds[agent])]
-        return obs, rewards, terminateds, truncateds, infos
+
+        # update infos so we don't lose information on dying agents
+        self.infos.update(infos)
+        return obs, rewards, terminateds, truncateds, self.infos
 
     def render(self):
         pass
@@ -102,8 +110,13 @@ class ParallelRLWorkers(ParallelEnv):
     def set_global_budget(self, budget: int):
         self.global_budget = budget
 
+    def _populate_infos(self):
+        for agents in self.agents:
+            ...
+
     def _init_farm_variables(self):
         self.global_budget_left = self.global_budget
+        self._emergence_doy = {ag: None for ag in self.agents}
 
     def _init_fields(self):
         self.fields = {}
@@ -112,6 +125,9 @@ class ParallelRLWorkers(ParallelEnv):
             env = gym.make(n, seed=self.seed)  # set same seed for each parcel. Change?
             self.fields[n] : dict[ParcelEnv] = env
         print("Parcels initialized!")
+
+    def _init_infos(self):
+        self.infos = {agent: {} for agent in self.agents}
 
     def _init_spaces(self):
         self.shared_space = gym.spaces.Dict(
@@ -145,21 +161,29 @@ class ParallelRLWorkers(ParallelEnv):
             shared_obs[feature] = [env.unwrapped.get_latest_info(feature) for env in self.fields.values()]
         return shared_obs
 
-    def _build_context(self, obs):
-        ...
-
     def _warm_up(self, warm_up_counter):
+        print("Checking if warm up was done...")
+        if os.path.isfile(os.path.join(_CONFIG_PATH, 'warm_up_infos.pkl')):
+            with open(os.path.join(_CONFIG_PATH, 'warm_up_infos.pkl'), 'rb') as f:
+                warm_up_infos = pickle.load(f)
+            return warm_up_infos
+        print("No file found...")
         warm_up_infos, infos = {}, {}
         options = {}
         print('Starting warm up...')
         for i, _ in enumerate(range(warm_up_counter)):
+            print('Start warm up iteration {}'.format(i))
             options['year'] = np.random.choice(self.years)
             _, _ = self.reset(seed=self.seed, options=options)
-            while self.agents is not False:
+            while self.agents:
                 actions = self._get_each_agent_actions()
                 _, _, _, _, infos = self.step(actions=actions)
             warm_up_infos[i] = infos
         print('Finished warm up...')
+        print('Attempting to save pickle...')
+        with open(os.path.join(_CONFIG_PATH, 'warm_up_infos.pkl'), 'wb') as f:
+            pickle.dump(warm_up_infos, file=f)
+        print('Successfully saved!')
         return warm_up_infos
 
     def _get_each_agent_actions(self) -> dict[str, int]:
@@ -170,9 +194,11 @@ class ParallelRLWorkers(ParallelEnv):
 
         for ag, env in self.fields.items():
             info = env.unwrapped.get_latest_info
-            crop = info("CropCode")
-            n_applied_so_far = info("Naction_total")  # kg N ha-¹ already used
+            crop = env.unwrapped._get_crop_code()
+            n_applied_so_far = info("BudgetTotal") - info("BudgetLeft")  # kg N ha-¹ already used
             cap = self._get_crop_caps()[crop]
+
+            best_frac = 0.0
 
             # Figure out which split the parcel is currently in
             pending_dose = 0
@@ -180,21 +206,31 @@ class ParallelRLWorkers(ParallelEnv):
                 if "doy" in trigger:
                     low, high = trigger["doy"]
                     if low <= env.unwrapped.date.timetuple().tm_yday <= high:
-                        planned_total_by_now = cap * frac
+                        best_frac = max(best_frac, frac)
                 elif "days_after_emerg" in trigger:
-                    dae = info("DaysAfterEmergence")
-                    low, high = trigger["days_after_emerg"]
-                    if low <= dae <= high:
-                        planned_total_by_now = cap * frac
+                    # 1.  Is emergence day already known?
+                    emerg_doy = self._emergence_doy.get(ag)
+                    today_doy = info("Date").timetuple().tm_yday
+
+                    # 2.  If not, check whether the crop has now emerged.
+                    dvs = info("DVS")                       # 0 = sowing, ~1 = anthesis
+                    if emerg_doy is None and dvs is not None and dvs > 0.01:
+                        emerg_doy = today_doy     # record first emergence
+                        self._emergence_doy[ag] = emerg_doy
+                    if emerg_doy is not None:
+                        dae = (today_doy - emerg_doy) % 365
+                        low, high = trigger["days_after_emerg"]
+                        if low <= dae <= high:
+                            best_frac = max(best_frac, frac)
                 elif "leaf_stage" in trigger:
-                    leaves = info("LeafStage")
+                    leaves = info("LAI")
                     low, high = trigger["leaf_stage"]
                     if low <= leaves <= high:
-                        planned_total_by_now = cap * frac
+                        best_frac = max(best_frac, frac)
                 else:
                     continue
 
-            # how much more N does this parcel still need today?
+            planned_total_by_now = cap * best_frac  # kg the crop *ought* to have
             deficit = max(0, planned_total_by_now - n_applied_so_far)
             # clip by remaining farm-level budget
             dose_today = min(deficit, self.global_budget_left, env.unwrapped.max_single_dose)
@@ -211,7 +247,7 @@ class ParallelRLWorkers(ParallelEnv):
 
     def _dose_to_action(self, env, desired_kg):
         """Map kg N to the closest allowed discrete action ID."""
-        doses = list(env.unwrapped.budget_left)  # e.g. [0, 30, 60, 90]
+        doses = env.unwrapped.available_doses  # e.g. [0, 30, 60, 90]
         # pick the smallest dose ≥ desired, else highest available
         target = min((d for d in doses if d >= desired_kg), default=max(doses))
         return doses.index(target)  # assumes ascending order
@@ -219,13 +255,35 @@ class ParallelRLWorkers(ParallelEnv):
     def _get_shared_obs_keys(self):
         return ["NO3", "NH4", "Yield", "BudgetLeft", "Naction", "NamountSO", "FertilizerPrice", "CropCode"]
 
+    def _convert_crop_reference(self, dict_to_convert):
+        # Get crop name ↔ code map
+        code_map = next(iter(self.fields.values())).unwrapped.CROP_CODE_MAP
+
+        # Invert it for code → name lookup
+        code_to_name = {v: k for k, v in code_map.items()}
+
+        # Add alternative keys (ints) that map to same caps
+        code_caps = {code: dict_to_convert[name]
+                     for code, name in code_to_name.items()
+                     if name in dict_to_convert}
+
+        return code_caps
+
     @functools.lru_cache(maxsize=None)
     def _get_crop_caps(self):
-            return {"winterwheat": 240, "potato": 240, "sugarbeet": 150}
+        name_caps = {
+            "winterwheat": 240,
+            "potato": 240,
+            "sugarbeet": 150
+        }
+
+        code_caps = self._convert_crop_reference(name_caps)
+
+        return {**name_caps, **code_caps}
 
     @functools.lru_cache(maxsize=None)
     def _get_schedule(self):
-        return {
+        schedule = {
             "winterwheat": [               # :contentReference[oaicite:0]{index=0}
                 ({"doy": (45, 90)}, 0.17),   # late Feb – early Apr (tillering GS22-25)  ~40 kg
                 ({"doy": (90, 120)}, 0.50),  # stem elong. GS31-32                     ~120 kg
@@ -240,6 +298,10 @@ class ParallelRLWorkers(ParallelEnv):
                 ({"leaf_stage": (6, 9)}, 0.50) # 6- to 8-leaf (≈ canopy closure)
             ],
         }
+
+        crop_schedule = self._convert_crop_reference(schedule)
+
+        return {**schedule, **crop_schedule}
 
     def __str__(self) -> str:
         from collections import Counter
@@ -256,7 +318,6 @@ class ParallelRLWorkers(ParallelEnv):
             Crop distribution → winterwheat:1 | potato:1 | sugarbeet:1
         """
 
-        # small helper for “safe” look-ups
         def safe(env, key, default="–"):
             try:
                 return env.unwrapped.get_latest_info(key)
@@ -265,20 +326,21 @@ class ParallelRLWorkers(ParallelEnv):
 
         header = f"Farm status – budget left: {self.global_budget_left} / {self.global_budget} kg N"
         cols = ("Field", "Crop", "N applied", "Yield (t/ha)")
-        fmt = "{:15} {:12} {:>10} {:>12}"
-        lines = [header, fmt.format(*cols), "-" * 55]
+        fmt = "{:15} {:12} {:>10} {:>12.2f}"
+        fmt_header = "{:15} {:12} {:>10} {:>12}"
+        lines = [header, fmt_header.format(*cols), "-" * 55]
 
         # build one row per parcel
         crop_counts = Counter()
         for field_id, env in self.fields.items():
-            crop = safe(env, "CropCode")
+            crop = env.unwrapped.crop
             crop_counts[crop] += 1
 
             line = fmt.format(
                 field_id,
                 crop,
                 safe(env, "Naction_total"),
-                safe(env, "Yield"),
+                safe(env, "Yield")/1000,
             )
             lines.append(line)
 
