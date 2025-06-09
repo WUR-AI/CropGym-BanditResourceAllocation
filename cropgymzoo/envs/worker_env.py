@@ -38,6 +38,7 @@ class ParallelRLWorkers(ParallelEnv):
         self.possible_agents = self.agents.copy()
 
         self.global_budget = global_budget
+        self.global_budget_left = self.global_budget
 
         self._init_fields()
         self._init_spaces()
@@ -50,9 +51,15 @@ class ParallelRLWorkers(ParallelEnv):
             self.warm_up_infos = self._warm_up(warm_up)
 
     def reset(self, seed=None, options=None):
+
+        # reset infos and variables
+        self.global_budget_left = self.global_budget
         self._init_infos()
+
         # reinitialize agents
         self.agents = self.possible_agents.copy()
+
+        # get obs and infos again
         local_obs, infos = {}, {}
         for ag, env in self.fields.items():
             o, i = env.reset(seed=seed, options=options)
@@ -63,7 +70,7 @@ class ParallelRLWorkers(ParallelEnv):
                     "action_mask": self._get_mask(ag)}
                for ag in self.agents}
 
-        self.infos.update(infos)
+        self._update_infos(infos)
 
         return obs, infos
 
@@ -89,7 +96,7 @@ class ParallelRLWorkers(ParallelEnv):
         self.agents = [agent for agent in self.agents if not (terminateds[agent] or truncateds[agent])]
 
         # update infos so we don't lose information on dying agents
-        self.infos.update(infos)
+        self._update_infos(infos)
         return obs, rewards, terminateds, truncateds, self.infos
 
     def render(self):
@@ -110,12 +117,11 @@ class ParallelRLWorkers(ParallelEnv):
     def set_global_budget(self, budget: int):
         self.global_budget = budget
 
-    def _populate_infos(self):
+    def _update_infos(self, infos):
         for agents in self.agents:
-            ...
+            self.infos[agents] = infos[agents]
 
     def _init_farm_variables(self):
-        self.global_budget_left = self.global_budget
         self._emergence_doy = {ag: None for ag in self.agents}
 
     def _init_fields(self):
@@ -127,7 +133,7 @@ class ParallelRLWorkers(ParallelEnv):
         print("Parcels initialized!")
 
     def _init_infos(self):
-        self.infos = {agent: {} for agent in self.agents}
+        self.infos = {}
 
     def _init_spaces(self):
         self.shared_space = gym.spaces.Dict(
@@ -168,17 +174,19 @@ class ParallelRLWorkers(ParallelEnv):
                 warm_up_infos = pickle.load(f)
             return warm_up_infos
         print("No file found...")
-        warm_up_infos, infos = {}, {}
+        warm_up_infos = {}
         options = {}
         print('Starting warm up...')
         for i, _ in enumerate(range(warm_up_counter)):
             print('Start warm up iteration {}'.format(i))
             options['year'] = np.random.choice(self.years)
-            _, _ = self.reset(seed=self.seed, options=options)
-            while self.agents:
+            _, infos = self.reset(seed=self.seed, options=options)
+            terminateds = {agent: False for agent in self.agents}
+            while not all(terminateds.values()):
                 actions = self._get_each_agent_actions()
-                _, _, _, _, infos = self.step(actions=actions)
+                _, _, terminateds, _, infos = self.step(actions=actions)
             warm_up_infos[i] = infos
+            print(self.__str__())
         print('Finished warm up...')
         print('Attempting to save pickle...')
         with open(os.path.join(_CONFIG_PATH, 'warm_up_infos.pkl'), 'wb') as f:
@@ -195,7 +203,7 @@ class ParallelRLWorkers(ParallelEnv):
         for ag, env in self.fields.items():
             info = env.unwrapped.get_latest_info
             crop = env.unwrapped._get_crop_code()
-            n_applied_so_far = info("BudgetTotal") - info("BudgetLeft")  # kg N ha-¹ already used
+            n_applied_so_far = n_applied_so_far = info("Naction")  # kg N ha-¹ already used
             cap = self._get_crop_caps()[crop]
 
             best_frac = 0.0
@@ -293,10 +301,10 @@ class ParallelRLWorkers(ParallelEnv):
                 ({"days_after_emerg": (0, 7)}, 0.40),   # at planting / emergence
                 ({"days_after_emerg": (25, 40)}, 0.60), # tuber initiation / bulking
             ],
-            "sugarbeet": [                 # :contentReference[oaicite:2]{index=2}
-                ({"doy": (80, 105)}, 0.50),   # pre-plant – 4-leaf
-                ({"leaf_stage": (6, 9)}, 0.50) # 6- to 8-leaf (≈ canopy closure)
-            ],
+            "sugarbeet": [
+            ({"days_after_emerg": (0, 10)}, 0.50),   # seed-bed / emergence
+            ({"days_after_emerg": (20, 40)}, 1.00),  # finish N before canopy closes
+        ],
         }
 
         crop_schedule = self._convert_crop_reference(schedule)
@@ -339,7 +347,7 @@ class ParallelRLWorkers(ParallelEnv):
             line = fmt.format(
                 field_id,
                 crop,
-                safe(env, "Naction_total"),
+                safe(env, "Naction"),
                 safe(env, "Yield")/1000,
             )
             lines.append(line)

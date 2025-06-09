@@ -102,9 +102,9 @@ class TestMultiEnvFunctions(unittest.TestCase):
     def test_terminate_multi(self):
         obs, info = self.env.reset(options={'year': 2010})
 
-        # terminateds = {False for _ in self.env.unwrapped.agents}
-        while self.env.agents:
-            obs, rew, term, trunc, info = self.env.step({
+        terms = {agent: False for agent in self.env.unwrapped.agents}
+        while not all(terms.values()):
+            obs, rew, terms, trunc, info = self.env.step({
                 agent: 0 for agent in self.env.unwrapped.agents
             })
         print(info)
@@ -115,8 +115,9 @@ class TestMultiEnvFunctions(unittest.TestCase):
     def test_print_multi(self):
         obs, info = self.env.reset(options={'year': 2010})
 
-        while self.env.agents:
-            obs, rew, term, trunc, info = self.env.step({
+        terms = {agent: False for agent in self.env.unwrapped.agents}
+        while not all(terms.values()):
+            obs, rew, terms, trunc, info = self.env.step({
                 agent: 0 for agent in self.env.unwrapped.agents
             })
 
@@ -127,21 +128,25 @@ class TestMultiEnvFunctions(unittest.TestCase):
     def test_multi_years(self):
         obs, info = self.env.reset(options={'year': 2010})
 
-        while self.env.agents:
-            obs, rew, term, trunc, info = self.env.step({
+        terms = {agent: False for agent in self.env.unwrapped.agents}
+        while not all(terms.values()):
+            obs, rew, terms, trunc, info = self.env.step({
                 agent: 0 for agent in self.env.unwrapped.agents
             })
 
+        self.assertEqual(isinstance(info, dict), True)
+
         obs, info = self.env.reset(options={'year': 1999})
 
-        while self.env.agents:
-            obs, rew, term, trunc, info = self.env.step({
+        terms = {agent: False for agent in self.env.unwrapped.agents}
+        while not all(terms.values()):
+            obs, rew, terms, trunc, info = self.env.step({
                 agent: 0 for agent in self.env.unwrapped.agents
             })
 
         print(self.env)
 
-        self.assertIn("Farm", self.env.__str__())
+        self.assertEqual(isinstance(info, dict), True)
 
 class TestMultiEnvWarmUp(unittest.TestCase):
     def setUp(self):

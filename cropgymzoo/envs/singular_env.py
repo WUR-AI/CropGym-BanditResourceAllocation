@@ -455,7 +455,6 @@ class ParcelEnv(pcse_env.PCSEEnv):
         # Reward gets overwritten in step()
         return 0.0
 
-    @functools.lru_cache(maxsize=None)
     def _init_infos(self):
         self.infos = {"Date": [], "SinDay": [], "CosDay": [],
                       **{name: [] for name in self.crop_features},
