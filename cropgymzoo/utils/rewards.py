@@ -2,6 +2,8 @@ import numpy as np
 
 from abc import ABC, abstractmethod
 
+from win32comext.mapi.emsabtags import PR_EMS_AB_MONITORING_WARNING_DELAY
+
 from cropgymzoo.utils.nitrogen_helpers import input_nue, get_surplus_n, get_n_deposition_pcse, get_nh4_deposition_pcse, get_no3_deposition_pcse
 import cropgymzoo.utils.process_pcse_output as process_pcse
 
@@ -605,11 +607,11 @@ class Rewards:
 
         def formula_nue(self, n_surplus, nue, end_yield, piecewise_nue=False):
             if not piecewise_nue:
-                nsurp_value = self.n_surplus_formula(n_surplus, nue)
+                reward_value = self.n_surplus_formula(n_surplus, nue)
             else:
-                nsurp_value = self.n_surplus_formula_piecewise(n_surplus, nue)
+                reward_value = self.n_surplus_formula_piecewise(n_surplus, nue)
             normalized_yield = self.normalize_yield(end_yield)
-            return nsurp_value + self.include_yield_req(nsurp_value, normalized_yield)
+            return reward_value + self.include_yield_req(reward_value, normalized_yield)
 
         def reset(self):
             super().reset()

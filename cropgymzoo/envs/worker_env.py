@@ -3,6 +3,8 @@ import yaml
 import functools
 import pickle
 
+from collections import Counter
+
 import numpy as np
 
 import gymnasium as gym
@@ -304,7 +306,7 @@ class ParallelRLWorkers(ParallelEnv):
             "sugarbeet": [
             ({"days_after_emerg": (0, 10)}, 0.50),   # seed-bed / emergence
             ({"days_after_emerg": (20, 40)}, 1.00),  # finish N before canopy closes
-        ],
+            ],
         }
 
         crop_schedule = self._convert_crop_reference(schedule)
@@ -312,7 +314,6 @@ class ParallelRLWorkers(ParallelEnv):
         return {**schedule, **crop_schedule}
 
     def __str__(self) -> str:
-        from collections import Counter
         """
         Return a multiline string such as
 
@@ -333,10 +334,10 @@ class ParallelRLWorkers(ParallelEnv):
                 return default
 
         header = f"Farm status – budget left: {self.global_budget_left} / {self.global_budget} kg N"
-        cols = ("Field", "Crop", "N applied", "Yield (t/ha)")
-        fmt = "{:15} {:12} {:>10} {:>12.2f}"
-        fmt_header = "{:15} {:12} {:>10} {:>12}"
-        lines = [header, fmt_header.format(*cols), "-" * 55]
+        cols = ("Field", "Crop", "N applied", "Yield (t/ha)", "NUE", "Nsurp")
+        fmt = "{:15} {:12} {:>10} {:>12.2f} {:>10.2f} {:>10.2f}"
+        fmt_header = "{:15} {:12} {:>10} {:>12} {:>10} {:>10}"
+        lines = [header, fmt_header.format(*cols), "-" * 75]
 
         # build one row per parcel
         crop_counts = Counter()
@@ -349,6 +350,8 @@ class ParallelRLWorkers(ParallelEnv):
                 crop,
                 safe(env, "Naction"),
                 safe(env, "Yield")/1000,
+                safe(env, "Nue"),
+                safe(env, "Nsurp")
             )
             lines.append(line)
 

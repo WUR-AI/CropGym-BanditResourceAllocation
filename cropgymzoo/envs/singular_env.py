@@ -576,14 +576,14 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self.infos['Action'].append(action)
         self.infos['Yield'].append(pcse_output[-1]['WSO'])
         self.infos['Nue'].append(None if not terminate
-                                 else calculate_nue(n_input=self.reward_container.actions * 10,
+                                 else calculate_nue(n_input=self.reward_container.actions,
                                                       n_so=pcse_output[-1]['NamountSO'],
                                                       year=self.date.year,
                                                       nh4_depo=pcse_output[-1]['RNH4DEPOSTT'],
                                                       no3_depo=pcse_output[-1]['RNO3DEPOSTT'],
                                                       ))
         self.infos['Nsurp'].append(None if not terminate
-                                   else get_surplus_n(n_input=self.reward_container.actions * 10,
+                                   else get_surplus_n(n_input=self.reward_container.actions,
                                                         n_so=pcse_output[-1]['NamountSO'],
                                                         year=self.date.year,
                                                         nh4_depo=pcse_output[-1]['RNH4DEPOSTT'],
