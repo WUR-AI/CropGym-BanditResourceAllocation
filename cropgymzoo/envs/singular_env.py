@@ -463,7 +463,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
                       **{name: [] for name in self.misc_features},
                       'Reward': [], 'Action': [], 'Yield': [],
                       'BudgetTotal': [], 'BudgetLeft': [],
-                      'Nue': [], 'Nsurp': [], 'Profit': []
+                      'Nue': [], 'Nsurp': [], 'Profit': [], "CO2": []
                       }
 
     def _init_random_init_conditions_params(self):
@@ -522,7 +522,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         """
         Use linear equation fitted on annual global CO2 trend
         """
-        level = 1.6567 * self.year + 304.75
+        level = 1.6567 * self.year - 2939
         self.carbon_dioxide_level = level
         return self.carbon_dioxide_level
 
@@ -598,6 +598,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
                                                         nh4_depo=pcse_output[-1]['RNH4DEPOSTT'],
                                                         no3_depo=pcse_output[-1]['RNO3DEPOSTT']))
         self.infos['Profit'].append(self.rewards_obj.profit)
+        self.infos['CO2'].append(self.carbon_dioxide_level)
 
     def _action_features_mapper(self):
         return {

@@ -59,11 +59,15 @@ class TestSingularEnvFunctions(unittest.TestCase):
 
         self.assertEqual(self.env.unwrapped.year, 2010)
 
+        print(info["CO2"][-1])
+
         obs, info = self.env.reset(options={'year': 1985})
 
         term = False
         while not term:
             obs, rew, term, trunc, info = self.env.step(0)
+
+        print(info["CO2"][-1])
 
         self.assertEqual(self.env.unwrapped.year, 1985)
 
