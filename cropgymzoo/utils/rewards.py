@@ -273,6 +273,25 @@ class Rewards:
 
             return reward, growth
 
+    class PNY(Rew):
+        """
+        Sparse reward based on calculated nitrogen use efficiency
+        """
+
+        def __init__(self, timestep, costs_nitrogen):
+            super().__init__(timestep, costs_nitrogen)
+            self.timestep = timestep
+            self.costs_nitrogen = costs_nitrogen
+
+        def return_reward(self, output, amount, output_baseline=None, multiplier=1, obj=None):
+            obj.calculate_amount(amount)
+            obj.calculate_cost_cumulative(amount)
+            obj.calculate_positive_reward_cumulative(output, output_baseline, multiplier)
+            reward = 0 - self.costs_nitrogen if amount > 0 else 0
+            growth = process_pcse.compute_growth_storage_organ(output, self.timestep, multiplier)
+
+            return reward, growth
+
     class DNE(Rew):
         """
         Dense reward based on calculated nitrogen use efficiency

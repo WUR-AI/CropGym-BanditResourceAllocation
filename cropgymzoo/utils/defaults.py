@@ -62,7 +62,7 @@ def get_default_action_features():
 
 
 def get_default_misc_features():
-    return ['SinDay', 'CosDay', 'FertilizerPrice', 'CropPrice', 'CropCode']
+    return ['SinDay', 'CosDay', 'FertilizerPrice', 'CropPrice', 'CropCode', "CO2"]
 
 
 def get_default_location():

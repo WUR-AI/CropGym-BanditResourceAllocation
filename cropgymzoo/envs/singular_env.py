@@ -518,6 +518,14 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         return list_nh4i, list_no3i
 
+    def _get_carbon_dioxide_levels(self):
+        """
+        Use linear equation fitted on annual global CO2 trend
+        """
+        level = 1.6567 * self.year + 304.75
+        self.carbon_dioxide_level = level
+        return self.carbon_dioxide_level
+
     def _special_init_conditions(self):
         site_params = None
         if self.random_init:
@@ -527,6 +535,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         elif not self.random_init:
             site_params = self._overwrite_nitrogen_rain_concentration()
 
+        site_params['CO2'] = self._get_carbon_dioxide_levels()
         return site_params
 
     @staticmethod
@@ -606,7 +615,8 @@ class ParcelEnv(pcse_env.PCSEEnv):
             'CosDay': encode_day[1],
             'FertilizerPrice': self._get_fertilizer_price(),
             'CropPrice': self._get_crop_price(),
-            'CropCode': self._get_crop_code()
+            'CropCode': self._get_crop_code(),
+            'CO2': self.carbon_dioxide_level,
         }
 
     '''
@@ -619,9 +629,11 @@ class ParcelEnv(pcse_env.PCSEEnv):
         with open(os.path.join(_SOILGRIDS_PATH, f'soil_{self.location[1]}_{self.location[0]}.yaml'), 'r') as f:
             soil_parameters = yaml.safe_load(f)
 
+        self.carbon_dioxide_level = 440
+
         site_parameters = WOFOST81SiteDataProvider_SNOMIN(
             WAV=30,
-            CO2=410,
+            CO2=self.carbon_dioxide_level,
             # default init; need to change?
             NH4I=len(soil_parameters['SoilProfileDescription']['SoilLayers'])*[5],
             NO3I=len(soil_parameters['SoilProfileDescription']['SoilLayers'])*[5],
@@ -655,6 +667,10 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         elif self.reward_function == 'NUE':
             self.reward_class = self.rewards_obj.NUE(self.timestep, costs_nitrogen)
+            self.reward_container = self.rewards_obj.ContainerNUE(self.timestep, costs_nitrogen)
+
+        elif self.reward_function == 'PNY':
+            self.reward_class = self.rewards_obj.PNY(self.timestep, costs_nitrogen)
             self.reward_container = self.rewards_obj.ContainerNUE(self.timestep, costs_nitrogen)
 
         elif self.reward_function == 'DNE':
