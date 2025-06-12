@@ -73,11 +73,12 @@ class ParcelEnv(pcse_env.PCSEEnv):
                  year: int = None,
                  year_list: list = None,
                  timestep: int = 7,
-                 reward: str = 'NUE',
+                 reward: str = 'PNY',
                  action_multiplier: float = 1,
                  action_space: gym.spaces = gym.spaces.Discrete(9),
                  costs_nitrogen: int = 0,
                  crop: str = 'winterwheat',
+                 area: float = 12,
                  model_config: str = _WOFOST_CONFIG,
                  agro_config: str = _AGRO_CALENDAR_CONFIG,
                  site_path: str = _SITE_PATH,
@@ -92,8 +93,11 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self.original = original
         self.training = training
         self.flatten_obs = flatten_obs
+
+        # field specific stuff
         self.budget_n = 180
         self.budget_left = self.budget_n
+        self.area = area
 
         if self.training:
             self.random_weather = False
@@ -127,8 +131,11 @@ class ParcelEnv(pcse_env.PCSEEnv):
             crop_info=crop_info
         )
 
+        # possibly deprecated
         self.costs_nitrogen = costs_nitrogen
         self.action_multiplier = action_multiplier
+
+        # env stuff
         self.action_space = action_space
         self._timestep = timestep
         self.reward_function = reward
@@ -305,9 +312,11 @@ class ParcelEnv(pcse_env.PCSEEnv):
                     output_baseline.append(filtered_dict)
             assert len(output_baseline) != 0, f'OUTPUT BASELINE EMPTY'
 
+        prices = {'price_fertilizer': self._get_fertilizer_price(), 'price_crop': self._get_crop_price()}
         reward, growth = self.reward_class.return_reward(output, amount,
                                                          output_baseline=output_baseline,
-                                                         obj=self.reward_container)
+                                                         obj=self.reward_container,
+                                                         **prices if self.reward_function == 'PNY' else {})
         self.rewards_obj.update_profit(output, amount, year=self.date.year)
         reward += self._terminated_reward_signal(output, reward, terminated)
 
@@ -322,6 +331,15 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         elif terminated and self.reward_function in ['NUE', 'DNE']:
             reward = (self.reward_container.calculate_reward_nue(
+                n_fertilized=self.reward_container.get_total_fertilization,
+                n_output=process_pcse.get_n_storage_organ(output),
+                no3_depo=get_no3_deposition_pcse(output),
+                nh4_depo=get_nh4_deposition_pcse(output),)
+            )
+
+        elif terminated and self.reward_function == 'PNY':
+            reward = (self.reward_container.return_final_reward(
+                obj=self.reward_container,
                 n_fertilized=self.reward_container.get_total_fertilization,
                 n_output=process_pcse.get_n_storage_organ(output),
                 no3_depo=get_no3_deposition_pcse(output),

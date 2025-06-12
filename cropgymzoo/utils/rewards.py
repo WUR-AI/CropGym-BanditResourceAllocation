@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 
 from win32comext.mapi.emsabtags import PR_EMS_AB_MONITORING_WARNING_DELAY
 
+from cropgymzoo.tester import squash_profit
 from cropgymzoo.utils.nitrogen_helpers import input_nue, get_surplus_n, get_n_deposition_pcse, get_nh4_deposition_pcse, get_no3_deposition_pcse
 import cropgymzoo.utils.process_pcse_output as process_pcse
 
@@ -275,22 +276,75 @@ class Rewards:
 
     class PNY(Rew):
         """
-        Sparse reward based on calculated nitrogen use efficiency
+        Profit, NUE and Yield reward function
         """
 
-        def __init__(self, timestep, costs_nitrogen):
+        def __init__(self, timestep, costs_nitrogen,
+                     mu_profit:float=500.0, # euros
+                     k_profit:float=0.0045,
+                     beta_p:float=0.5,
+                     mu_yield:float=7_000, # kg/ha
+                     k_yield:float=0.0045,
+                     beta_y:float=0.0,
+                     beta_n:float=0.5,):
             super().__init__(timestep, costs_nitrogen)
             self.timestep = timestep
             self.costs_nitrogen = costs_nitrogen
+            self.mu_profit = mu_profit
+            self.k_profit = k_profit
+            self.beta_p = beta_p
 
-        def return_reward(self, output, amount, output_baseline=None, multiplier=1, obj=None):
+            self.mu_yield = mu_yield
+            self.k_yield = k_yield
+            self.beta_y = beta_y
+
+            self.beta_n = beta_n
+
+        def return_reward(self, output, amount, output_baseline=None, multiplier=1, obj=None,
+                          price_crop=None, price_fertilizer=None):
+            # generic
             obj.calculate_amount(amount)
-            obj.calculate_cost_cumulative(amount)
-            obj.calculate_positive_reward_cumulative(output, output_baseline, multiplier)
-            reward = 0 - self.costs_nitrogen if amount > 0 else 0
             growth = process_pcse.compute_growth_storage_organ(output, self.timestep, multiplier)
+            obj.calculate_positive_reward_cumulative(output, output_baseline, multiplier)
+
+            #----------- profit
+            prev_profit = obj.cum_profit
+
+            # also updates obj.cum_profit
+            obj.calculate_profit_term(action=amount, growth=growth,
+                                       price_crop=price_crop, price_fertilizer=price_fertilizer)
+
+            # get gradient from previous
+            profit_reward = self.squash_profit_reward(obj.cum_profit) - self.squash_profit_reward(prev_profit)
+
+            # yield
+            prev_yield = obj.cum_growth
+
+            obj.calculate_growth(growth)
+
+            yield_reward = self.squash_yield_reward(obj.cum_growth) - self.squash_yield_reward(prev_yield)
+
+            reward = profit_reward * self.beta_p + yield_reward * self.beta_y
 
             return reward, growth
+
+        def return_final_reward(self, obj=None, n_fertilized=None, n_output=None, no3_depo=None, nh4_depo=None):
+            nue_term = obj.calculate_nue_term(n_fertilized, n_output, no3_depo=no3_depo, nh4_depo=nh4_depo)
+
+            # normalize with sigma(cum) - sigma(0)
+            reward_profit = self.beta_p * (self.squash_profit_reward(obj.cum_profit) - self.squash_profit_reward(0))
+            reward_yield = self.beta_y * (self.squash_yield_reward(obj.cum_growth) - self.squash_yield_reward(0))
+            reward_nue = self.beta_n * nue_term
+
+            reward = reward_profit + reward_yield + reward_nue
+
+            return reward
+
+        def squash_profit_reward(self, profit_term):
+            return 1 / (1 + np.exp(-self.k_profit * (profit_term - self.mu_profit)))
+
+        def squash_yield_reward(self, yield_term):
+            return 1 / (1 + np.exp(-self.k_profit * (yield_term - self.mu_profit)))
 
     class DNE(Rew):
         """
@@ -455,6 +509,8 @@ class Rewards:
             self.cum_leach = .0
             self.actions = 0
 
+            self.cum_profit = .0
+
         def reset(self):
             self.cum_growth = .0
             self.cum_amount = .0
@@ -463,6 +519,8 @@ class Rewards:
             self.cum_misc_cost = .0
             self.cum_leach = .0
             self.actions = 0
+
+            self.cum_profit = .0
 
         def growth_storage_organ_wo_cost(self, output, multiplier=1):
             return process_pcse.compute_growth_storage_organ(output, self.timestep, multiplier)
@@ -495,6 +553,12 @@ class Rewards:
 
         def calculate_cost_n(self, amount):
             self.cum_amount += amount
+
+        def calculate_profit(self, profit):
+            self.cum_profit += profit
+
+        def calculate_growth(self, growth):
+            self.cum_growth += growth
 
         def calculate_n_loss(self, n_loss):
             self.cum_leach += n_loss
@@ -549,6 +613,17 @@ class Rewards:
             yield_t = process_pcse.compute_growth_storage_organ(pcse_output, self.timestep)
 
             return self.nue_condition(nue) * yield_t
+
+        def calculate_nue_term(self, n_fertilized, n_output, no3_depo=None, nh4_depo=None):
+            nue = calculate_nue(n_fertilized, n_output, no3_depo=no3_depo, nh4_depo=nh4_depo)
+            n_surplus = get_surplus_n(n_fertilized, n_output, no3_depo=no3_depo, nh4_depo=nh4_depo)
+            return self.n_surplus_formula(n_surplus, nue)
+
+        def calculate_profit_term(self, action, growth, price_crop, price_nitrogen):
+            expense = action * price_nitrogen
+            income = growth * price_crop
+            profit = income - expense
+            self.calculate_profit(profit)
 
         #  piecewise conditions
         @staticmethod
