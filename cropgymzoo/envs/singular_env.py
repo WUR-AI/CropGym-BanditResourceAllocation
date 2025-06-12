@@ -338,7 +338,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
             )
 
         elif terminated and self.reward_function == 'PNY':
-            reward = (self.reward_container.return_final_reward(
+            reward = (self.reward_class.return_final_reward(
                 obj=self.reward_container,
                 n_fertilized=self.reward_container.get_total_fertilization,
                 n_output=process_pcse.get_n_storage_organ(output),

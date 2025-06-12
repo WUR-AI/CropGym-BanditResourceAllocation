@@ -39,6 +39,7 @@ def register_predefined_cropgym_instances() -> None:
                 'crop': field['crop'],
                 'year': 2000,
                 'area': field['area'],
+                'reward': 'PNY',
                 'original': True,
                 'training': True,
                 'flatten_obs': False,

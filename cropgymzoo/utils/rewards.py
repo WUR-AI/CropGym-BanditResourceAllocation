@@ -2,9 +2,6 @@ import numpy as np
 
 from abc import ABC, abstractmethod
 
-from win32comext.mapi.emsabtags import PR_EMS_AB_MONITORING_WARNING_DELAY
-
-from cropgymzoo.tester import squash_profit
 from cropgymzoo.utils.nitrogen_helpers import input_nue, get_surplus_n, get_n_deposition_pcse, get_nh4_deposition_pcse, get_no3_deposition_pcse
 import cropgymzoo.utils.process_pcse_output as process_pcse
 
@@ -619,8 +616,8 @@ class Rewards:
             n_surplus = get_surplus_n(n_fertilized, n_output, no3_depo=no3_depo, nh4_depo=nh4_depo)
             return self.n_surplus_formula(n_surplus, nue)
 
-        def calculate_profit_term(self, action, growth, price_crop, price_nitrogen):
-            expense = action * price_nitrogen
+        def calculate_profit_term(self, action, growth, price_crop, price_fertilizer):
+            expense = action * price_fertilizer
             income = growth * price_crop
             profit = income - expense
             self.calculate_profit(profit)
