@@ -15,6 +15,7 @@ _SOIL_PATH = os.path.join(_CONFIG_PATH, 'soil')
 _SOILGRIDS_PATH = os.path.join(_SOIL_PATH, 'soilgrids')
 
 _CROPS_LIST = os.path.join(_CROPS_PATH, 'crops.yaml')
+_CROPS_PRICE = os.path.join(_CONFIG_PATH, 'crop_prices.csv')
 _AGRO_CALENDAR_CONFIG = os.path.join(_CONFIG_PATH, 'agro', 'generic_cropcalendar.yaml')
 _FIELDS_CONFIG = os.path.join(_CONFIG_PATH, 'fields.yaml')
 _CROPS_CONFIG = os.path.join(_CONFIG_PATH, 'crop_info.yaml')

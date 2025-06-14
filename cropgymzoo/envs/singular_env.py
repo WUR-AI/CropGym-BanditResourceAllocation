@@ -43,6 +43,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
     """
     WARNING! Learned agents rely on this crop code mapping; don't inadvertently change it!
     """
+
     CROP_CODE_MAP = {
         'winterwheat': 1,
         'sugarbeet': 2,
@@ -142,6 +143,9 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         self.rng, self.seed = gym.utils.seeding.np_random(seed=seed)
 
+        # prices of crops and fertilizers
+        self._init_prices()
+
         # initialize variables pertaining to RL agent actions
         self._init_action_variables()
 
@@ -219,13 +223,16 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         options['site_params'] = site_params
 
+        # reset reward runners
         self.reward_container.reset()
         self.rewards_obj.reset()
 
         # overwrite for new eps
         self.overwrite_year(year=options['year'])
 
+        # reset various variables
         self._reset_action_variables()
+        self._reset_prices()
 
         if self.reward_function in reward_functions_with_baseline() and self.original is True:
             self.baseline_env.reset(seed=seed, options=options)
@@ -275,6 +282,11 @@ class ParcelEnv(pcse_env.PCSEEnv):
     '''
     Helper functions for various things
     '''
+
+    def _reset_prices(self):
+        self.fertilizer_price = self._get_fertilizer_price()
+
+        self.crop_price = self._get_crop_price()
 
     def _update_action_variables(self, action):
         if isinstance(action, np.ndarray):
@@ -504,6 +516,44 @@ class ParcelEnv(pcse_env.PCSEEnv):
         # If soil profile is 1m, 30% will have 70% of the total inorganic N
         self.len_top_layers = int(np.ceil(self.len_soil_layers * 0.3))
 
+    def _init_prices(self):
+        from cropgymzoo import _CROPS_PRICE, _CONFIG_PATH
+        import pandas as pd
+
+        df_crop = pd.read_csv(_CROPS_PRICE)
+        df_fert = pd.read_csv(os.path.join(_CONFIG_PATH, 'fertilizer_price.csv'))
+
+        # 2) Drop the “No” column and any unnamed extras
+        cols_to_drop = ["No"] + [c for c in df_crop.columns if c.lower().startswith("unnamed")]
+        df_crop = df_crop.drop(columns=cols_to_drop, errors="ignore")
+
+        df_crop["Year"] = df_crop["Year"].astype(int)  # or .astype("Int64") if Years can be missing
+        df_crop = df_crop.set_index("Year")
+
+        df_fert["Year"] = df_fert["Year"].astype(int)  # or .astype("Int64") if Years can be missing
+        df_fert = df_fert.set_index("Year")
+
+        # 4) Build the nested-dict {crop: {year: value}}
+        self.crop_prices = {
+            crop: {
+                int(year): val
+                for year, val in df_crop[crop].items()
+                if not pd.isna(val)  # keep only non-NaN entries
+            }
+            for crop in df_crop.columns  # each remaining column is a crop
+        }
+
+        self.fertilizer_prices = {
+            int(year): val
+            for year, val in df_fert["Value"].items()
+            if not pd.isna(val)  # keep only non-NaN entries
+        }
+
+        # initialize price
+        self.fertilizer_price = self.fertilizer_prices[self.year]
+        self.crop_price = self.crop_prices[self.crop][self.year]
+
+
     def _generate_realistic_n(self) -> tuple[list, list]:
         """ method to overwrite a random N initial condition for every call of reset()
             Implemented based on discussions with Herman Berghuijs, for NL conditions
@@ -576,20 +626,18 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         return math.sin(angle), math.cos(angle)
 
-    @functools.lru_cache(maxsize=None)
     def _get_crop_code(self):
         return self.CROP_CODE_MAP[self.crop]
 
     def _get_fertilizer_price(self):
-        # TODO IMPLEMENT LOGIC... Price table?
-        year = self.year
-        return 1
+        return self.fertilizer_prices[self.year] \
+            if not self.training \
+            else self.rng.choice(list(self.fertilizer_prices.keys()))
 
     def _get_crop_price(self):
-        # TODO Same as above
-        year = self.year
-        crop = self.crop
-        return 1
+        return self.crop_prices[self.crop][self.year] \
+                if not self.training \
+                else self.rng.choice(list(self.crop_prices[self.crop].keys()))
 
     def _populate_infos(self, pcse_output, action, reward, terminate):
 
@@ -904,10 +952,6 @@ class CustomFeatureExtractor(nn.Module):
         specify how many extra scalar dimensions that represents.
     n_timesteps : int, default 7
         Length of the time window for each weather variable.
-    n_po_features : int, default 5
-        Kept for API compatibility; not used here.
-    mask_binary : bool, default False
-        Kept for API compatibility; not used here.
     """
 
     def __init__(
@@ -916,8 +960,6 @@ class CustomFeatureExtractor(nn.Module):
         n_scalars: int,
         n_actions: int = 0,
         n_timesteps: int = 7,
-        n_po_features: int = 5,
-        mask_binary: bool = False,
     ):
         super().__init__()
         self.n_timeseries = n_timeseries
