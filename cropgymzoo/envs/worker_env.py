@@ -102,7 +102,7 @@ class ParallelRLWorkers(ParallelEnv):
         return obs, rewards, terminateds, truncateds, self.infos
 
     def render(self):
-        print(self.__str__())
+        print(self)
 
     def observation_space(self, agent):
         return self.observation_spaces[agent]
@@ -329,15 +329,21 @@ class ParallelRLWorkers(ParallelEnv):
 
         def safe(env, key, default="–"):
             try:
-                return env.unwrapped.get_latest_info(key)
+                val = env.unwrapped.get_latest_info(key)
+                if val is None:
+                    return default
+                return val
             except Exception:
                 return default
 
+        # use a flexible formatter
+        def format_val(val, width, prec=2):
+            return f"{val:>{width}.{prec}f}" if isinstance(val, (int, float)) else f"{val:>{width}}"
+
         header = f"Farm status – budget left: {self.global_budget_left} / {self.global_budget} kg N"
-        cols = ("Field", "Crop", "N applied", "Yield (t/ha)", "NUE", "Nsurp")
-        fmt = "{:15} {:12} {:>10} {:>12.2f} {:>10.2f} {:>10.2f}"
-        fmt_header = "{:15} {:12} {:>10} {:>12} {:>10} {:>10}"
-        lines = [header, fmt_header.format(*cols), "-" * 75]
+        cols = ("Field", "Crop", "Date", "N applied", "Yield (t/ha)", "NUE", "Nsurp")
+        fmt_header = "{:15} {:12} {:10} {:>10} {:>15} {:>10} {:>10}"
+        lines = [header, fmt_header.format(*cols), "-" * 85]
 
         # build one row per parcel
         crop_counts = Counter()
@@ -345,13 +351,27 @@ class ParallelRLWorkers(ParallelEnv):
             crop = env.unwrapped.crop
             crop_counts[crop] += 1
 
-            line = fmt.format(
+            val_yield = safe(env, "Yield")
+            val_yield = val_yield / 1000 if isinstance(val_yield, (int, float)) else val_yield
+            val_date = safe(env, "Date")
+            val_date = val_date.strftime("%m/%d/%Y")
+
+            vals = [
                 field_id,
                 crop,
+                val_date,
                 safe(env, "Naction"),
-                safe(env, "Yield")/1000,
+                val_yield,
                 safe(env, "Nue"),
                 safe(env, "Nsurp")
+            ]
+
+            line = (
+                f"{vals[0]:15} {vals[1]:12} {vals[2]:10} "
+                f"{format_val(vals[3], 10)} "
+                f"{format_val(vals[4], 15)} "
+                f"{format_val(vals[5], 10)} "
+                f"{format_val(vals[6], 10)}"
             )
             lines.append(line)
 

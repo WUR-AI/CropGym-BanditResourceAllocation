@@ -103,6 +103,16 @@ class TestMultiEnvFunctions(unittest.TestCase):
         self.assertEqual(isinstance(obs, dict), True)
         self.assertEqual(isinstance(info, dict), True)
 
+    def test_render_multi(self):
+        obs, info = self.env.reset(options={'year': 2010})
+        obs, rew, term, trunc, info = self.env.step({
+            agent: 0 for agent in self.env.unwrapped.agents
+        })
+        self.env.render()
+
+        self.assertEqual(isinstance(obs, dict), True)
+        self.assertEqual(isinstance(info, dict), True)
+
     def test_terminate_multi(self):
         obs, info = self.env.reset(options={'year': 2010})
 
