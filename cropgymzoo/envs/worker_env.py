@@ -102,7 +102,7 @@ class ParallelRLWorkers(ParallelEnv):
         return obs, rewards, terminateds, truncateds, self.infos
 
     def render(self):
-        pass
+        print(self.__str__())
 
     def observation_space(self, agent):
         return self.observation_spaces[agent]
