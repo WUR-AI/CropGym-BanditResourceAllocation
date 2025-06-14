@@ -195,7 +195,12 @@ class ParcelEnv(pcse_env.PCSEEnv):
         # append new information to the infos dict
         self._populate_infos(pcse_output, action, reward, terminated)
 
+        r_final = 0
+        if terminated:
+            r_final = reward
         # info = self.grab_infos(pcse_output, info, reward, growth)
+        # print(f"step {self.n_steps}: core={reward:.3f}, final={r_final:.3f}, total={reward + r_final:.3f}")
+
 
         return obs, reward, terminated, truncated, self.infos
 
@@ -297,7 +302,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         if isinstance(action, np.ndarray):
             action = action.item()
 
-        amount = action * 10
+        amount = action * 10  #kg/ha
 
         output_baseline = []
         if self.reward_function in reward_functions_with_baseline():
@@ -325,9 +330,11 @@ class ParcelEnv(pcse_env.PCSEEnv):
     def _terminated_reward_signal(self, output, reward, terminated):
         if terminated and self.reward_function in reward_functions_end():
             reward = self.reward_container.dump_cumulative_positive_reward - abs(reward)
+            return reward
 
         elif terminated and self.reward_function == 'HAR':
             reward = self.yield_modifier * self.reward_container.dump_cumulative_positive_reward - abs(reward)
+            return reward
 
         elif terminated and self.reward_function in ['NUE', 'DNE']:
             reward = (self.reward_container.calculate_reward_nue(
@@ -336,6 +343,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
                 no3_depo=get_no3_deposition_pcse(output),
                 nh4_depo=get_nh4_deposition_pcse(output),)
             )
+            return reward
 
         elif terminated and self.reward_function == 'PNY':
             reward = (self.reward_class.return_final_reward(
@@ -345,7 +353,8 @@ class ParcelEnv(pcse_env.PCSEEnv):
                 no3_depo=get_no3_deposition_pcse(output),
                 nh4_depo=get_nh4_deposition_pcse(output),)
             )
-        return reward
+            return reward
+        return 0
 
     def _overwrite_initial_conditions(self):
         # N initial conditions

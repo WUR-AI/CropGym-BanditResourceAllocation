@@ -37,18 +37,21 @@ class TestSingularRewardFunctions(unittest.TestCase):
         for _ in range(5):
             _, reward, terminated, _, info = self.env_pny.step(0)
             rewards.append(reward)
+            print(f"reward in step {self.env_pny.unwrapped.n_steps} is {reward} and cumulative is {np.sum(rewards)}")
         _, reward, terminated, _, info = self.env_pny.step(8)
         rewards.append(reward)
+        print(f"reward in step {self.env_pny.unwrapped.n_steps} is {reward} and cumulative is {np.sum(rewards)}")
         _, reward, terminated, _, info = self.env_pny.step(3)
         rewards.append(reward)
+        print(f"reward in step {self.env_pny.unwrapped.n_steps} is {reward} and cumulative is {np.sum(rewards)}")
         while not terminated:
             _, reward, terminated, _, info = self.env_pny.step(0)
             rewards.append(reward)
-            print(f"reward in step {self.env_pny.unwrapped.n_steps} is {reward}")
+            print(f"reward in step {self.env_pny.unwrapped.n_steps} is {reward} and cumulative is {np.sum(rewards)}")
 
-        print(np.sum(rewards))
+        lo, hi = self.env_pny.unwrapped.reward_class.reward_bounds()
 
-        self.assertTrue(0 <= reward <= 1)
+        self.assertTrue(lo <= np.sum(rewards) <= hi)
 
 
 if __name__ == '__main__':
