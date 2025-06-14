@@ -277,8 +277,8 @@ class Rewards:
         """
 
         def __init__(self, timestep, costs_nitrogen,
-                     mu_profit:float=250.0, # euros
-                     k_profit:float=0.0045,
+                     mu_profit:float=2000.0, # euros
+                     k_profit:float=0.002,
                      beta_p:float=0.5,
                      mu_yield:float=7_000, # kg/ha
                      k_yield:float=0.0045,
