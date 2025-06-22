@@ -277,7 +277,7 @@ class Rewards:
         """
 
         def __init__(self, timestep, costs_nitrogen,
-                     mu_profit:float=2000.0, # euros
+                     mu_profit:float=250.0, # euros
                      k_profit:float=0.002,
                      beta_p:float=0.5,
                      mu_yield:float=7_000, # kg/ha
@@ -300,10 +300,7 @@ class Rewards:
             self.check_max()
 
         def check_max(self):
-            print(self.squash_profit_reward(0))
-            print(self.squash_yield_reward(0))
             max_possible = self.beta_p * (1 - self.squash_profit_reward(0)) + self.beta_y * (1 - self.squash_yield_reward(0)) + self.beta_n * 1
-            print(max_possible)
             assert max_possible <= 1.0, "all the beta terms should be <= 1"
 
         def return_reward(self, output, amount, output_baseline=None, multiplier=1, obj=None,

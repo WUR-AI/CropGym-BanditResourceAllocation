@@ -39,6 +39,7 @@ def register_predefined_cropgym_instances() -> None:
                 'location': (field['soil_lat'], field['soil_lon']),
                 'crop': field['crop'],
                 'year': 2000,
+                'name': key,
                 'area': field['area'],
                 'reward': 'PNY',
                 'original': True,

@@ -22,6 +22,13 @@ class ParallelRLWorkers(ParallelEnv):
     metadata = {
         "name": "CropGymZooEnv",
     }
+    """
+    MARL Petting Zoo environment for Multi-agent RL with CropGym.
+    The main idea is that each agent will take care of its own field, where the fields
+    will (most likely) have heterogeneous crops and soil conditions.
+    
+    It requires a ::global_budget:: and ::warm_up:: to initialize.
+    """
 
     def __init__(self,
                  seed: int = 107,
@@ -42,6 +49,8 @@ class ParallelRLWorkers(ParallelEnv):
         self.global_budget = global_budget
         self.global_budget_left = self.global_budget
 
+        self.current_step = 0
+
         self._init_fields()
         self._init_spaces()
         self._init_farm_variables()
@@ -57,26 +66,28 @@ class ParallelRLWorkers(ParallelEnv):
         # reset infos and variables
         self.global_budget_left = self.global_budget
         self._init_infos()
+        self.current_step = 0
 
         # reinitialize agents
         self.agents = self.possible_agents.copy()
 
         # get obs and infos again
         local_obs, infos = {}, {}
-        for ag, env in self.fields.items():
+        for agent, env in self.fields.items():
             o, i = env.reset(seed=seed, options=options)
-            local_obs[ag], infos[ag] = o, i
+            local_obs[agent], infos[agent] = o, i
 
-        obs = {ag: {"local": local_obs[ag],
+        obs = {agent: {"local": local_obs[agent],
                     "shared": self.shared_space,
-                    "action_mask": self._get_mask(ag)}
-               for ag in self.agents}
+                    "action_mask": self._get_mask(agent)}
+               for agent in self.agents}
 
         self._update_infos(infos)
 
         return obs, infos
 
     def step(self, actions: dict[str, int]):
+        self.current_step += 1
 
         # init dict for each variable
         local_obs, rewards, terminateds, truncateds, infos = {}, {}, {}, {}, {}
@@ -88,21 +99,31 @@ class ParallelRLWorkers(ParallelEnv):
                 local_obs[agent], rewards[agent] = o, r
                 terminateds[agent], truncateds[agent], infos[agent] = t, tr, i
 
+        print(f"Worker terminateds: {terminateds}")
+
         # build MARL obs dictionary
-        obs = {ag: {"local": local_obs[ag],
+        obs = {agent: {"local": local_obs[agent],
                     "shared": self._build_shared(),
-                    "action_mask": self._get_mask(ag)}
-               for ag in self.agents}
+                    "action_mask": self._get_mask(agent)}
+               for agent in self.agents}
+
+        print(f"Worker rewards: {rewards}")
+
+        scalar_reward = self._process_rewards(rewards)
 
         # rebuild available agents
         self.agents = [agent for agent in self.agents if not (terminateds[agent] or truncateds[agent])]
 
         # update infos so we don't lose information on dying agents
         self._update_infos(infos)
-        return obs, rewards, terminateds, truncateds, self.infos
+        return obs, scalar_reward, terminateds, truncateds, self.infos
 
     def render(self):
         print(self)
+
+    '''
+    Callable helper functions
+    '''
 
     def observation_space(self, agent):
         return self.observation_spaces[agent]
@@ -110,18 +131,25 @@ class ParallelRLWorkers(ParallelEnv):
     def action_space(self, agent):
         return self.action_spaces[agent]
 
-    def _get_mask(self, agent):
-        return self.fields[agent].unwrapped.action_mask()
-
-    def get_field_env(self, n: int):
+    def get_field_env_with_idx(self, n: int):
         return self.fields[self.agents[n]]
 
     def set_global_budget(self, budget: int):
         self.global_budget = budget
 
+    def get_field_size(self, agent):
+        return self.fields[agent].unwrapped.area
+
+    def _get_mask(self, agent):
+        return self.fields[agent].unwrapped.action_mask()
+
     def _update_infos(self, infos):
         for agents in self.agents:
             self.infos[agents] = infos[agents]
+
+    '''
+    Init helpers
+    '''
 
     def _init_farm_variables(self):
         self._emergence_doy = {ag: None for ag in self.agents}
@@ -155,6 +183,19 @@ class ParallelRLWorkers(ParallelEnv):
         # action space from individual parcels
         self.action_spaces = {agent: env.action_space
                               for agent, env in self.fields.items()}
+
+    def _process_rewards(self, rewards):
+        """
+        Uses the "weighted by area" policy reward.
+        """
+
+        total_area = np.sum([self.get_field_size(agent) for agent in self.agents])
+
+        weighted_reward = np.sum([rewards[agent] * self.get_field_size(agent) for agent in self.agents])
+
+        reward = weighted_reward / total_area
+
+        return reward
 
     def _build_shared(self) -> dict[str, np.ndarray | list]:
         """
@@ -279,7 +320,6 @@ class ParallelRLWorkers(ParallelEnv):
 
         return code_caps
 
-    @functools.lru_cache(maxsize=None)
     def _get_crop_caps(self):
         name_caps = {
             "winterwheat": 240,
@@ -291,7 +331,6 @@ class ParallelRLWorkers(ParallelEnv):
 
         return {**name_caps, **code_caps}
 
-    @functools.lru_cache(maxsize=None)
     def _get_schedule(self):
         schedule = {
             "winterwheat": [               # :contentReference[oaicite:0]{index=0}

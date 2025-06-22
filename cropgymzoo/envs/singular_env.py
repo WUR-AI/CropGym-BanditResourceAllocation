@@ -79,6 +79,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
                  action_space: gym.spaces = gym.spaces.Discrete(9),
                  costs_nitrogen: int = 0,
                  crop: str = 'winterwheat',
+                 name: str = None,
                  area: float = 12,
                  model_config: str = _WOFOST_CONFIG,
                  agro_config: str = _AGRO_CALENDAR_CONFIG,
@@ -94,6 +95,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self.original = original
         self.training = training
         self.flatten_obs = flatten_obs
+        self.name = name
 
         # field specific stuff
         self.budget_n = 180
@@ -199,11 +201,9 @@ class ParcelEnv(pcse_env.PCSEEnv):
         # append new information to the infos dict
         self._populate_infos(pcse_output, action, reward, terminated)
 
-        r_final = 0
-        if terminated:
-            r_final = reward
+        # print(f"{self.name}. Step: {self.n_steps}. Reward: {reward}. Terminated: {terminated}")
+
         # info = self.grab_infos(pcse_output, info, reward, growth)
-        # print(f"step {self.n_steps}: core={reward:.3f}, final={r_final:.3f}, total={reward + r_final:.3f}")
 
 
         return obs, reward, terminated, truncated, self.infos
@@ -329,7 +329,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
                     output_baseline.append(filtered_dict)
             assert len(output_baseline) != 0, f'OUTPUT BASELINE EMPTY'
 
-        prices = {'price_fertilizer': self._get_fertilizer_price(), 'price_crop': self._get_crop_price()}
+        prices = {'price_fertilizer': self.fertilizer_price, 'price_crop': self.crop_price}
         reward, growth = self.reward_class.return_reward(output, amount,
                                                          output_baseline=output_baseline,
                                                          obj=self.reward_container,
@@ -632,12 +632,12 @@ class ParcelEnv(pcse_env.PCSEEnv):
     def _get_fertilizer_price(self):
         return self.fertilizer_prices[self.year] \
             if not self.training \
-            else self.rng.choice(list(self.fertilizer_prices.keys()))
+            else self.rng.choice(list(self.fertilizer_prices.values()))
 
     def _get_crop_price(self):
         return self.crop_prices[self.crop][self.year] \
                 if not self.training \
-                else self.rng.choice(list(self.crop_prices[self.crop].keys()))
+                else self.rng.choice(list(self.crop_prices[self.crop].values()))
 
     def _populate_infos(self, pcse_output, action, reward, terminate):
 
@@ -672,7 +672,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
                                                         year=self.date.year,
                                                         nh4_depo=pcse_output[-1]['RNH4DEPOSTT'],
                                                         no3_depo=pcse_output[-1]['RNO3DEPOSTT']))
-        self.infos['Profit'].append(self.rewards_obj.profit)
+        self.infos['Profit'].append(self.reward_container.cum_profit)
         self.infos['CO2'].append(self.carbon_dioxide_level)
 
     def _action_features_mapper(self):
@@ -689,8 +689,8 @@ class ParcelEnv(pcse_env.PCSEEnv):
         return {
             'SinDay': encode_day[0],
             'CosDay': encode_day[1],
-            'FertilizerPrice': self._get_fertilizer_price(),
-            'CropPrice': self._get_crop_price(),
+            'FertilizerPrice': self.fertilizer_price,
+            'CropPrice': self.crop_price,
             'CropCode': self._get_crop_code(),
             'CO2': self.carbon_dioxide_level,
         }
@@ -711,8 +711,8 @@ class ParcelEnv(pcse_env.PCSEEnv):
             WAV=30,
             CO2=self.carbon_dioxide_level,
             # default init; need to change?
-            NH4I=len(soil_parameters['SoilProfileDescription']['SoilLayers'])*[5],
-            NO3I=len(soil_parameters['SoilProfileDescription']['SoilLayers'])*[5],
+            NH4I=len(soil_parameters['SoilProfileDescription']['SoilLayers'])*[0],
+            NO3I=len(soil_parameters['SoilProfileDescription']['SoilLayers'])*[0],
         )
         return crop_parameters, site_parameters, soil_parameters
 
