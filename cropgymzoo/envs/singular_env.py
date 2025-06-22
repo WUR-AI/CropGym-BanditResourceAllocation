@@ -134,7 +134,8 @@ class ParcelEnv(pcse_env.PCSEEnv):
             soil_parameters=soil_parameters,
             locations=location,
             crop=crop,
-            crop_info=crop_info
+            crop_info=crop_info,
+            training=training,
         )
 
         # possibly deprecated
@@ -158,7 +159,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
             self.random_params = True
             self.domain_randomizer = PCSERandomizer(self)
 
-            self.domain_randomizer.perturb_weather()
+            # self.domain_randomizer.perturb_weather()
 
         # prices of crops and fertilizers
         self._init_prices()

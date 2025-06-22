@@ -230,8 +230,10 @@ def get_nasapower_provider(location):
     return pcse.input.NASAPowerWeatherDataProvider(*location)
 
 
-def get_openmeteo_provider(location):
-    return pcse.input.OpenMeteoWeatherDataProvider(*location)
+def get_openmeteo_provider(location, training=False):
+    from cropgymzoo.utils.domain_randomizer import NoisyOpenMeteo
+    return pcse.input.OpenMeteoWeatherDataProvider(*location)\
+        if not training else NoisyOpenMeteo(*location)
 
 
 @functools.cache
@@ -378,6 +380,7 @@ class PCSEEnv(gym.Env):
                  timestep: int = 7,
                  crop: str = 'winterwheat',
                  crop_info: dict = None,
+                 training: bool = False,
                  wait_for_crop: bool = True,
                  **kwargs
                  ):
@@ -386,6 +389,7 @@ class PCSEEnv(gym.Env):
 
         # For skipping campaign date and starting simulation when sowing
         self._wait_for_crop = wait_for_crop
+        self.training = training
 
         # Optionally set the seed
         super().reset(seed=seed)
@@ -428,7 +432,7 @@ class PCSEEnv(gym.Env):
         self._model_config = model_config
 
         # Get the weather data source
-        self._weather_data_provider = get_openmeteo_provider(self._location)
+        self._weather_data_provider = get_openmeteo_provider(self._location, self.training)
 
         # Create a PCSE engine / crop growth model
         self._model = self._init_pcse_model()

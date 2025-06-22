@@ -109,6 +109,9 @@ class TestSingularTrainingEnvFunctions(unittest.TestCase):
         print(obs_train)
         print(obs_test)
 
+        print(self.env_training.unwrapped._parameter_provider._cropdata["SPAN"])
+        print(self.env_testing.unwrapped._parameter_provider._cropdata["SPAN"])
+
         self.assertNotEqual(obs_train, obs_test)
 
 

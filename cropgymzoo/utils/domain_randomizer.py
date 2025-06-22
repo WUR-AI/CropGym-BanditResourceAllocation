@@ -3,6 +3,8 @@ import os
 import types
 import numpy as np
 
+from pcse.input.openmeteo import OpenMeteoWeatherDataProvider
+
 import gymnasium as gym
 
 
@@ -27,29 +29,6 @@ class PCSERandomizer:
         self.training = env.training
         self.rng = np.random.default_rng(self.env.seed)
 
-    def perturb_weather(self):
-        w = self.env.wdp  # PCSE WDP object
-        orig_call = w.__call__
-
-        rng = self.rng
-
-        def noisy_call(self_, date):
-            rec = orig_call(date)  # original record (namedtuple)
-
-            # -----  jitter individual fields  ---------------------------------
-            rain = np.clip(rec.RAIN * rng.normal(1.0, 0.10), 0, 100)
-            irrad = rec.IRRAD + rng.normal(0, 0.03 * abs(rec.IRRAD))
-            tmax = rec.TMAX + rng.normal(0, 0.03 * abs(rec.TMAX))
-            tmin = rec.TMIN + rng.normal(0, 0.03 * abs(rec.TMIN))
-            temp = rec.TMIN + rng.normal(0, 0.03 * abs(rec.TEMP))
-            wind = rec.TMIN + rng.normal(0, 0.03 * abs(rec.WIND))
-
-            # namedtuple --> _replace is the safest way to make a new instance
-            rec = rec._replace(RAIN=rain, IRRAD=irrad, TMAX=tmax, TMIN=tmin, TEMP=temp, WIND=wind)
-            return rec
-
-        w.__call__ = types.MethodType(noisy_call, w)  # replace with perturbed value
-
     def perturb_parameters(self):
         # get and filter relevant crop params
         crop_params = {key: val for key, val in self.env._parameter_provider._cropdata.items()
@@ -61,4 +40,31 @@ class PCSERandomizer:
 
     def perturb_carbon_dioxide(self, co2):
         return co2 * self.rng.normal(1.0, 0.1)
+
+
+class NoisyOpenMeteo(OpenMeteoWeatherDataProvider):
+    SIGMA_RAIN_REL  = 0.10
+    SIGMA_OTHER_REL = 0.03
+
+    def __init__(self, *args, rng=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._rng = np.random.default_rng() if rng is None else rng
+
+    def __call__(self, date):
+        rec = super().__call__(date)
+
+        r = self._rng
+
+        # update fields directly; __setattr__ writes into the container
+        rec.RAIN = np.clip(rec.RAIN * r.normal(1.0, 0.10), 0, 100)
+        rec.IRRAD = rec.IRRAD + r.normal(0, 0.03 * abs(rec.IRRAD))
+        rec.TMAX = rec.TMAX + r.normal(0, 0.03 * abs(rec.TMAX))
+        rec.TMIN = rec.TMIN + r.normal(0, 0.03 * abs(rec.TMIN))
+        rec.TEMP = rec.TEMP + r.normal(0, 0.03 * abs(rec.TEMP))
+        rec.WIND = rec.WIND + r.normal(0, 0.03 * abs(rec.WIND))
+
+        for f in ["RAIN", "IRRAD", "TMAX", "TMIN", "TEMP", "WIND"]:
+            setattr(rec, f, round(getattr(rec, f), 2))
+
+        return rec  # same object, now containing noisy values
 
