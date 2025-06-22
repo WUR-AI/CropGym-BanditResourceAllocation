@@ -21,6 +21,7 @@ _FIELDS_CONFIG = os.path.join(_CONFIG_PATH, 'fields.yaml')
 _CROPS_CONFIG = os.path.join(_CONFIG_PATH, 'crop_info.yaml')
 _WOFOST_CONFIG = os.path.join(_CONFIG_PATH, 'Wofost81_NWLP_MLWB_SNOMIN.conf')
 
+
 # Initialize singular gymnasium envs
 def register_predefined_cropgym_instances() -> None:
 
@@ -31,7 +32,7 @@ def register_predefined_cropgym_instances() -> None:
     for key, field in dict_fields.items():
         gym.register(
             id=key,
-            entry_point='cropgymzoo.envs.singular_env:ParcelEnv',
+            entry_point='cropgymzoo.envs.singular_env:make_parcel_env',
             kwargs={
                 'crop_features': get_wofost_default_crop_features(),
                 'weather_features': get_default_weather_features(),
@@ -43,7 +44,6 @@ def register_predefined_cropgym_instances() -> None:
                 'area': field['area'],
                 'reward': 'PNY',
                 'original': True,
-                'training': True,
                 'flatten_obs': False,
             },
 
@@ -51,7 +51,7 @@ def register_predefined_cropgym_instances() -> None:
 
 register_predefined_cropgym_instances()
 
-from cropgymzoo.envs.pcse_env import PCSEEnv
-from cropgymzoo.envs.singular_env import ParcelEnv
-from cropgymzoo.envs.worker_env import ParallelRLWorkers
-from cropgymzoo.envs.allocation_env import AllocationBandit
+# from cropgymzoo.envs.pcse_env import PCSEEnv
+# from cropgymzoo.envs.singular_env import ParcelEnv
+# from cropgymzoo.envs.worker_env import ParallelRLWorkers
+# from cropgymzoo.envs.allocation_env import AllocationBandit

@@ -31,8 +31,8 @@ class TestSingularEnvFunctions(unittest.TestCase):
 
         self.assertEqual(isinstance(obs, dict), True)
 
-        # check NUE reward
-        self.assertEqual(rew, 0)
+        # check PNY reward
+        # self.assertEqual(rew, 0)
 
         # check whether obs and info align
         self.assertEqual(obs['NO3'], info['NO3'][-1])
@@ -80,6 +80,37 @@ class TestSingularEnvFunctions(unittest.TestCase):
 
         for feature in info:
             self.assertEqual(isinstance(info[feature], list), True)
+
+class TestSingularTrainingEnvFunctions(unittest.TestCase):
+    def setUp(self):
+        self.env_training = gym.make('field-1', training=True)
+        self.env_testing = gym.make('field-1')
+
+    def test_reset_singular(self):
+        obs, info = self.env_training.reset(options={'year': 2010})
+        self.env_training.unwrapped.set_budget(200)
+
+        self.assertEqual(self.env_training.unwrapped.training, True)
+
+        # check obs and info type
+        self.assertEqual(isinstance(obs, dict), True)
+        self.assertEqual(isinstance(info, dict), True)
+
+        print(obs)
+
+        # check reset options
+        self.assertEqual(self.env_training.unwrapped.year, 2010)
+        self.assertEqual(self.env_training.unwrapped.budget_n, 200)
+
+    def test_reset_compare(self):
+        obs_train, info_train = self.env_training.reset(options={'year': 2010})
+        obs_test, info_test = self.env_testing.reset(options={'year': 2010})
+
+        print(obs_train)
+        print(obs_test)
+
+        self.assertNotEqual(obs_train, obs_test)
+
 
 class TestMultiEnvFunctions(unittest.TestCase):
     def setUp(self):

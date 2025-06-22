@@ -23,6 +23,7 @@ from cropgymzoo.utils.rewards import (Rewards, ActionsContainer, reward_function
 from cropgymzoo.utils.nitrogen_helpers import (get_surplus_n, get_nh4_deposition_pcse,
                                                get_no3_deposition_pcse, convert_year_to_n_concentration, m2_to_ha,
                                                is_leap)
+from cropgymzoo.utils.domain_randomizer import PCSERandomizer
 import cropgymzoo.envs.pcse_env as pcse_env
 from cropgymzoo.utils.defaults import (get_wofost_default_crop_features,
                                        get_default_weather_features,
@@ -31,6 +32,12 @@ from cropgymzoo.utils.defaults import (get_wofost_default_crop_features,
 
 import torch as th
 import torch.nn as nn
+
+def make_parcel_env(*, training: bool = False, **kwargs):
+    env = ParcelEnv(training=training, **kwargs)          # build the base env
+    # if training:
+    #     env = PCSERandomizer(env) # add arguments if your wrapper needs them
+    return env
 
 class ParcelEnv(pcse_env.PCSEEnv):
     """
@@ -86,7 +93,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
                  site_path: str = _SITE_PATH,
                  soil_path: str = _SOIL_PATH,
                  seed: int = 107,
-                 training: bool = True,
+                 training: bool = False,
                  original: bool = True,
                  flatten_obs: bool = True,
                  **kwargs,
@@ -98,13 +105,9 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self.name = name
 
         # field specific stuff
-        self.budget_n = 180
+        self.budget_n = 180  # will be overridden
         self.budget_left = self.budget_n
         self.area = area
-
-        if self.training:
-            self.random_weather = False
-            self.random_init = False
 
         # pcse variables
         self.crop = crop
@@ -144,6 +147,18 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self.reward_function = reward
 
         self.rng, self.seed = gym.utils.seeding.np_random(seed=seed)
+
+        # Training stuff
+        self.random_weather = False
+        self.random_init = False
+        self.random_params = False
+        if self.training:
+            self.random_weather = True
+            self.random_init = True
+            self.random_params = True
+            self.domain_randomizer = PCSERandomizer(self)
+
+            self.domain_randomizer.perturb_weather()
 
         # prices of crops and fertilizers
         self._init_prices()
@@ -233,6 +248,10 @@ class ParcelEnv(pcse_env.PCSEEnv):
         # reset various variables
         self._reset_action_variables()
         self._reset_prices()
+
+        if self.training:
+            self.domain_randomizer.perturb_parameters()
+            options['site_params']['CO2'] = self.domain_randomizer.perturb_carbon_dioxide(self._get_carbon_dioxide_levels())
 
         if self.reward_function in reward_functions_with_baseline() and self.original is True:
             self.baseline_env.reset(seed=seed, options=options)
@@ -630,14 +649,20 @@ class ParcelEnv(pcse_env.PCSEEnv):
         return self.CROP_CODE_MAP[self.crop]
 
     def _get_fertilizer_price(self):
-        return self.fertilizer_prices[self.year] \
-            if not self.training \
-            else self.rng.choice(list(self.fertilizer_prices.values()))
+        try:
+            return self.fertilizer_prices[self.year] \
+                if not self.training \
+                else self.rng.choice(list(self.fertilizer_prices.values()))
+        except KeyError:
+            return list(self.fertilizer_prices.values())[0]
 
     def _get_crop_price(self):
-        return self.crop_prices[self.crop][self.year] \
-                if not self.training \
-                else self.rng.choice(list(self.crop_prices[self.crop].values()))
+        try:
+            return self.crop_prices[self.crop][self.year] \
+                    if not self.training \
+                    else self.rng.choice(list(self.crop_prices[self.crop].values()))
+        except KeyError:
+            return list(self.crop_prices[self.crop].values())[0]
 
     def _populate_infos(self, pcse_output, action, reward, terminate):
 
@@ -809,6 +834,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
                 years=self.years,
                 timestep=self._timestep,
                 reward='NUE',
+                training=self.training,
                 action_space=self.action_space,
                 crop='winterwheat',
                 model_config=self._model_config,
