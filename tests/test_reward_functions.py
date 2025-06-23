@@ -122,7 +122,9 @@ class TestSingularRewardFunctions(unittest.TestCase):
 
         lo, hi = self.env_pny_3.unwrapped.reward_class.reward_bounds()
 
-        print(np.sum(rewards))
+        plt.plot(np.cumsum(rewards))
+
+        plt.show()
 
         print(f"End yield: {self.env_pny_3.unwrapped.get_latest_info('Yield')}")
         print(f"Total fertilized: {self.env_pny_3.unwrapped.get_latest_info('Naction')}")
@@ -138,21 +140,75 @@ class TestMultiRewardFunction(unittest.TestCase):
     def setUp(self):
         self.env = ParallelRLWorkers(
             warm_up=0,
-            global_budget=500,
+        )
+        self.env_training = ParallelRLWorkers(
+            warm_up=0,
+            training=True
         )
 
     def test_reward_area_multi(self):
-        obs, info = self.env.reset(options={'year': 2010})
+        year = np.random.choice(range(1951, 2025))
+        obs, info = self.env.reset(options={'year': year})
 
         cumulative_rewards = []
         terminateds = {agent: False for agent in self.env.unwrapped.agents}
         while not all(terminateds.values()):
             _, rewards, terminateds, _, infos = self.env.step({
-                agent: 0 for agent in self.env.unwrapped.agents
+                agent: np.random.choice(range(0, 7), p=[0.7, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05,])
+                for agent in self.env.unwrapped.agents
             })
-            print(f"Scalar: {rewards}")
+            # print(f"Scalar: {rewards}")
             cumulative_rewards.append(rewards)
-        print(cumulative_rewards)
+        agents = self.env.unwrapped.possible_agents
+
+        print(infos[agents[2]]['Yield'])
+
+        for i, agent in enumerate(agents):
+            color = plt.get_cmap('tab10')
+            plt.plot(infos[agent]['Date'], np.cumsum(infos[agent]['Reward']),
+                     label=f"{self.env.unwrapped.fields[agent].unwrapped.name}, "
+                           f"{self.env.unwrapped.fields[agent].unwrapped.crop}",
+                     color=color(i))
+            plt.vlines(infos[agent]['Date'], np.zeros(len(infos[agent]['Action'])),
+                       [i/10 for i in infos[agent]['Action']], color=color(i), alpha=0.3)
+
+        plt.legend()
+        plt.show()
+
+        print(np.sum(cumulative_rewards))
+
+        self.assertTrue(0 <= np.sum(cumulative_rewards) <= 1)
+
+    def test_test_reward_area_multi_training(self):
+        year = np.random.choice(range(1951, 2025))
+        obs, info = self.env_training.reset(options={'year': year})
+
+        cumulative_rewards = []
+        terminateds = {agent: False for agent in self.env_training.unwrapped.agents}
+        while not all(terminateds.values()):
+            _, rewards, terminateds, _, infos = self.env_training.step({
+                agent: np.random.choice(range(0, 7), p=[0.7, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, ])
+                for agent in self.env_training.unwrapped.agents
+            })
+            # print(f"Scalar: {rewards}")
+            cumulative_rewards.append(rewards)
+        agents = self.env_training.unwrapped.possible_agents
+
+        print(infos[agents[2]]['Yield'])
+
+        for i, agent in enumerate(agents):
+            color = plt.get_cmap('tab10')
+            plt.plot(infos[agent]['Date'], np.cumsum(infos[agent]['Reward']),
+                     label=f"{self.env_training.unwrapped.fields[agent].unwrapped.name}, "
+                           f"{self.env_training.unwrapped.fields[agent].unwrapped.crop}",
+                     color=color(i))
+            plt.vlines(infos[agent]['Date'], np.zeros(len(infos[agent]['Action'])),
+                       [i / 10 for i in infos[agent]['Action']], color=color(i), alpha=0.3)
+
+        plt.legend()
+        plt.show()
+
+        print(np.sum(cumulative_rewards))
 
         self.assertTrue(0 <= np.sum(cumulative_rewards) <= 1)
 
