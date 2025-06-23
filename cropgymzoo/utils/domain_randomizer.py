@@ -27,7 +27,7 @@ class NoisyOpenMeteo(OpenMeteoWeatherDataProvider):
         rec.TEMP = np.clip(rec.TEMP + r.normal(0, self.SIGMA_OTHER * abs(rec.TEMP)), -50., 60.)
         rec.WIND = np.clip(rec.WIND + r.normal(0, self.SIGMA_OTHER * abs(rec.WIND)), 0., 100.)
 
-        for f in ["RAIN", "IRRAD", "TMAX", "TMIN", "TEMP", "WIND"]:
+        for f in ["RAIN", "IRRAD", "TMAX", "TMIN", "VAP", "TEMP", "WIND"]:
             setattr(rec, f, round(getattr(rec, f), 2))
 
         return rec  # same object, now containing noisy values
