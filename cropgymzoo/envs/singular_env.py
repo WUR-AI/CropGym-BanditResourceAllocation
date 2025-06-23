@@ -23,7 +23,6 @@ from cropgymzoo.utils.rewards import (Rewards, ActionsContainer, reward_function
 from cropgymzoo.utils.nitrogen_helpers import (get_surplus_n, get_nh4_deposition_pcse,
                                                get_no3_deposition_pcse, convert_year_to_n_concentration, m2_to_ha,
                                                is_leap)
-from cropgymzoo.utils.domain_randomizer import PCSERandomizer
 import cropgymzoo.envs.pcse_env as pcse_env
 from cropgymzoo.utils.defaults import (get_wofost_default_crop_features,
                                        get_default_weather_features,
@@ -68,6 +67,23 @@ class ParcelEnv(pcse_env.PCSEEnv):
         'groundnut': 14,
         'cassava': 15
     }
+
+    '''
+    Crop parameters to add noise to
+    '''
+
+    CROP_PARAMS = ["TBASE",  # lower threshold temperature for ageing of leaves
+                   "SPAN",  # life span of leaves growing at 35 Celsius
+                   "TDWI",  # initial total crop dry weight
+                   "CVL",  # efficiency of conversion into leaves
+                   "CVO",  # efficiency of conversion into storage organs
+                   "CVR",  # efficiency of conversion into roots
+                   "CVS",  # efficiency of conversion into stems
+                   "PERDL",  # maximum relative death rate of leaves due to water stress
+                   "RGRLAI_MIN"  # maximum relative increase in LAI
+                   "RNUPTAKEMAX",  # Maximum rate of daily nitrogen uptake
+                   "DVS_N_TRANSL"  # development stage above which N translocation to storage organs does occur
+                   ]
 
     '''
     Initialize Env for each RL agent
@@ -157,7 +173,6 @@ class ParcelEnv(pcse_env.PCSEEnv):
             self.random_weather = True
             self.random_init = True
             self.random_params = True
-            self.domain_randomizer = PCSERandomizer(self)
 
             # self.domain_randomizer.perturb_weather()
 
@@ -251,8 +266,8 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self._reset_prices()
 
         if self.training:
-            self.domain_randomizer.perturb_parameters()
-            options['site_params']['CO2'] = self.domain_randomizer.perturb_carbon_dioxide(self._get_carbon_dioxide_levels())
+            self._perturb_parameters()
+            options['site_params']['CO2'] = self._perturb_carbon_dioxide(self._get_carbon_dioxide_levels())
 
         if self.reward_function in reward_functions_with_baseline() and self.original is True:
             self.baseline_env.reset(seed=seed, options=options)
@@ -720,6 +735,22 @@ class ParcelEnv(pcse_env.PCSEEnv):
             'CropCode': self._get_crop_code(),
             'CO2': self.carbon_dioxide_level,
         }
+
+    '''
+    Randomizers
+    '''
+
+    def _perturb_parameters(self):
+        # get and filter relevant crop params
+        crop_params = {key: val for key, val in self._parameter_provider._cropdata.items()
+                       if key in self.CROP_PARAMS and isinstance(val, float)}
+
+        for key, val in crop_params.items():
+            # perturb by 2 percent
+            self._parameter_provider.set_override(key, val*self.rng.normal(1.0, 0.02), check=False)
+
+    def _perturb_carbon_dioxide(self, co2):
+        return co2 * self.rng.normal(1.0, 0.1)
 
     '''
     Init helpers

@@ -3,6 +3,10 @@ import unittest
 import cropgymzoo  # for gym make
 import gymnasium as gym
 
+import numpy as np
+
+import matplotlib.pyplot as plt
+
 from cropgymzoo.envs.worker_env import ParallelRLWorkers
 
 
@@ -109,8 +113,30 @@ class TestSingularTrainingEnvFunctions(unittest.TestCase):
         print(obs_train)
         print(obs_test)
 
-        print(self.env_training.unwrapped._parameter_provider._cropdata["SPAN"])
-        print(self.env_testing.unwrapped._parameter_provider._cropdata["SPAN"])
+        self.assertNotEqual(obs_train, obs_test)
+
+    def test_episode_compare(self):
+        year = np.random.choice(range(1951, 2025))
+        obs_train, info_train = self.env_training.reset(options={'year': year})
+        obs_test, info_test = self.env_testing.reset(options={'year': year})
+
+        term_train = False
+        while not term_train:
+            obs_train, _, term_train, _, info_train = self.env_training.step(0)
+
+        term_test = False
+        while not term_test:
+            obs_test, _, term_test, _, info_test = self.env_testing.step(0)
+
+        plt.plot(info_train['Yield'], label='train yield')
+        plt.plot(info_test['Yield'], label='test yield')
+
+        plt.plot(info_train['TAGP'], label='train TAGP')
+        plt.plot(info_test['TAGP'], label='test TAGP')
+
+        plt.legend()
+
+        plt.show()
 
         self.assertNotEqual(obs_train, obs_test)
 
