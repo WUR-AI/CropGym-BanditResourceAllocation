@@ -45,6 +45,7 @@ def register_predefined_cropgym_instances() -> None:
                 'reward': 'PNY',
                 'original': True,
                 'flatten_obs': False,
+                'type': field['type'],
             },
 
         )

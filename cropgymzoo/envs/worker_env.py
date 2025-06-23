@@ -33,11 +33,12 @@ class ParallelRLWorkers(ParallelEnv):
     def __init__(self,
                  seed: int = 107,
                  warm_up: int = 0,
-                 global_budget: int = 400,
-                 years: list = get_default_years(),):
+                 years: list = get_default_years(),
+                 training: bool = False,):
 
         self.seed = seed
         self.years = years
+        self.training = training
 
         with open(_FIELDS_CONFIG) as f:
             dict_fields = yaml.load(f, Loader=yaml.SafeLoader)
@@ -46,15 +47,16 @@ class ParallelRLWorkers(ParallelEnv):
         self.agents = [i for i in dict_fields.keys()]
         self.possible_agents = self.agents.copy()
 
-        self.global_budget = global_budget
-        self.global_budget_left = self.global_budget
-
         self.current_step = 0
 
+        # init important stuff
         self._init_fields()
         self._init_spaces()
         self._init_farm_variables()
         self._init_infos()
+
+        self.global_budget = self._get_global_budget()
+        self.global_budget_left = self.global_budget
 
         # Do some warm up episodes
         self.warm_up_infos = None
@@ -64,7 +66,6 @@ class ParallelRLWorkers(ParallelEnv):
     def reset(self, seed=None, options=None):
 
         # reset infos and variables
-        self.global_budget_left = self.global_budget
         self._init_infos()
         self.current_step = 0
 
@@ -76,6 +77,9 @@ class ParallelRLWorkers(ParallelEnv):
         for agent, env in self.fields.items():
             o, i = env.reset(seed=seed, options=options)
             local_obs[agent], infos[agent] = o, i
+
+        self.global_budget = self._get_global_budget()
+        self.global_budget_left = self.global_budget
 
         obs = {agent: {"local": local_obs[agent],
                     "shared": self.shared_space,
@@ -147,6 +151,9 @@ class ParallelRLWorkers(ParallelEnv):
         for agents in self.agents:
             self.infos[agents] = infos[agents]
 
+    def _get_global_budget(self):
+        return np.sum([self.fields[agent].unwrapped.max_budget_n for agent in self.possible_agents])
+
     '''
     Init helpers
     '''
@@ -155,10 +162,14 @@ class ParallelRLWorkers(ParallelEnv):
         self._emergence_doy = {ag: None for ag in self.agents}
 
     def _init_fields(self):
+        """
+        This is where we initialize the sub-environments where each agent will work at.
+        :return: a dict called "fields", filled with different CropGym envs
+        """
         self.fields = {}
         # create each gymnasium cropgym env
         for n in self.agents:
-            env = gym.make(n, seed=self.seed)  # set same seed for each parcel. Change?
+            env = gym.make(n, seed=self.seed, training=self.training)  # set same seed for each parcel. Change?
             self.fields[n] : dict[ParcelEnv] = env
         print("Parcels initialized!")
 
@@ -246,7 +257,7 @@ class ParallelRLWorkers(ParallelEnv):
         for ag, env in self.fields.items():
             info = env.unwrapped.get_latest_info
             crop = env.unwrapped._get_crop_code()
-            n_applied_so_far = n_applied_so_far = info("Naction")  # kg N ha-¹ already used
+            n_applied_so_far = info("Naction")  # kg N ha-¹ already used
             cap = self._get_crop_caps()[crop]
 
             best_frac = 0.0

@@ -85,6 +85,16 @@ class ParcelEnv(pcse_env.PCSEEnv):
                    "DVS_N_TRANSL"  # development stage above which N translocation to storage organs does occur
                    ]
 
+    CROP_SOIL_MAX = {
+        "winterwheat": {'clay': 245, 'sand': 160, 'silt': 190, 'peat': 160},
+        "sugarbeet": {'clay': 150, 'sand': 145, 'silt': 116, 'peat': 145},
+        "potato": {'clay': 275, 'sand': 260, 'silt': 204, 'peat': 270},
+        "barley": {'clay': 80, 'sand': 80, 'silt': 80, 'peat': 80},
+        "seed_onion": {'clay': 170, 'sand': 120, 'silt': 120, 'peat': 120},
+        'rapeseed': {'clay': 205, 'sand': 190, 'silt': 152, 'peat': 195},
+        'sunflower': {'clay': 150, 'sand': 150, 'silt': 150, 'peat': 150},
+    }
+
     '''
     Initialize Env for each RL agent
     '''
@@ -106,6 +116,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
                  area: float = 12,
                  model_config: str = _WOFOST_CONFIG,
                  agro_config: str = _AGRO_CALENDAR_CONFIG,
+                 type: str = 'clay',
                  site_path: str = _SITE_PATH,
                  soil_path: str = _SOIL_PATH,
                  seed: int = 107,
@@ -119,11 +130,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self.training = training
         self.flatten_obs = flatten_obs
         self.name = name
-
-        # field specific stuff
-        self.budget_n = 180  # will be overridden
-        self.budget_left = self.budget_n
-        self.area = area
+        self.soil_type = type
 
         # pcse variables
         self.crop = crop
@@ -134,6 +141,14 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self.year = year
         self.location = location
         self.year_list = year_list
+
+        # field specific stuff
+        self.max_budget_n = self.CROP_SOIL_MAX[self.crop][self.soil_type]
+        self.budget_n = self.max_budget_n  # will be overridden
+        self.budget_left = self.budget_n
+        self.area = area
+
+        # back to PCSE stuff
 
         self.agro_config = agro_config
 
@@ -738,7 +753,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         }
 
     '''
-    Randomizers
+    Randomizers. NOTE: The weather randomizer is under utils/domain_randomizer.py
     '''
 
     def _randomise_domain(self, options):
