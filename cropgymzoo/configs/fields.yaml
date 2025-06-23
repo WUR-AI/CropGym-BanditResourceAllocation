@@ -1,30 +1,30 @@
 field-1:
-  soil_lon: 5.54
-  soil_lat: 52.5
+  soil_lon: 5.545
+  soil_lat: 52.512
   crop: sugarbeet
   area: 12
 field-2:
-  soil_lon: 5.54
-  soil_lat: 52.49
+  soil_lon: 5.545
+  soil_lat: 52.495
   crop: winterwheat
   area: 15
 field-3:
-  soil_lon: 5.55
-  soil_lat: 52.5
+  soil_lon: 5.551
+  soil_lat: 52.502
   crop: potato
-  area: 9
+  area: 20
 field-4:
-  soil_lon: 5.56
-  soil_lat: 52.5
+  soil_lon: 5.561
+  soil_lat: 52.521
   crop: sugarbeet
   area: 10
 field-5:
-  soil_lon: 5.54
-  soil_lat: 52.49
+  soil_lon: 5.542
+  soil_lat: 52.490
   crop: winterwheat
   area: 14
 field-6:
-  soil_lon: 5.54
-  soil_lat: 52.49
+  soil_lon: 5.548
+  soil_lat: 52.498
   crop: potato
   area: 17

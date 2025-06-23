@@ -6,8 +6,8 @@ def default_soilgrid_variables():
 
 def default_zs():
     # Define minimum and maximum depths for each SoilGrids soil layer
-    zmins = [0, 5, 15, 30, 60]
-    zmaxs = [5, 15, 30, 60, 100]
+    zmins = [0, 5, 15, 30, 60, 100]
+    zmaxs = [5, 15, 30, 60, 100, 200]
     return zmins, zmaxs
 
 

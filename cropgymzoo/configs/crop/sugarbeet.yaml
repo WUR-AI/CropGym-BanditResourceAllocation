@@ -381,11 +381,11 @@ CropParameters:
             - initial rooting depth
             - ['cm']
             RRI:
-            - 1.00
+            - 2.0
             - maximum daily increase in rooting depth
             - ['cm.d-1']
             RDMCR:
-            - 100.0
+            - 200.0
             - maximum rooting depth
             - ['cm']
             #
