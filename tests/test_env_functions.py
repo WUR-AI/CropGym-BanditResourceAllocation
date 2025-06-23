@@ -128,11 +128,13 @@ class TestSingularTrainingEnvFunctions(unittest.TestCase):
         while not term_test:
             obs_test, _, term_test, _, info_test = self.env_testing.step(0)
 
-        plt.plot(info_train['Yield'], label='train yield')
-        plt.plot(info_test['Yield'], label='test yield')
+        a = 0.6
 
-        plt.plot(info_train['TAGP'], label='train TAGP')
-        plt.plot(info_test['TAGP'], label='test TAGP')
+        plt.plot(info_train['Date'], info_train['Yield'], label='train yield', alpha=a)
+        plt.plot(info_test['Date'], info_test['Yield'], label='test yield', alpha=a)
+
+        plt.plot(info_train['Date'], info_train['TAGP'], label='train TAGP', alpha=a)
+        plt.plot(info_test['Date'], info_test['TAGP'], label='test TAGP', alpha=a)
 
         plt.legend()
 

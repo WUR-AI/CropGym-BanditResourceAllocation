@@ -98,7 +98,7 @@ class AgroManagementContainer:
                         f"pass a callable instead."
                     )
 
-            # 3️⃣ plain overwrite
+            # plain overwrite
             else:
                 new_val = spec
 

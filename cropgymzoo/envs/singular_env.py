@@ -265,14 +265,15 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self._reset_action_variables()
         self._reset_prices()
 
-        if self.training:
-            self._perturb_parameters()
-            options['site_params']['CO2'] = self._perturb_carbon_dioxide(self._get_carbon_dioxide_levels())
+        # randomise domain
+        options = self._randomise_domain(options)
 
+        # reset PCSE
         if self.reward_function in reward_functions_with_baseline() and self.original is True:
             self.baseline_env.reset(seed=seed, options=options)
         obs = super().reset(seed=seed, options=options)
 
+        # get infos
         self._init_infos()
         self._populate_infos(self.model.get_output(), 0, 0, False)
 
@@ -740,6 +741,13 @@ class ParcelEnv(pcse_env.PCSEEnv):
     Randomizers
     '''
 
+    def _randomise_domain(self, options):
+        if self.training:
+            self._shift_sowing_date()
+            self._perturb_parameters()
+            options['site_params']['CO2'] = self._perturb_carbon_dioxide(self._get_carbon_dioxide_levels())
+        return options
+
     def _perturb_parameters(self):
         # get and filter relevant crop params
         crop_params = {key: val for key, val in self._parameter_provider._cropdata.items()
@@ -751,6 +759,14 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
     def _perturb_carbon_dioxide(self, co2):
         return co2 * self.rng.normal(1.0, 0.1)
+
+    def _shift_sowing_date(self):
+        # shift sowing date by normal randomiser with std of 10
+        shift = self.rng.normal(loc=0, scale=10)
+        shifted_date = self.agmt.crop_start_date + datetime.timedelta(days=shift)
+        # shift sowing date and also campaign date proportionally by the random sowing
+        self._agro_management = self.agmt.update_attributes(crop_start_date=shifted_date,
+                                                            campaign_date=shifted_date - datetime.timedelta(weeks=8))
 
     '''
     Init helpers
