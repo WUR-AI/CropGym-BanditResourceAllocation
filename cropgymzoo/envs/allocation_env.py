@@ -26,38 +26,33 @@ class AllocationBandit(gym.Env):
 
     def __init__(
         self,
-        n_fields: int = 6,
         delta_kg: float = 10.0,
-        total_kg: float = 180.0,
-        warm_up_eps: int = 100,
+        warm_up_eps: int = 10,
         reward_fn=None,
         random_allocation=True,
-        global_budget=None,
         years: list = get_default_years(),
+        seed: int = 107,
     ):
         super().__init__()
 
-        self.global_budget = global_budget
         self.warm_up_eps = warm_up_eps
 
-        self.years = years
+        self.rng, self.seed = gym.utils.seeding.np_random(seed=seed)
 
+        self.years = years
+        self.year = None
+
+        # The MARL env
         self._init_envs()
 
-        assert n_fields >= 1, "n_fields must be positive"
-        self.n_fields = n_fields
-        self.delta = float(delta_kg)
-        self.Q = int(total_kg // delta_kg)          # number of quanta
-        self.super_arms = make_super_arms(n_fields, self.Q)
-        self.super_arm_to_idx = {
-            tuple(a): i for i, a in enumerate(self.super_arms)
-        }
+        # set up per parcel budgets
+        self._init_meta_info()
 
-        self.action_space = spaces.Discrete(len(self.super_arms))
-        self.observation_space = spaces.Dict(
-            {agent: spaces.Box(-np.inf, np.inf, shape = (1,), dtype = np.float32)
-             for agent in self.cropgyms.agents}
-        )
+        # init spaces
+        self.bins = float(delta_kg)
+        self.Q = self._get_farm_quantas()
+        self._init_spaces()
+
         self.reward_fn = reward_fn or self._dummy_yield
 
         self.random_allocation = random_allocation
@@ -68,12 +63,14 @@ class AllocationBandit(gym.Env):
     Gymnasium functions
     '''
     def reset(self, *, seed=None, options=None):
-        assert 'global_budget' in options, "Please reset env with global_budget key!"
 
-        self.global_budget = options.get('global_budget')
+        options = self._get_default_reset_options() if options is None else options
 
-        super().reset(seed=seed)
-        return np.zeros(1, dtype=np.float32), {}
+        assert 'year' in options, "If testing, make sure to pass 'year' in the options dictionary!"
+
+        self.farm.reset(seed=seed, options=options)
+
+        return self._get_context(), self._construct_info()
 
     def step(self, action):
         if self.random_allocation:
@@ -83,36 +80,117 @@ class AllocationBandit(gym.Env):
         else:
             assert self.action_space.contains(action), "invalid action"
             self.info['alloc_quanta'] = self.super_arms[action]
-            reward = float(self.reward_fn(self.info['alloc_quanta'] * self.delta))
+            reward = float(self.reward_fn(self.info['alloc_quanta'] * self.bins))
             return np.zeros(1, dtype=np.float32), reward, True, False, self.info
 
-    def _construct_info(self):
-        self.info = {}
-
-    def _init_envs(self):
-        self.cropgyms = ParallelRLWorkers(
-            global_budget=self.global_budget,
-            warm_up=self.warm_up_eps,
-            years=self.years,
-        )
 
     @staticmethod
     def _get_context_keys():
         return [
             "InitialNO3",
             "InitialNH4",
+            "CropPrice",
             "CropCode",
-            "HistoricalCropPrice",
-            "HistoricalFertilizerPrice",
+            "FertilizerPrice",
+            "HistoricalCropPrices",
+            "HistoricalFertilizerPrices",
             "HistoricalProfit",
             "HistoricalYield",
             "HistoricalBudget",
+            "HistoricalBudgetLeft",
             "HistoricalNUE",
             "HistoricalNsurplus",
             "HistoricalPrecipitation",
-            "HistoricalTemperature",
+            "HistoricalTemperatureMin",
+            "HistoricalTemperatureMax",
             "HistoricalIrrad",
         ]
+
+    '''
+    Helper functions
+    '''
+
+    def _construct_info(self):
+        self.info = {}
+
+    def _get_default_reset_options(self):
+        return {self.rng.choice(self.years)}
+
+    '''
+    Context helper functions
+    '''
+
+    def _get_context(self):
+        return {
+            "InitialNO3": list(self.farm.get_initial_no3().values()),
+            "InitialNH4": list(self.farm.get_initial_nh4().values()),
+            "CropPrice": list(self.farm.get_per_field_crop_price().values()),
+            "CropCode": list(self.farm.get_per_field_crop_code().values()),
+            "FertilizerPrice": list(self.farm.get_per_field_fertilizer_price().values()),  # sample from year
+            "HistoricalCropPrices": self._get_historical_end_season_features('CropPrice'),
+            "HistoricalFertilizerPrices": self._get_historical_end_season_features('FertilizerPrice'),
+            "HistoricalProfit": self._get_historical_end_season_features('Profit'),
+            "HistoricalYield": self._get_historical_end_season_features('Yield'),
+            "HistoricalBudget": self._get_historical_end_season_features('BudgetTotal'),
+            "HistoricalBudgetLeft": self._get_historical_end_season_features('BudgetLeft'),
+            "HistoricalNUE": self._get_historical_end_season_features('Nue'),
+            "HistoricalNsurplus": self._get_historical_end_season_features('Nsurp'),
+            "HistoricalPrecipitation": self._get_historical_weather_features('RAIN'),
+            "HistoricalTemperatureMin": self._get_historical_weather_features('TMIN'),
+            "HistoricalTemperatureMax": self._get_historical_weather_features('TMAX'),
+            "HistoricalIrradiation": self._get_historical_weather_features('IRRAD'),
+        }
+
+    def _get_historical_end_season_features(self, feature):
+        return np.mean([self.farm.warm_up_infos[i][feature][-1] for i in self.farm.warm_up_infos.keys()])
+
+    def _get_historical_weather_features(self, feature):
+        # mean per year now; the alternative, which is commented out, is the big flat mean
+        # np.mean([x for i in self.farm.warm_up_infos for x in self.farm.warm_up_infos[i][feature]])
+        return np.mean([np.mean(self.farm.warm_up_infos[i][feature]) for i in self.farm.warm_up_infos])
+
+    def _get_farm_quantas(self):
+        return {agent: int(self.farm.get_per_parcel_budget(agent)//self.bins) for agent in self.farm.possible_agents}
+
+    '''
+    Init helpers
+    '''
+
+    def _init_envs(self):
+        self.farm = ParallelRLWorkers(
+            warm_up=self.warm_up_eps,
+            years=self.years,
+        )
+
+    def _init_spaces(self):
+        # Set up action space based on farm
+        self.super_arms = make_super_arms(self.n_fields, self.Q)
+        self.super_arm_to_idx = {
+            tuple(a): i for i, a in enumerate(self.super_arms)
+        }
+
+        self.action_space = spaces.Discrete(len(self.super_arms))
+
+        # OK long comprehension
+        self.observation_space = spaces.Dict(
+            {feature: spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float32)
+             if feature not in ["InitialNO3", "InitialNH4", "CropPrice", "CropCode", "FertilizerPrice",]
+             else {feature: [spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float32) for _ in range(self.n_fields)]}
+             for feature in self._get_context_keys()}
+        )
+
+    def _init_meta_info(self):
+        self.n_fields = len(self.farm.possible_agents)
+        self.global_budget = self.farm.global_budget
+        self.parcel_meta_infos = {
+            agent: {'max_budget': self.farm.fields[agent].unwrapped.max_budget_n,
+                    'crop': self.farm.fields[agent].unwrapped.crop,
+                    'crop_code': self.farm.fields[agent].unwrapped.crop_code,
+                    'soil_type': self.farm.fields[agent].unwrapped.soil_type,
+                    'area': self.farm.fields[agent].unwrapped.area, }
+            for agent in self.farm.possible_agents
+        }
+
 
     # ────────────────────────────────────────────────────────────────
     # toy concave reward that prefers balanced splits
@@ -210,4 +288,4 @@ if __name__ == "__main__":
             rewards[j, l] += R
 
         if season % 100 == 0:
-            print(f"S{season:3d}  reward={R:6.2f}  alloc(kg)={alloc_vec*env.delta}")
+            print(f"S{season:3d}  reward={R:6.2f}  alloc(kg)={alloc_vec*env.bins}")

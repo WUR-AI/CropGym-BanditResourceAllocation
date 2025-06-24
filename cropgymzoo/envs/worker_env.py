@@ -11,6 +11,7 @@ import gymnasium as gym
 from gymnasium.spaces import Discrete
 
 from pettingzoo import ParallelEnv
+from torch.distributed.elastic import agent
 
 from cropgymzoo import _FIELDS_CONFIG, _CONFIG_PATH
 
@@ -138,6 +139,9 @@ class ParallelRLWorkers(ParallelEnv):
     def get_field_env_with_idx(self, n: int):
         return self.fields[self.agents[n]]
 
+    def get_per_parcel_budget(self, agent):
+        return self.fields[agent].unwrapped.max_budget_n
+
     def set_global_budget(self, budget: int):
         self.global_budget = budget
 
@@ -152,7 +156,22 @@ class ParallelRLWorkers(ParallelEnv):
             self.infos[agents] = infos[agents]
 
     def _get_global_budget(self):
-        return np.sum([self.fields[agent].unwrapped.max_budget_n for agent in self.possible_agents])
+        return np.sum([self.fields[a].unwrapped.max_budget_n for a in self.possible_agents])
+
+    def get_per_field_crop_code(self):
+        return {a: self.fields[a].unwrapped.crop_code for a in self.possible_agents}
+
+    def get_per_field_crop_price(self):
+        return {a: self.fields[a].unwrapped.crop_price for a in self.possible_agents}
+
+    def get_per_field_fertilizer_price(self):
+        return {a: self.fields[a].unwrapped.fertilizer_price for a in self.possible_agents}
+
+    def get_initial_no3(self):
+        return {a: self.fields[a].unwrapped.infos['NO3'][0] for a in self.possible_agents}
+
+    def get_initial_nh4(self):
+        return {a: self.fields[a].unwrapped.infos['NH4'][0] for a in self.possible_agents}
 
     '''
     Init helpers

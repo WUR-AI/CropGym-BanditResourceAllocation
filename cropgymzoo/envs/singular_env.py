@@ -144,7 +144,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         # field specific stuff
         self.max_budget_n = self.CROP_SOIL_MAX[self.crop][self.soil_type]
-        self.budget_n = self.max_budget_n  # will be overridden
+        self.budget_n = self.max_budget_n
         self.budget_left = self.budget_n
         self.area = area
 
@@ -214,7 +214,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         # reset the env at start
         # Need to change?
-        super().reset(seed=seed, options={'year': self.year, 'budget_n': 100})
+        super().reset(seed=seed, options={'year': self.year})
 
         # self._env_baseline.get_key(self)
 

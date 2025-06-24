@@ -2,7 +2,7 @@ import itertools
 import numpy as np
 
 # ---------------------------------------------------------------------
-# helper: all integer n-tuples whose entries sum to Q   (“stars-and-bars”)
+# helper: all integer n-tuples whose entries sum to Q
 # ---------------------------------------------------------------------
 def make_super_arms(n_fields: int, Q: int):
     """
@@ -18,6 +18,20 @@ def make_super_arms(n_fields: int, Q: int):
         alloc = np.diff(splits) - 1               # vector length n_fields
         super_arms.append(alloc.astype(np.int32))
     return super_arms
+
+
+def make_reduction_super_arms(Q: dict[str, int]) -> list[np.ndarray]:
+    """
+    Q : dict {field_id: Q_i} where Q_i is the *maximum possible* reduction
+        expressed in quanta (i.e. ceil_kg / δ, same δ for all fields).
+    Returns a list of reduction vectors r  of length = n_fields.
+    Order of fields is the key order in Q; store that order for later.
+    """
+    fields   = list(Q.keys())                # keep the order!
+    ranges   = [range(Q[f] + 1) for f in fields]
+    super_arms = [np.array(combo, dtype=np.int16)
+                  for combo in itertools.product(*ranges)]
+    return fields, super_arms
 
 
 def make_super_arms_limited(max_q: list, Q: int):
