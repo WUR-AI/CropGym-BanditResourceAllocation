@@ -126,7 +126,6 @@ def get_aggregated_n_depo_days(
     return aggregated_nh4_depo, aggregated_no3_depo
 
 
-@functools.cache
 def convert_year_to_n_concentration(year: int,
                                     agmt: AgroManagementContainer = None,
                                     loc: tuple = (52.0, 5.5),

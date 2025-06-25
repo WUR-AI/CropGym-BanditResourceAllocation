@@ -652,7 +652,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         """
         Use linear equation fitted on annual global CO2 trend
         """
-        level = 1.6567 * self.year - 2939
+        level = np.clip(1.6567 * self.year - 2939, 290.0, 450.0)
         self.carbon_dioxide_level = level
         return self.carbon_dioxide_level
 
