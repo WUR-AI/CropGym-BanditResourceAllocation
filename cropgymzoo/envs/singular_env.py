@@ -72,18 +72,19 @@ class ParcelEnv(pcse_env.PCSEEnv):
     Crop parameters to add noise to
     '''
 
-    CROP_PARAMS = ["TBASE",  # lower threshold temperature for ageing of leaves
-                   "SPAN",  # life span of leaves growing at 35 Celsius
-                   "TDWI",  # initial total crop dry weight
-                   "CVL",  # efficiency of conversion into leaves
-                   "CVO",  # efficiency of conversion into storage organs
-                   "CVR",  # efficiency of conversion into roots
-                   "CVS",  # efficiency of conversion into stems
-                   "PERDL",  # maximum relative death rate of leaves due to water stress
-                   "RGRLAI_MIN"  # maximum relative increase in LAI
-                   "RNUPTAKEMAX",  # Maximum rate of daily nitrogen uptake
-                   "DVS_N_TRANSL"  # development stage above which N translocation to storage organs does occur
-                   ]
+    CROP_PARAMS = [
+        "TBASE",  # lower threshold temperature for ageing of leaves
+        "SPAN",  # life span of leaves growing at 35 Celsius
+        "TDWI",  # initial total crop dry weight
+        "CVL",  # efficiency of conversion into leaves
+        "CVO",  # efficiency of conversion into storage organs
+        "CVR",  # efficiency of conversion into roots
+        "CVS",  # efficiency of conversion into stems
+        "PERDL",  # maximum relative death rate of leaves due to water stress
+        "RGRLAI_MIN"  # maximum relative increase in LAI
+        "RNUPTAKEMAX",  # Maximum rate of daily nitrogen uptake
+        "DVS_N_TRANSL"  # development stage above which N translocation to storage organs does occur
+    ]
 
     CROP_SOIL_MAX = {
         "winterwheat": {'clay': 245, 'sand': 160, 'silt': 190, 'peat': 160},
@@ -546,15 +547,16 @@ class ParcelEnv(pcse_env.PCSEEnv):
         return 0.0
 
     def _init_infos(self):
-        self.infos = {"Date": [], "SinDay": [], "CosDay": [],
-                      **{name: [] for name in self.crop_features},
-                      **{name: [] for name in self.weather_features},
-                      **{name: [] for name in self.action_features},
-                      **{name: [] for name in self.misc_features},
-                      'Reward': [], 'Action': [], 'Yield': [],
-                      'BudgetTotal': [], 'BudgetLeft': [],
-                      'Nue': [], 'Nsurp': [], 'Profit': [], "CO2": []
-                      }
+        self.infos = {
+            "Date": [], "SinDay": [], "CosDay": [],
+            **{name: [] for name in self.crop_features},
+            **{name: [] for name in self.weather_features},
+            **{name: [] for name in self.action_features},
+            **{name: [] for name in self.misc_features},
+            'Reward': [], 'Action': [], 'Yield': [],
+            'BudgetTotal': [], 'BudgetLeft': [],
+            'Nue': [], 'Nsurp': [], 'Profit': [], "CO2": []
+        }
 
     def _init_random_init_conditions_params(self):
         self.mean_total_N = 50  # kg/ha

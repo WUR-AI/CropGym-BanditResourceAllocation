@@ -32,6 +32,7 @@ class AllocationBandit(gym.Env):
         random_allocation=True,
         years: list = get_default_years(),
         seed: int = 107,
+        action_type: str = 'discrete',
     ):
         super().__init__()
 
@@ -96,6 +97,7 @@ class AllocationBandit(gym.Env):
             "HistoricalFertilizerPrices",
             "HistoricalProfit",
             "HistoricalYield",
+            "HistoricalFertilizerUse",
             "HistoricalBudget",
             "HistoricalBudgetLeft",
             "HistoricalNUE",
@@ -131,6 +133,7 @@ class AllocationBandit(gym.Env):
             "HistoricalFertilizerPrices": self._get_historical_end_season_features('FertilizerPrice'),
             "HistoricalProfit": self._get_historical_end_season_features('Profit'),
             "HistoricalYield": self._get_historical_end_season_features('Yield'),
+            "HistoricalFertilizerUse": self._get_historical_end_season_features('Naction'),
             "HistoricalBudget": self._get_historical_end_season_features('BudgetTotal'),
             "HistoricalBudgetLeft": self._get_historical_end_season_features('BudgetLeft'),
             "HistoricalNUE": self._get_historical_end_season_features('Nue'),
@@ -142,12 +145,24 @@ class AllocationBandit(gym.Env):
         }
 
     def _get_historical_end_season_features(self, feature):
-        return np.mean([self.farm.warm_up_infos[i][feature][-1] for i in self.farm.warm_up_infos.keys()])
+        # returns vector length of n_fields based on average end season feature
+        return [
+            np.mean([
+                self.farm.warm_up_infos[i][agent][feature][-1]
+                for i in self.farm.warm_up_infos
+            ])
+            for agent in self.parcel_meta_infos.keys()
+        ]
 
     def _get_historical_weather_features(self, feature):
-        # mean per year now; the alternative, which is commented out, is the big flat mean
-        # np.mean([x for i in self.farm.warm_up_infos for x in self.farm.warm_up_infos[i][feature]])
-        return np.mean([np.mean(self.farm.warm_up_infos[i][feature]) for i in self.farm.warm_up_infos])
+        # returns vector length of n_fields with mean of weather
+        return [
+            np.mean([
+                np.mean(self.farm.warm_up_infos[i][agent][feature])
+                for i in self.farm.warm_up_infos
+            ])
+            for agent in self.parcel_meta_infos.keys()
+        ]
 
     def _get_farm_quantas(self):
         return {agent: int(self.farm.get_per_parcel_budget(agent)//self.bins) for agent in self.farm.possible_agents}
@@ -173,9 +188,7 @@ class AllocationBandit(gym.Env):
 
         # OK long comprehension
         self.observation_space = spaces.Dict(
-            {feature: spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float32)
-             if feature not in ["InitialNO3", "InitialNH4", "CropPrice", "CropCode", "FertilizerPrice",]
-             else {feature: [spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float32) for _ in range(self.n_fields)]}
+            {feature: [spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float32) for _ in range(self.n_fields)]
              for feature in self._get_context_keys()}
         )
 
