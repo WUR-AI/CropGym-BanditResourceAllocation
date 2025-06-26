@@ -98,26 +98,26 @@ class ParallelRLWorkers(ParallelEnv):
         local_obs, rewards, terminateds, truncateds, infos = {}, {}, {}, {}, {}
 
         # loop through agent steps
-        for agent, env in self.fields.items():
-            if agent in self.agents:  # has agent terminated?
-                o, r, t, tr, i = env.step(actions[agent])
-                local_obs[agent], rewards[agent] = o, r
-                terminateds[agent], truncateds[agent], infos[agent] = t, tr, i
+        for _agent, env in self.fields.items():
+            if _agent in self.agents:  # has agent terminated?
+                o, r, t, tr, i = env.step(actions[_agent])
+                local_obs[_agent], rewards[_agent] = o, r
+                terminateds[_agent], truncateds[_agent], infos[_agent] = t, tr, i
 
         print(f"Worker terminateds: {terminateds}")
 
         # build MARL obs dictionary
-        obs = {agent: {"local": local_obs[agent],
+        obs = {_agent: {"local": local_obs[_agent],
                     "shared": self._build_shared(),
-                    "action_mask": self._get_mask(agent)}
-               for agent in self.agents}
+                    "action_mask": self._get_mask(_agent)}
+               for _agent in self.agents}
 
         print(f"Worker rewards: {rewards}")
 
         scalar_reward = self._process_rewards(rewards)
 
         # rebuild available agents
-        self.agents = [agent for agent in self.agents if not (terminateds[agent] or truncateds[agent])]
+        self.agents = [_agent for _agent in self.agents if not (terminateds[_agent] or truncateds[_agent])]
 
         # update infos so we don't lose information on dying agents
         self._update_infos(infos)
@@ -130,30 +130,30 @@ class ParallelRLWorkers(ParallelEnv):
     Callable helper functions
     '''
 
-    def observation_space(self, agent):
-        return self.observation_spaces[agent]
+    def observation_space(self, _agent):
+        return self.observation_spaces[_agent]
 
-    def action_space(self, agent):
-        return self.action_spaces[agent]
+    def action_space(self, _agent):
+        return self.action_spaces[_agent]
 
     def get_field_env_with_idx(self, n: int):
         return self.fields[self.agents[n]]
 
-    def get_per_parcel_budget(self, agent):
-        return self.fields[agent].unwrapped.max_budget_n
+    def get_per_parcel_budget(self, _agent):
+        return self.fields[_agent].unwrapped.max_budget_n
 
     def set_global_budget(self, budget: int):
         self.global_budget = budget
 
-    def get_field_size(self, agent):
-        return self.fields[agent].unwrapped.area
+    def get_field_size(self, _agent):
+        return self.fields[_agent].unwrapped.area
 
-    def _get_mask(self, agent):
-        return self.fields[agent].unwrapped.action_mask()
+    def _get_mask(self, _agent):
+        return self.fields[_agent].unwrapped.action_mask()
 
     def _update_infos(self, infos):
-        for agents in self.agents:
-            self.infos[agents] = infos[agents]
+        for _agent in self.agents:
+            self.infos[_agent] = infos[_agent]
 
     def _get_global_budget(self):
         return np.sum([self.fields[a].unwrapped.max_budget_n for a in self.possible_agents])

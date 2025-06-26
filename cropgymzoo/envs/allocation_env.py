@@ -132,7 +132,7 @@ class AllocationBandit(gym.Env):
         self.infos = {}
 
     def _get_default_reset_options(self):
-        return {self.rng.choice(self.years)}
+        return {'year': self.rng.choice(self.years)}
 
     '''
     Context helper functions
@@ -251,7 +251,7 @@ class AllocationBandit(gym.Env):
         # ----------------------------------------------------------------
         cap_q = np.empty(n, dtype=int)
         for k, ag in enumerate(agents):
-            env = self.fields[ag]
+            env = self.farm.fields[ag]
             # priority 1: an attribute on the parcel env
             # TODO check this logic
             if hasattr(env, "max_allowed_kg"):
