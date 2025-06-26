@@ -38,6 +38,9 @@ class AllocationBandit(gym.Env):
 
         self.warm_up_eps = warm_up_eps
 
+        assert action_type in ['discrete', 'multidiscrete']
+        self.action_type = action_type
+
         self.rng, self.seed = gym.utils.seeding.np_random(seed=seed)
 
         self.years = years
@@ -77,12 +80,25 @@ class AllocationBandit(gym.Env):
         if self.random_allocation:
             allocations = self._allocate_random_budgets()
             reward = 0
-            return np.zeros(1, dtype=np.float32), reward, True, False, self.info
+            return np.zeros(1, dtype=np.float32), reward, True, False, self.infos
         else:
             assert self.action_space.contains(action), "invalid action"
-            self.info['alloc_quanta'] = self.super_arms[action]
-            reward = float(self.reward_fn(self.info['alloc_quanta'] * self.bins))
-            return np.zeros(1, dtype=np.float32), reward, True, False, self.info
+            self.infos['alloc_quanta'] = self.super_arms[action]
+            reward = self._get_reward()
+            return np.zeros(1, dtype=np.float32), reward, True, False, self.infos
+
+
+    def _get_reward(self):
+        # convert budget left as profit
+        budget_lefts = np.array([self.farm.infos[agent]['BudgetLeft'][-1] for agent in self.parcel_meta_infos.keys()])
+        fertilizer_prices = np.array([self.farm.infos[agent]['FertilizerPrice'][-1] for agent in self.parcel_meta_infos.keys()])
+        budget_left_profit = budget_lefts @ fertilizer_prices
+
+        # add with actual profit
+        profit = np.array([np.sum(self.farm.infos[agent]['Profit']) for agent in self.parcel_meta_infos.keys()])
+        reward = profit + budget_left_profit
+
+        return reward
 
 
     @staticmethod
@@ -113,7 +129,7 @@ class AllocationBandit(gym.Env):
     '''
 
     def _construct_info(self):
-        self.info = {}
+        self.infos = {}
 
     def _get_default_reset_options(self):
         return {self.rng.choice(self.years)}
@@ -165,7 +181,8 @@ class AllocationBandit(gym.Env):
         ]
 
     def _get_farm_quantas(self):
-        return {agent: int(self.farm.get_per_parcel_budget(agent)//self.bins) for agent in self.farm.possible_agents}
+        # return {agent: int(self.farm.get_per_parcel_budget(agent)//self.bins) for agent in self.farm.possible_agents}
+        return {agent: int(200//self.bins) for agent in self.parcel_meta_infos.keys()}
 
     '''
     Init helpers
@@ -179,12 +196,16 @@ class AllocationBandit(gym.Env):
 
     def _init_spaces(self):
         # Set up action space based on farm
-        self.super_arms = make_super_arms(self.n_fields, self.Q)
-        self.super_arm_to_idx = {
-            tuple(a): i for i, a in enumerate(self.super_arms)
-        }
+        self.super_arms = make_super_arms(self.Q)
+        if self.action_type == 'discrete':
+            self.super_arm_to_idx = {
+                tuple(a): i for i, a in enumerate(self.super_arms)
+            }
 
-        self.action_space = spaces.Discrete(len(self.super_arms))
+            self.action_space = spaces.Discrete(len(self.super_arms))
+
+        elif self.action_type == 'continuous':
+            self.action_space = spaces.MultiDiscrete([self._get_farm_quantas()[f] for f in self.parcel_meta_infos.keys()])
 
         # OK long comprehension
         self.observation_space = spaces.Dict(
