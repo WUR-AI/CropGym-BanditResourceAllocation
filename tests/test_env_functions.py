@@ -157,7 +157,6 @@ class TestMultiEnvFunctions(unittest.TestCase):
     def setUp(self):
         self.env = ParallelRLWorkers(
             warm_up=0,
-            global_budget=500,
         )
 
     def test_reset_multi(self):
@@ -234,11 +233,32 @@ class TestMultiEnvFunctions(unittest.TestCase):
 
         self.assertEqual(isinstance(info, dict), True)
 
+class TestMultiEnvTraining(unittest.TestCase):
+    def setUp(self):
+        self.env = ParallelRLWorkers(
+            warm_up=0,
+            random_budget=True,
+        )
+
+    def test_multi_action_mask(self):
+        obs, info = self.env.reset(options={'year': np.random.choice(self.env.years)})
+
+        print(f"Budgets: {[self.env.get_per_parcel_budget(a) for a in self.env.unwrapped.possible_agents]}")
+        print(f"Total: {self.env._get_global_budget()}")
+
+        terms = {agent: False for agent in self.env.unwrapped.agents}
+        while not all(terms.values()):
+            action = {agent: self.env.sample_masked_action(agent)
+                      for agent in self.env.unwrapped.agents}
+            obs, rew, terms, trunc, info = self.env.step(action)
+            print(f"Total action: {np.sum(list(action.values()))}")
+            for agent in self.env.unwrapped.agents:
+                self.assertTrue(self.env.fields[agent].unwrapped.budget_left >= 0)
+
 class TestMultiEnvWarmUp(unittest.TestCase):
     def setUp(self):
         self.env = ParallelRLWorkers(
             warm_up=10,
-            global_budget=500,
         )
 
     def test_warm_multi(self):

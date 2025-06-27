@@ -35,9 +35,10 @@ class ParallelRLWorkers(ParallelEnv):
                  seed: int = 107,
                  warm_up: int = 0,
                  years: list = get_default_years(),
-                 training: bool = False,):
+                 training: bool = False,
+                 random_budget: bool = False,):
 
-        self.seed = seed
+        self.rng, self.seed = gym.utils.seeding.np_random(seed=seed)
         self.years = years
         self.training = training
 
@@ -56,7 +57,9 @@ class ParallelRLWorkers(ParallelEnv):
         self._init_farm_variables()
         self._init_infos()
 
-        self.global_budget = self._get_global_budget()
+        self.random_budget = random_budget
+
+        self.global_budget = self._get_global_max_budget() if not self.random_budget else self._get_global_random_budget()
         self.global_budget_left = self.global_budget
 
         # Do some warm up episodes
@@ -73,14 +76,21 @@ class ParallelRLWorkers(ParallelEnv):
         # reinitialize agents
         self.agents = self.possible_agents.copy()
 
+        # TODO Pass global budget into options if using allocator.
+        self.global_budget = self._get_global_max_budget() if not self.random_budget else self._get_global_random_budget()
+        # allocation must be a dict
+        if 'allocation' in options:
+            for _agent, budget in options['allocation'].items():
+                self.set_per_parcel_budget(_agent, budget)
+            self.set_global_budget(self._get_global_budget())
+
+        self.global_budget_left = self.global_budget
+
         # get obs and infos again
         local_obs, infos = {}, {}
         for agent, env in self.fields.items():
             o, i = env.reset(seed=seed, options=options)
             local_obs[agent], infos[agent] = o, i
-
-        self.global_budget = self._get_global_budget()
-        self.global_budget_left = self.global_budget
 
         obs = {agent: {"local": local_obs[agent],
                     "shared": self.shared_space,
@@ -104,7 +114,7 @@ class ParallelRLWorkers(ParallelEnv):
                 local_obs[_agent], rewards[_agent] = o, r
                 terminateds[_agent], truncateds[_agent], infos[_agent] = t, tr, i
 
-        print(f"Worker terminateds: {terminateds}")
+        # print(f"Worker terminateds: {terminateds}")
 
         # build MARL obs dictionary
         obs = {_agent: {"local": local_obs[_agent],
@@ -112,7 +122,7 @@ class ParallelRLWorkers(ParallelEnv):
                     "action_mask": self._get_mask(_agent)}
                for _agent in self.agents}
 
-        print(f"Worker rewards: {rewards}")
+        # print(f"Worker rewards: {rewards}")
 
         scalar_reward = self._process_rewards(rewards)
 
@@ -127,7 +137,7 @@ class ParallelRLWorkers(ParallelEnv):
         print(self)
 
     '''
-    Callable helper functions
+    Callable helper functions and property
     '''
 
     def observation_space(self, _agent):
@@ -136,13 +146,22 @@ class ParallelRLWorkers(ParallelEnv):
     def action_space(self, _agent):
         return self.action_spaces[_agent]
 
-    def get_field_env_with_idx(self, n: int):
-        return self.fields[self.agents[n]]
+    def sample_masked_action(self, _agent):
+        return self.fields[_agent].unwrapped.sample_masked_action()
 
-    def get_per_parcel_budget(self, _agent):
+    def get_field_env_with_idx(self, n: int):
+        return self.fields[self.possible_agents[n]]
+
+    def get_per_parcel_max_budget(self, _agent):
         return self.fields[_agent].unwrapped.max_budget_n
 
-    def set_global_budget(self, budget: int):
+    def get_per_parcel_budget(self, _agent):
+        return self.fields[_agent].unwrapped.budget_n
+
+    def set_per_parcel_budget(self, _agent, budget):
+        self.fields[_agent].unwrapped.set_budget(budget)
+
+    def set_global_budget(self, budget: float):
         self.global_budget = budget
 
     def get_field_size(self, _agent):
@@ -155,8 +174,11 @@ class ParallelRLWorkers(ParallelEnv):
         for _agent in self.agents:
             self.infos[_agent] = infos[_agent]
 
+    def _get_global_max_budget(self):
+        return np.sum([self.get_per_parcel_max_budget(a) for a in self.possible_agents])
+
     def _get_global_budget(self):
-        return np.sum([self.fields[a].unwrapped.max_budget_n for a in self.possible_agents])
+        return np.sum([self.get_per_parcel_budget(a) for a in self.possible_agents])
 
     def get_per_field_crop_code(self):
         return {a: self.fields[a].unwrapped.crop_code for a in self.possible_agents}
@@ -172,6 +194,24 @@ class ParallelRLWorkers(ParallelEnv):
 
     def get_initial_nh4(self):
         return {a: self.fields[a].unwrapped.infos['NH4'][0] for a in self.possible_agents}
+
+    def _get_global_random_budget(self):
+        # get dict of default max budget
+        parcel_budgets = {a: self.get_per_parcel_max_budget(a) for a in self.possible_agents}
+
+        # get random reductions by choice for each agent limited by the default budget of the parcel
+        # change the logic of random allocation here if needed!
+        choices = {
+            a: self.rng.choice([*np.arange(0., min(200., parcel_budgets[a]), 5.)])
+            for a in self.possible_agents
+        }
+
+        # set random budget reduction for each parcel
+        for (_agent, choice), (_, budget) in zip(choices.items(), parcel_budgets.items()):
+            self.set_per_parcel_budget(_agent, budget-choice)
+
+        self.set_global_budget(self._get_global_budget())
+
 
     '''
     Init helpers
