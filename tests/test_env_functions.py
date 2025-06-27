@@ -85,6 +85,16 @@ class TestSingularEnvFunctions(unittest.TestCase):
         for feature in info:
             self.assertEqual(isinstance(info[feature], list), True)
 
+    def test_action_mask_singular(self):
+        obs, info = self.env.reset(options={'year': np.random.choice(range(1951, 2025))})
+        self.env.unwrapped.set_budget(200)
+
+        self.env.step(18)
+
+        action = self.env.unwrapped.sample_masked_action()
+
+        self.assertIn(action, [0, 1, 2])
+
 class TestSingularTrainingEnvFunctions(unittest.TestCase):
     def setUp(self):
         self.env_training = gym.make('field-1', training=True)

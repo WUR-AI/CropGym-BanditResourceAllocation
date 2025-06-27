@@ -304,6 +304,13 @@ class ParcelEnv(pcse_env.PCSEEnv):
         mask[: max_units + 1] = True  # valid actions are 0 … max_units
         return mask
 
+    def sample_masked_action(self):
+        mask = self.action_mask()
+        valid_actions = np.where(mask)[0]
+        action = np.random.choice(valid_actions)
+        return action
+
+
 
     '''
     Callable class methods
