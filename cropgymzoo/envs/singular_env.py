@@ -720,26 +720,35 @@ class ParcelEnv(pcse_env.PCSEEnv):
             self.infos[feature].append(self._action_features_mapper()[feature])
 
         for feature in self.misc_features:
-            self.infos[feature].append(self._misc_features_mapper()[feature])
+            ((not self.infos[feature] and feature in self.static_features)
+             and self.infos[feature].append(self._misc_features_mapper()[feature]))
 
         self.infos['Reward'].append(reward)
         self.infos['Action'].append(action)
         self.infos['Yield'].append(pcse_output[-1]['WSO'])
-        self.infos['Nue'].append(None if not terminate
-                                 else calculate_nue(n_input=self.reward_container.actions,
-                                                      n_so=pcse_output[-1]['NamountSO'],
-                                                      year=self.date.year,
-                                                      nh4_depo=pcse_output[-1]['RNH4DEPOSTT'],
-                                                      no3_depo=pcse_output[-1]['RNO3DEPOSTT'],
-                                                      ))
-        self.infos['Nsurp'].append(None if not terminate
-                                   else get_surplus_n(n_input=self.reward_container.actions,
-                                                        n_so=pcse_output[-1]['NamountSO'],
-                                                        year=self.date.year,
-                                                        nh4_depo=pcse_output[-1]['RNH4DEPOSTT'],
-                                                        no3_depo=pcse_output[-1]['RNO3DEPOSTT']))
+
+        nue = None if not terminate else calculate_nue(
+            n_input=self.reward_container.actions,
+            n_so=pcse_output[-1]['NamountSO'],
+            year=self.date.year,
+            nh4_depo=pcse_output[-1]['RNH4DEPOSTT'],
+            no3_depo=pcse_output[-1]['RNO3DEPOSTT'],
+        )
+        if nue is not None:
+            self.infos['Nue'].append(nue)
+
+        nsurp = None if not terminate else get_surplus_n(
+            n_input=self.reward_container.actions,
+            n_so=pcse_output[-1]['NamountSO'],
+            year=self.date.year,
+            nh4_depo=pcse_output[-1]['RNH4DEPOSTT'],
+            no3_depo=pcse_output[-1]['RNO3DEPOSTT']
+        )
+        if nsurp is not None:
+            self.infos['Nsurp'].append(nsurp)
+
         self.infos['Profit'].append(self.reward_container.cum_profit)
-        self.infos['CO2'].append(self.carbon_dioxide_level)
+        not self.infos['CO2'] and self.infos['CO2'].append(self.carbon_dioxide_level)
 
     def _action_features_mapper(self):
         return {
@@ -954,6 +963,10 @@ class ParcelEnv(pcse_env.PCSEEnv):
     @property
     def act_len(self):
         return len(self.action_space.shape)
+
+    @property
+    def static_features(self):
+        return ["FertilizerPrice", "CropPrice", "CropCode", "CO2"]
 
     @property
     def loc(self):
