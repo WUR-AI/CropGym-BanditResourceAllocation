@@ -36,11 +36,13 @@ class ParallelRLWorkers(ParallelEnv):
                  warm_up: int = 0,
                  years: list = get_default_years(),
                  training: bool = False,
-                 random_budget: bool = False,):
+                 random_budget: bool = False,
+                 shared_obs: bool = False,):
 
         self.rng, self.seed = gym.utils.seeding.np_random(seed=seed)
         self.years = years
         self.training = training
+        self.shared_obs = shared_obs
 
         with open(_FIELDS_CONFIG) as f:
             dict_fields = yaml.load(f, Loader=yaml.SafeLoader)
@@ -118,7 +120,7 @@ class ParallelRLWorkers(ParallelEnv):
 
         # build MARL obs dictionary
         obs = {_agent: {"local": local_obs[_agent],
-                    "shared": self._build_shared(),
+                    **({"shared": self._build_shared()} if self.shared_obs else {}),
                     "action_mask": self._get_mask(_agent)}
                for _agent in self.agents}
 
@@ -245,7 +247,7 @@ class ParallelRLWorkers(ParallelEnv):
         self.observation_spaces = {
             ag: gym.spaces.Dict({
                 "local": env.observation_space,
-                "shared": self.shared_space,
+                **({"shared": self.shared_space} if self.shared_obs else {}),
                 "action_mask": gym.spaces.MultiBinary(env.unwrapped.action_space.n),
             }) for ag, env in self.fields.items()
         }
