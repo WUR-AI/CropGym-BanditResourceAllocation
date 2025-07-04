@@ -10,8 +10,8 @@ import numpy as np
 import gymnasium as gym
 from gymnasium.spaces import Discrete
 
-from pettingzoo import ParallelEnv
-from torch.distributed.elastic import agent
+from pettingzoo import ParallelEnv, AECEnv
+from pettingzoo.utils import agent_selector
 
 from cropgymzoo import _FIELDS_CONFIG, _CONFIG_PATH
 
@@ -19,7 +19,7 @@ from cropgymzoo.envs.singular_env import ParcelEnv
 from cropgymzoo.utils.defaults import get_default_years
 
 
-class ParallelRLWorkers(ParallelEnv):
+class ParallelRLWorkers(AECEnv):
     metadata = {
         "name": "CropGymZooEnv",
     }
@@ -37,12 +37,16 @@ class ParallelRLWorkers(ParallelEnv):
                  years: list = get_default_years(),
                  training: bool = False,
                  random_budget: bool = False,
-                 shared_obs: bool = False,):
-
+                 shared_obs: bool = False,
+                 render: bool = False,):
+        super().__init__()
+        self.render_mode = None if not render else 'human'
         self.rng, self.seed = gym.utils.seeding.np_random(seed=seed)
         self.years = years
         self.training = training
         self.shared_obs = shared_obs
+
+        self.has_reset = False
 
         with open(_FIELDS_CONFIG) as f:
             dict_fields = yaml.load(f, Loader=yaml.SafeLoader)
@@ -50,8 +54,10 @@ class ParallelRLWorkers(ParallelEnv):
         self.n_agents = len(dict_fields)
         self.agents = [i for i in dict_fields.keys()]
         self.possible_agents = self.agents.copy()
+        self._agent_selector = agent_selector(self.possible_agents)
 
-        self.current_step = 0
+        self.current_step = {agent: 0 for agent in self.possible_agents}
+        self.current_obs = {agent: {} for agent in self.possible_agents}
 
         # init important stuff
         self._init_fields()
@@ -64,16 +70,19 @@ class ParallelRLWorkers(ParallelEnv):
         self.global_budget = self._get_global_max_budget() if not self.random_budget else self._get_global_random_budget()
         self.global_budget_left = self.global_budget
 
+        self.total_area = np.sum([self.get_field_size(agent) for agent in self.possible_agents])
+
         # Do some warm up episodes
         self.warm_up_infos = None
         if warm_up > 0:
             self.warm_up_infos = self._warm_up(warm_up)
 
     def reset(self, seed=None, options=None):
+        options = options or {'year': self.rng.choice(self.years)}
 
         # reset infos and variables
         self._init_infos()
-        self.current_step = 0
+        self.current_step = {agent: 0 for agent in self.possible_agents}
 
         # reinitialize agents
         self.agents = self.possible_agents.copy()
@@ -88,52 +97,74 @@ class ParallelRLWorkers(ParallelEnv):
 
         self.global_budget_left = self.global_budget
 
-        # get obs and infos again
-        local_obs, infos = {}, {}
+        # reset each field and get obs and infos again
+        infos = {}
         for agent, env in self.fields.items():
-            o, i = env.reset(seed=seed, options=options)
-            local_obs[agent], infos[agent] = o, i
+            _, info = env.reset(seed=seed, options=options)
+            infos[agent] = info
 
-        obs = {agent: {"local": local_obs[agent],
-                    "shared": self.shared_space,
-                    "action_mask": self._get_mask(agent)}
-               for agent in self.agents}
+        # obs = {agent: {"observation": local_obs[agent],
+        #                **({"shared": self.shared_space} if self.shared_obs else {}),
+        #             "action_mask": self._get_mask(agent)}
+        #        for agent in self.agents}
 
+        self.rewards = {ag: 0.0 for ag in self.possible_agents}
+        self._cumulative_rewards = {ag: 0.0 for ag in self.possible_agents}
+        self.terminations = {ag: False for ag in self.possible_agents}
+        self.truncations = {ag: False for ag in self.possible_agents}
         self._update_infos(infos)
 
-        return obs, infos
+        # Still works sort-of parallel now: could change to date-based
+        # Is it useful to change it to date-based? Maybe for future functionality and tasks
+        self._agent_selector.reinit(self.agents)
+        self.agent_selection = self._agent_selector.reset()
 
-    def step(self, actions: dict[str, int]):
-        self.current_step += 1
+        # AECEnv doesn't return anything for reset()
 
-        # init dict for each variable
-        local_obs, rewards, terminateds, truncateds, infos = {}, {}, {}, {}, {}
+   # following AEC env API
+    def step(self, action: dict[str, int] | int | None):
+        # AEC Part
+        agent = self.agent_selection
 
-        # loop through agent steps
-        for _agent, env in self.fields.items():
-            if _agent in self.agents:  # has agent terminated?
-                o, r, t, tr, i = env.step(actions[_agent])
-                local_obs[_agent], rewards[_agent] = o, r
-                terminateds[_agent], truncateds[_agent], infos[_agent] = t, tr, i
+        self.current_step[agent] += 1
 
-        # print(f"Worker terminateds: {terminateds}")
+        # need to call this apparently to make sure dead agent doesn't
+        # get called again in the iterator
+        if self.terminations[agent] or self.truncations[agent]:
+            self._was_dead_step(action)
+            self._agent_selector.reinit(self.agents)
+            if self.agents:  # avoid empty-list call
+                self.agent_selection = self._agent_selector.next()
+            return
 
-        # build MARL obs dictionary
-        obs = {_agent: {"local": local_obs[_agent],
-                    **({"shared": self._build_shared()} if self.shared_obs else {}),
-                    "action_mask": self._get_mask(_agent)}
-               for _agent in self.agents}
+        # step the gymnasium PCSE parcel
+        obs_parcel, rew_parcel, ter_parcel, tru_parcel, info_parcel = self.fields[agent].step(action)
 
-        # print(f"Worker rewards: {rewards}")
+        # scaled reward based on farm area
+        rew_parcel = self._process_rewards(rew_parcel)
 
-        scalar_reward = self._process_rewards(rewards)
+        # write results into the mandatory dicts
+        # observations are obtained by calling self.observe()
+        self.rewards.update({agent: rew_parcel})
+        self.terminations.update({agent: ter_parcel})
+        self.truncations.update({agent: tru_parcel})
+        self.infos.update({agent: info_parcel})
 
-        # rebuild available agents
-        self.agents = [_agent for _agent in self.agents if not (terminateds[_agent] or truncateds[_agent])]
+        # advance to next agent in the cycle
+        self._accumulate_rewards()  # provided by AECEnv
 
-        # update infos so we don't lose information on dying agents
-        self._update_infos(infos)
-        return obs, scalar_reward, terminateds, truncateds, self.infos
+        self.agent_selection = self._agent_selector.next()
+
+        # AECEnv doesn't return anything for reset()
+
+    def observe(self, agent) -> dict:
+        obs = self.fields[agent].unwrapped.observe()
+        mask = self.fields[agent].unwrapped.action_mask()
+        return {
+            "observation": obs,
+            **({"shared": self._build_shared()} if self.shared_obs else {}),
+            "action_mask": mask,
+        }
 
     def render(self):
         print(self)
@@ -246,7 +277,7 @@ class ParallelRLWorkers(ParallelEnv):
         # observation_spaces from locals, shared and action mask
         self.observation_spaces = {
             ag: gym.spaces.Dict({
-                "local": env.observation_space,
+                "observation": env.observation_space,
                 **({"shared": self.shared_space} if self.shared_obs else {}),
                 "action_mask": gym.spaces.MultiBinary(env.unwrapped.action_space.n),
             }) for ag, env in self.fields.items()
@@ -260,12 +291,10 @@ class ParallelRLWorkers(ParallelEnv):
         """
         Uses the "weighted by area" policy reward.
         """
+        # Used for parallel agents
+        # weighted_reward = np.sum([rewards[agent] * self.get_field_size(agent) for agent in self.agents])
 
-        total_area = np.sum([self.get_field_size(agent) for agent in self.agents])
-
-        weighted_reward = np.sum([rewards[agent] * self.get_field_size(agent) for agent in self.agents])
-
-        reward = weighted_reward / total_area
+        reward = rewards / self.total_area
 
         return reward
 

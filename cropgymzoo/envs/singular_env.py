@@ -338,6 +338,12 @@ class ParcelEnv(pcse_env.PCSEEnv):
         # TODO fill in
         ...
 
+    #For AECEnv in the MultiEnv setting
+    def observe(self) -> dict | np.ndarray:
+        output_pcse = self.model.get_output()
+        obs = super()._get_observation(output_pcse)
+        return self._observation(obs)
+
     '''
     Helper functions for various things
     '''
