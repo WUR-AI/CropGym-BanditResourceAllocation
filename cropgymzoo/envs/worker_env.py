@@ -161,6 +161,7 @@ class ParallelRLWorkers(AECEnv):
         obs = self.fields[agent].unwrapped.observe()
         mask = self.fields[agent].unwrapped.action_mask()
         return {
+            "agent_id": str(agent),
             "observation": obs,
             **({"shared": self._build_shared()} if self.shared_obs else {}),
             "action_mask": mask,
