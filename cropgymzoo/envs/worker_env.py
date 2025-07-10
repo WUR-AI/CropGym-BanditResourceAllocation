@@ -149,6 +149,9 @@ class ParallelRLWorkers(AECEnv):
         # advance to next agent in the cycle
         self._accumulate_rewards()  # provided by AECEnv
 
+        # update global budget left
+        self.global_budget_left = self._get_global_budget_left()
+
         self.agent_selection = self._agent_selector.next()
 
         # AECEnv doesn't return anything for reset()
@@ -188,6 +191,9 @@ class ParallelRLWorkers(AECEnv):
     def get_per_parcel_budget(self, _agent):
         return self.fields[_agent].unwrapped.budget_n
 
+    def get_per_parcel_budget_left(self, _agent):
+        return self.fields[_agent].unwrapped.budget_left
+
     def set_per_parcel_budget(self, _agent, budget):
         self.fields[_agent].unwrapped.set_budget(budget)
 
@@ -209,6 +215,9 @@ class ParallelRLWorkers(AECEnv):
 
     def _get_global_budget(self):
         return np.sum([self.get_per_parcel_budget(a) for a in self.possible_agents])
+
+    def _get_global_budget_left(self):
+        return np.sum([self.get_per_parcel_budget_left(a) for a in self.possible_agents])
 
     def get_per_field_crop_code(self):
         return {a: self.fields[a].unwrapped.crop_code for a in self.possible_agents}
