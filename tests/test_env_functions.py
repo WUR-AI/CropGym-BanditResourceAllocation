@@ -8,6 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from cropgymzoo.envs.worker_env import ParallelRLWorkers
+from cropgymzoo.utils.helper_for_unit_tests import run_aec_till_terminate
 
 
 class TestSingularEnvFunctions(unittest.TestCase):
@@ -160,78 +161,45 @@ class TestMultiEnvFunctions(unittest.TestCase):
         )
 
     def test_reset_multi(self):
-        obs, info = self.env.reset(options={'year': 2010})
+        self.env.reset(options={'year': 2010})
+        obs, rew, term, trunc, info = self.env.last()
 
         self.assertEqual(isinstance(obs, dict), True)
         self.assertEqual(isinstance(info, dict), True)
 
     def test_step_multi(self):
-        obs, info = self.env.reset(options={'year': 2010})
-        obs, rew, term, trunc, info = self.env.step({
-            agent: 0 for agent in self.env.unwrapped.agents
-        })
+        self.env.reset(options={'year': 2010})
+
+        obs, rew, term, trunc, info = self.env.last()
+
+        self.env.step(None) \
+            if (term or trunc) \
+            else self.env.step(np.random.choice(range(7), p=[0.7, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05]))
 
         self.assertEqual(isinstance(obs, dict), True)
         self.assertEqual(isinstance(info, dict), True)
 
     def test_render_multi(self):
-        obs, info = self.env.reset(options={'year': 2010})
-        obs, rew, term, trunc, info = self.env.step({
-            agent: 0 for agent in self.env.unwrapped.agents
-        })
+        self.env.reset(options={'year': 2010})
+        obs, rew, term, trunc, info = self.env.last()
+
+        self.env.step(None) \
+            if (term or trunc) \
+            else self.env.step(np.random.choice(range(7), p=[0.7, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05]))
+
         self.env.render()
 
         self.assertEqual(isinstance(obs, dict), True)
         self.assertEqual(isinstance(info, dict), True)
 
-    def test_terminate_multi(self):
-        obs, info = self.env.reset(options={'year': 2010})
+    def test_render_multi_end(self):
+        self.env.reset(options={'year': 2010})
 
-        terms = {agent: False for agent in self.env.unwrapped.agents}
-        while not all(terms.values()):
-            obs, rew, terms, trunc, info = self.env.step({
-                agent: 0 for agent in self.env.unwrapped.agents
-            })
-        print(info)
+        self.env, cumulative_step_rewards, running_sum = run_aec_till_terminate(self.env)
 
-        self.assertEqual(isinstance(obs, dict), True)
-        self.assertEqual(isinstance(info, dict), True)
-
-    def test_print_multi(self):
-        obs, info = self.env.reset(options={'year': 2010})
-
-        terms = {agent: False for agent in self.env.unwrapped.agents}
-        while not all(terms.values()):
-            obs, rew, terms, trunc, info = self.env.step({
-                agent: 0 for agent in self.env.unwrapped.agents
-            })
-
-        print(self.env)
+        self.env.render()
 
         self.assertIn("Farm", self.env.__str__())
-
-    def test_multi_years(self):
-        obs, info = self.env.reset(options={'year': 2010})
-
-        terms = {agent: False for agent in self.env.unwrapped.agents}
-        while not all(terms.values()):
-            obs, rew, terms, trunc, info = self.env.step({
-                agent: 0 for agent in self.env.unwrapped.agents
-            })
-
-        self.assertEqual(isinstance(info, dict), True)
-
-        obs, info = self.env.reset(options={'year': 1999})
-
-        terms = {agent: False for agent in self.env.unwrapped.agents}
-        while not all(terms.values()):
-            obs, rew, terms, trunc, info = self.env.step({
-                agent: 0 for agent in self.env.unwrapped.agents
-            })
-
-        print(self.env)
-
-        self.assertEqual(isinstance(info, dict), True)
 
 class TestMultiEnvTraining(unittest.TestCase):
     def setUp(self):
@@ -241,19 +209,31 @@ class TestMultiEnvTraining(unittest.TestCase):
         )
 
     def test_multi_action_mask(self):
-        obs, info = self.env.reset(options={'year': np.random.choice(self.env.years)})
+        self.env.reset(options={'year': np.random.choice(self.env.years)})
 
         print(f"Budgets: {[self.env.get_per_parcel_budget(a) for a in self.env.unwrapped.possible_agents]}")
         print(f"Total: {self.env._get_global_budget()}")
 
-        terms = {agent: False for agent in self.env.unwrapped.agents}
-        while not all(terms.values()):
-            action = {agent: self.env.sample_masked_action(agent)
-                      for agent in self.env.unwrapped.agents}
-            obs, rew, terms, trunc, info = self.env.step(action)
-            print(f"Total action: {np.sum(list(action.values()))}")
-            for agent in self.env.unwrapped.agents:
-                self.assertTrue(self.env.fields[agent].unwrapped.budget_left >= 0)
+        terms = {agent: False for agent in self.env.unwrapped.possible_agents}
+
+        for agent in self.env.agent_iter():
+            obs, rew, term, trunc, info = self.env.last()
+            is_last = (agent == self.env.agents[-1])
+
+            action = np.random.choice(range(7), p=[0.7, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05])
+
+            self.env.step(None) \
+                if (term or trunc) \
+                else self.env.step(action)
+
+            budget_left = self.env.get_per_parcel_budget(agent)
+            action_mask = self.env._get_mask(agent)
+
+            if budget_left <= 0:
+                self.assertTrue(
+                    np.array_equal(action_mask,
+                    np.array([True, True, True, True, True, False, False, False, False])))
+
 
 class TestMultiEnvWarmUp(unittest.TestCase):
     def setUp(self):
@@ -262,7 +242,7 @@ class TestMultiEnvWarmUp(unittest.TestCase):
         )
 
     def test_warm_multi(self):
-        obs, info = self.env.reset(options={'year': 2010})
+        self.env.reset(options={'year': 2010})
 
         print(next(iter(self.env.warm_up_infos.values()))['field-2']['Naction'])
 

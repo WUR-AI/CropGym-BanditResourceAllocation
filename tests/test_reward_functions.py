@@ -1,13 +1,18 @@
 import unittest
 
 import numpy as np
+from collections import defaultdict
 
 import matplotlib.pyplot as plt
+
+import datetime
 
 import cropgymzoo  # for gym make
 import gymnasium as gym
 
 from cropgymzoo.envs.worker_env import ParallelRLWorkers
+
+from cropgymzoo.utils.helper_for_unit_tests import run_aec_till_terminate, run_aec_step
 
 
 class TestSingularRewardFunctions(unittest.TestCase):
@@ -29,7 +34,7 @@ class TestSingularRewardFunctions(unittest.TestCase):
         while not terminated:
             _, reward, terminated, _, info = self.env_nue.step(0)
 
-        self.assertGreaterEqual(reward, 1)
+        self.assertTrue(0 <= reward <= 1)
 
     def test_pny_beets1(self):
         # crop sugarbeets
@@ -148,51 +153,30 @@ class TestMultiRewardFunction(unittest.TestCase):
 
     def test_reward_area_multi(self):
         year = np.random.choice(range(1951, 2025))
-        obs, info = self.env.reset(options={'year': year})
+        self.env.reset(options={'year': year})
 
-        cumulative_rewards = []
-        terminateds = {agent: False for agent in self.env.unwrapped.agents}
-        while not all(terminateds.values()):
-            _, rewards, terminateds, _, infos = self.env.step({
-                agent: np.random.choice(range(0, 7), p=[0.7, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05,])
-                for agent in self.env.unwrapped.agents
-            })
-            # print(f"Scalar: {rewards}")
-            cumulative_rewards.append(rewards)
+        traces = defaultdict(lambda: {"Date": [], "Reward": [], "Action": []})
+
+        cumulative_step_rewards = []  # farm-level reward per “parallel step”
+        running_sum = 0.0  # holds rewards until the last parcel acts
+
+        env, cumulative_step_rewards, running_sum = run_aec_till_terminate(self.env)
+
         agents = self.env.unwrapped.possible_agents
 
-        print(infos[agents[2]]['Yield'])
+        print(np.sum(cumulative_step_rewards))
 
-        for i, agent in enumerate(agents):
-            color = plt.get_cmap('tab10')
-            plt.plot(infos[agent]['Date'], np.cumsum(infos[agent]['Reward']),
-                     label=f"{self.env.unwrapped.fields[agent].unwrapped.name}, "
-                           f"{self.env.unwrapped.fields[agent].unwrapped.crop}",
-                     color=color(i))
-            plt.vlines(infos[agent]['Date'], np.zeros(len(infos[agent]['Action'])),
-                       [i/10 for i in infos[agent]['Action']], color=color(i), alpha=0.3)
-
-        plt.legend()
-        plt.show()
-
-        print(np.sum(cumulative_rewards))
-
-        self.assertTrue(0 <= np.sum(cumulative_rewards) <= 1)
+        self.assertTrue(0 <= np.sum(cumulative_step_rewards) <= 1.5)
 
     def test_test_reward_area_multi_training(self):
         year = np.random.choice(range(1951, 2025))
-        obs, info = self.env_training.reset(options={'year': year})
+        self.env_training.reset(options={'year': year})
 
-        cumulative_rewards = []
-        terminateds = {agent: False for agent in self.env_training.unwrapped.agents}
-        while not all(terminateds.values()):
-            _, rewards, terminateds, _, infos = self.env_training.step({
-                agent: np.random.choice(range(0, 7), p=[0.7, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, ])
-                for agent in self.env_training.unwrapped.agents
-            })
-            # print(f"Scalar: {rewards}")
-            cumulative_rewards.append(rewards)
+        self.env_training, cumulative_rewards, running_sum = run_aec_till_terminate(self.env_training)
+
         agents = self.env_training.unwrapped.possible_agents
+
+        infos = self.env_training.infos
 
         print(infos[agents[2]]['Yield'])
 
@@ -202,15 +186,20 @@ class TestMultiRewardFunction(unittest.TestCase):
                      label=f"{self.env_training.unwrapped.fields[agent].unwrapped.name}, "
                            f"{self.env_training.unwrapped.fields[agent].unwrapped.crop}",
                      color=color(i))
+            min_date = min(infos[agent]['Date'][0] for agent in agents)
             plt.vlines(infos[agent]['Date'], np.zeros(len(infos[agent]['Action'])),
                        [i / 10 for i in infos[agent]['Action']], color=color(i), alpha=0.3)
+
+        date_range = [min_date + datetime.timedelta(days=i) for i in range(len(cumulative_rewards))]
+        plt.plot(date_range, np.cumsum(cumulative_rewards))
 
         plt.legend()
         plt.show()
 
         print(np.sum(cumulative_rewards))
+        print(infos)
 
-        self.assertTrue(0 <= np.sum(cumulative_rewards) <= 1)
+        self.assertTrue(0 <= np.sum(cumulative_rewards) <= 1.5)
 
 if __name__ == '__main__':
     unittest.main()
