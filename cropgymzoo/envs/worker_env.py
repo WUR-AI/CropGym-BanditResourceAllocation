@@ -316,7 +316,6 @@ class ParallelRLWorkers(AECEnv):
         # observation_spaces from locals, shared and action mask
         self.observation_spaces = {
             ag: gym.spaces.Dict({
-                "agent_id": str(ag),
                 "observation": env.observation_space,
                 **({"shared": self.shared_space} if self.shared_obs else {}),
                 "action_mask": gym.spaces.MultiBinary(env.unwrapped.action_space.n),
