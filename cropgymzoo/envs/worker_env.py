@@ -103,12 +103,8 @@ class ParallelRLWorkers(AECEnv):
             _, info = env.reset(seed=seed, options=options)
             infos[agent] = info
 
-        # obs = {agent: {"observation": local_obs[agent],
-        #                **({"shared": self.shared_space} if self.shared_obs else {}),
-        #             "action_mask": self._get_mask(agent)}
-        #        for agent in self.agents}
-
         self.rewards = {ag: 0.0 for ag in self.possible_agents}
+        # self._clear_rewards()
         self._cumulative_rewards = {ag: 0.0 for ag in self.possible_agents}
         self.terminations = {ag: False for ag in self.possible_agents}
         self.truncations = {ag: False for ag in self.possible_agents}
@@ -245,6 +241,39 @@ class ParallelRLWorkers(AECEnv):
             self.set_per_parcel_budget(_agent, budget-choice)
 
         self.set_global_budget(self._get_global_budget())
+
+    '''
+    Overriding AECEnv methods
+    '''
+
+    def _was_dead_step(self, action) -> None:
+        if action is not None:
+            raise ValueError("when an agent is dead, the only valid action is None")
+
+        # removes dead agent
+        agent = self.agent_selection
+        assert (
+            self.terminations[agent] or self.truncations[agent]
+        ), "an agent that was not dead as attempted to be removed"
+        # deleting the deletion of the agents dicts... Why did they do this?
+        # make sure to delete everything just during reset
+        self.agents.remove(agent)
+
+        # finds next dead agent or loads next live agent (Stored in _skip_agent_selection)
+        _deads_order = [
+            agent
+            for agent in self.agents
+            if (self.terminations[agent] or self.truncations[agent])
+        ]
+        if _deads_order:
+            if getattr(self, "_skip_agent_selection", None) is None:
+                self._skip_agent_selection = self.agent_selection
+            self.agent_selection = _deads_order[0]
+        else:
+            if getattr(self, "_skip_agent_selection", None) is not None:
+                assert self._skip_agent_selection is not None
+                self.agent_selection = self._skip_agent_selection
+            self._skip_agent_selection = None
 
 
     '''

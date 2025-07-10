@@ -248,11 +248,6 @@ class ParcelEnv(pcse_env.PCSEEnv):
         # append new information to the infos dict
         self._populate_infos(pcse_output, action, reward, terminated)
 
-        # print(f"{self.name}. Step: {self.n_steps}. Reward: {reward}. Terminated: {terminated}")
-
-        # info = self.grab_infos(pcse_output, info, reward, growth)
-
-
         return obs, reward, terminated, truncated, self.infos
 
     def reset(self, seed=None, options=None, **kwargs):
@@ -726,8 +721,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
             self.infos[feature].append(self._action_features_mapper()[feature])
 
         for feature in self.misc_features:
-            ((not self.infos[feature] and feature in self.static_features)
-             and self.infos[feature].append(self._misc_features_mapper()[feature]))
+            self.infos[feature].append(self._misc_features_mapper()[feature])
 
         self.infos['Reward'].append(reward)
         self.infos['Action'].append(action)
@@ -766,10 +760,10 @@ class ParcelEnv(pcse_env.PCSEEnv):
         }
 
     def _misc_features_mapper(self):
-        encode_day = self._encode_doy(self.date)
+        sin_d, cos_d = self._encode_doy(self.date)
         return {
-            'SinDay': encode_day[0],
-            'CosDay': encode_day[1],
+            'SinDay': sin_d,
+            'CosDay': cos_d,
             'FertilizerPrice': self.fertilizer_price,
             'CropPrice': self.crop_price,
             'CropCode': self._get_crop_code(),
