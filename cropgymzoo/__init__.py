@@ -21,6 +21,8 @@ _FIELDS_CONFIG = os.path.join(_CONFIG_PATH, 'fields.yaml')
 _CROPS_CONFIG = os.path.join(_CONFIG_PATH, 'crop_info.yaml')
 _WOFOST_CONFIG = os.path.join(_CONFIG_PATH, 'Wofost81_NWLP_MLWB_SNOMIN.conf')
 
+_DEFAULT_LOGDIR = os.path.join(_BASE_PATH, 'logs')
+
 
 # Initialize singular gymnasium envs
 def register_predefined_cropgym_instances() -> None:
@@ -44,7 +46,7 @@ def register_predefined_cropgym_instances() -> None:
                 'area': field['area'],
                 'reward': 'PNY',
                 'original': True,
-                'flatten_obs': False,
+                'flatten_obs': True,
                 'type': field['type'],
             },
 

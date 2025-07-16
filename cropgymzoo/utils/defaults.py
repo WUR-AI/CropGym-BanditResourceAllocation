@@ -70,7 +70,7 @@ def get_default_location():
 
 
 def get_default_years():
-    return [*range(1951, 2025)]
+    return [*range(1951, 2024)]
 
 
 def get_default_train_years():
