@@ -8,7 +8,7 @@ import numpy as np
 from cropgymzoo.envs.singular_env import ParcelEnv
 from cropgymzoo.envs.worker_env import ParallelRLWorkers
 
-from cropgymzoo.train import VecNormObs
+from cropgymzoo.utils.wrappers import VecNormObs
 
 try:
     from tianshou.env import PettingZooEnv, SubprocVectorEnv
