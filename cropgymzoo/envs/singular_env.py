@@ -312,12 +312,12 @@ class ParcelEnv(pcse_env.PCSEEnv):
     '''
 
     def overwrite_year(self, year):
+        self.year = year
         self.agro_management = self.agmt.update_attributes(crop_start_date=lambda d: d.replace(year=year),
-                                                           campaign_date=lambda d: d.replace(year=year),)
+                                                           campaign_date=lambda d: self._safe_replace_year(d, year),)
         if self.reward_function in reward_functions_with_baseline() and self.original is True:
             self.baseline_env.agro_management = self.agmt.update_attributes(crop_start_date=lambda d: d.replace(year=year),
-                                                                            campaign_date=lambda d: d.replace(year=year),)
-        self.year = year
+                                                                            campaign_date=lambda d: self._safe_replace_year(d, year),)
 
     def render(self, mode="human"):
         pass
@@ -342,6 +342,14 @@ class ParcelEnv(pcse_env.PCSEEnv):
     '''
     Helper functions for various things
     '''
+
+    @staticmethod
+    def _safe_replace_year(d, year):
+        try:
+            return d.replace(year=year)
+        except ValueError:
+            # fallback for Feb 29 to Feb 28
+            return d.replace(year=year, day=28)
 
     def _reset_prices(self):
         self.fertilizer_price = self._get_fertilizer_price()
@@ -495,32 +503,22 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         misc_values = [misc[m] for m in self.misc_features]
 
-        # shape = (n_timesteps, n_weather_vars)  →  ravel() = row-major flatten
         weather_matrix = np.vstack([weather[f][:self.timestep] for f in self.weather_features]).T
         weather_values = weather_matrix.ravel()
 
         if self.flatten_obs:
             return np.array(crop_values + action_values + misc_values + list(weather_values), dtype=np.float32)
 
-        obs = {}
-
-        # crop scalars
-        for k, v in zip(self.crop_features, crop_values):
-            obs[k] = float(v)
-
-        # action scalars
-        for k, v in zip(self.action_features, action_values):
-            obs[k] = float(v)
-
-        # misc scalars
-        for k, v in zip(self.misc_features, misc_values):
-            obs[k] = float(v)
-
-        # weather scalars — unroll the (time, variable) matrix
-        # key format: "<weather_feature>_<time_index>"
-        for var_idx, var_name in enumerate(self.weather_features):
-            for t in range(self.timestep):
-                obs[f"{var_name}_{t}"] = float(weather_matrix[t, var_idx])
+        obs = {
+            **{k: float(v) for k, v in zip(self.crop_features, crop_values)},
+            **{k: float(v) for k, v in zip(self.action_features, action_values)},
+            **{k: float(v) for k, v in zip(self.misc_features, misc_values)},
+            **{
+                f"{var_name}_{t}": float(weather_matrix[t, var_idx])
+                for var_idx, var_name in enumerate(self.weather_features)
+                for t in range(self.timestep)
+            }
+        }
 
         return obs
 
@@ -530,7 +528,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         if self.flatten_obs:
             return gym.spaces.Box(-np.inf, np.inf, shape=(nvars,), dtype=np.float32)
         else:
-            return gym.spaces.Dict({name: gym.spaces.Box(-np.inf, np.inf, shape=(), dtype=np.float32)
+            return gym.spaces.Dict({name: gym.spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float32)
                                    for name in self._get_obs_keys()})
 
     @functools.lru_cache(maxsize=None)
@@ -599,7 +597,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
             crop: {
                 int(year): val
                 for year, val in df_crop[crop].items()
-                if not pd.isna(val)  # keep only non-NaN entries
+                if not pd.isna(val)
             }
             for crop in df_crop.columns  # each remaining column is a crop
         }
@@ -607,7 +605,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self.fertilizer_prices = {
             int(year): val
             for year, val in df_fert["Value"].items()
-            if not pd.isna(val)  # keep only non-NaN entries
+            if not pd.isna(val)
         }
 
         # initialize price
@@ -927,7 +925,15 @@ class ParcelEnv(pcse_env.PCSEEnv):
             self.zero_nitrogen_env_storage = ZeroNitrogenEnvStorage()
 
     def _init_obs_keys(self):
-        self.obs_keys = self.crop_features + self.action_features + self.weather_features
+        self.obs_keys = tuple(
+            self.crop_features +
+            self.action_features +
+            list(
+                f"{name}_{t}"
+                for name in self.weather_features
+                for t in range(self.timestep)
+            )
+        )
 
     def get_harvest_year(self):
         return self.agmt.crop_start_date

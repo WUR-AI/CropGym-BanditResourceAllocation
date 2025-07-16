@@ -179,6 +179,9 @@ class ParallelRLWorkers(AECEnv):
     def action_space(self, _agent):
         return self.action_spaces[_agent]
 
+    def sample_observation_space_agent(self):
+        return self.observation_space(self.possible_agents[0])['observation']
+
     def sample_masked_action(self, _agent):
         return self.fields[_agent].unwrapped.sample_masked_action()
 
