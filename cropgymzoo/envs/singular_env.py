@@ -22,7 +22,7 @@ from cropgymzoo.utils.rewards import (Rewards, ActionsContainer, reward_function
                                       reward_functions_end, calculate_nue)
 from cropgymzoo.utils.nitrogen_helpers import (get_surplus_n, get_nh4_deposition_pcse,
                                                get_no3_deposition_pcse, convert_year_to_n_concentration, m2_to_ha,
-                                               is_leap)
+                                               is_leap, co2_levels)
 import cropgymzoo.envs.pcse_env as pcse_env
 from cropgymzoo.utils.defaults import (get_wofost_default_crop_features,
                                        get_default_weather_features,
@@ -656,10 +656,11 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
     def _get_carbon_dioxide_levels(self):
         """
-        Use linear equation fitted on annual global CO2 trend
+        Use CMIP5 rcp54 recommendations; range from year 1765 - 2500
         """
-        level = np.clip(1.6567 * self.year - 2939, 290.0, 450.0)
-        self.carbon_dioxide_level = level
+        # deprecated linear equation
+        # level = np.clip(1.6567 * self.year - 2939, 290.0, 450.0)
+        self.carbon_dioxide_level = co2_levels()[self.year]
         return self.carbon_dioxide_level
 
     def _special_init_conditions(self):
@@ -809,7 +810,13 @@ class ParcelEnv(pcse_env.PCSEEnv):
         with open(os.path.join(_SOILGRIDS_PATH, f'soil_{self.location[1]}_{self.location[0]}.yaml'), 'r') as f:
             soil_parameters = yaml.safe_load(f)
 
-        self.carbon_dioxide_level = 440
+        self.carbon_dioxide_level = self._get_carbon_dioxide_levels()
+
+        nh4conc, no3conc = convert_year_to_n_concentration(self.date.year,
+                                                         agmt=self.agmt,
+                                                         random_weather=self.random_weather,
+                                                         loc=self.loc,
+                                                         wdp=self.model.wdp,)
 
         site_parameters = WOFOST81SiteDataProvider_SNOMIN(
             WAV=30,
@@ -817,6 +824,8 @@ class ParcelEnv(pcse_env.PCSEEnv):
             # default init; need to change?
             NH4I=len(soil_parameters['SoilProfileDescription']['SoilLayers'])*[0],
             NO3I=len(soil_parameters['SoilProfileDescription']['SoilLayers'])*[0],
+            NH4ConcR=nh4conc,
+            NO3ConcR=no3conc,
         )
         return crop_parameters, site_parameters, soil_parameters
 

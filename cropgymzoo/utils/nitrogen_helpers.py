@@ -3,12 +3,16 @@ import functools
 from typing import Union
 import datetime
 import pcse
+import os
+
+import pandas as pd
 
 from pcse.soil.snomin import SNOMIN
 from pcse.input.csvweatherdataprovider import CSVWeatherDataProvider
 from pcse.input.nasapower import NASAPowerWeatherDataProvider
 
 from cropgymzoo.envs.pcse_env import AgroManagementContainer, get_weather_data_provider
+from cropgymzoo import _CONFIG_PATH
 
 mg_to_kg = 1e-6
 L_to_m3 = 1e-3
@@ -308,3 +312,10 @@ def treatment_amounts(treatment: str):
 
 def get_standard_practices(treatment: str, year: int):
     return treatment_dates(treatment, year), treatment_amounts(treatment)
+
+@functools.lru_cache(maxsize=None)
+def co2_levels() -> pd.DataFrame:
+    with open(os.path.join(_CONFIG_PATH, "CO2_concentrations.csv")) as f:
+        table = pd.read_csv(f, index_col="Year")
+    table = table.to_dict("dict")["CO2_ppm"]
+    return table
