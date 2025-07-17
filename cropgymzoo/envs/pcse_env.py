@@ -454,10 +454,10 @@ class PCSEEnv(gym.Env):
 
         # Inject different initial condition every episode if it specified in args
         if 'site_params' in options:
-            if 'NH4I' in options:
+            if 'NH4I' in options['site_params']:
                 self._site_params['NH4I'] = options['site_params']['NH4I']
                 self._site_params['NO3I'] = options['site_params']['NO3I']
-            if 'NH4ConcR' in options:
+            if 'NH4ConcR' in options['site_params']:
                 self._site_params['NH4ConcR'] = options['site_params']['NH4ConcR']
                 self._site_params['NO3ConcR'] = options['site_params']['NO3ConcR']
 
