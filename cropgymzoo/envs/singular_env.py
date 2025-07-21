@@ -448,10 +448,8 @@ class ParcelEnv(pcse_env.PCSEEnv):
     def _overwrite_nitrogen_rain_concentration(self):
         # N concentration in rain for deposition
         nh4concr, no3concr = convert_year_to_n_concentration(self.date.year,
-                                                             agmt=self.agmt,
-                                                             random_weather=self.random_weather,
                                                              loc=self.loc,
-                                                             wdp=self.model.wdp,)
+                                                             wdp=self.weather_data_provider,)
 
         site_parameters = {'NH4ConcR': nh4concr, 'NO3ConcR': no3concr, }
         return site_parameters
@@ -812,11 +810,8 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         self.carbon_dioxide_level = self._get_carbon_dioxide_levels()
 
-        nh4conc, no3conc = convert_year_to_n_concentration(self.date.year,
-                                                         agmt=self.agmt,
-                                                         random_weather=self.random_weather,
-                                                         loc=self.loc,
-                                                         wdp=self.model.wdp,)
+        nh4conc, no3conc = convert_year_to_n_concentration(self.year,
+                                                         loc=self.location,)
 
         site_parameters = WOFOST81SiteDataProvider_SNOMIN(
             WAV=30,
