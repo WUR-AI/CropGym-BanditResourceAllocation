@@ -18,9 +18,12 @@ from pettingzoo import ParallelEnv
 
 from cropgymzoo.utils.wrappers import VecNormObs
 
+from cropgymzoo.utils.agent_helpers import extract_info
+
 try:
     # ---- Tianshou imports ----
     from tianshou.data import Collector, VectorReplayBuffer, Batch
+    from tianshou.data.collector import EpisodeRolloutHookProtocol
     from tianshou.env import PettingZooEnv, DummyVectorEnv, SubprocVectorEnv, VectorEnvNormObs, BaseVectorEnv, VectorEnvWrapper
     from tianshou.utils.net.common import NetBase, RecurrentStateBatch
     from tianshou.utils.net.discrete import Actor, Critic  # will wrap our GRU core
@@ -34,15 +37,31 @@ except ImportError:
     tianshou = None
 
 
-'''
-Obs wrapper
-'''
+class CountStuffHook:  # (EpisodeRolloutHookProtocol):
+    def __init__(self, agent_names):
+        # cache the mapping once
+        self.aid2idx = {aid: i for i, aid in enumerate(agent_names)}
+    """Compute per-agent episode stats and return them as numpy arrays."""
+    def __call__(self, episode_batch):
+        # episode_batch.info is a list/array of `info` dicts for *every* step
+        t = len(episode_batch)
+        agent_ids = np.asarray(episode_batch.obs.agent_id)  # (T,) strings
+        infos = episode_batch.info  # (T,) dicts
+        agents = np.unique(agent_ids)
+        out: dict[str, np.ndarray] = {} # {agent: metric value}
+        for aid, idx in self.aid2idx.items():
+            # out.setdefault(aid, {})
+            mask = agent_ids == aid  # which timesteps belong to this agent
+            sub = infos[mask]  # same length as #steps for that agent
+            rew_tot = episode_batch.rew[:, idx].sum()
 
+            out[f"Naction/{aid}"] = np.full(t, float(sub.Naction[-1]), dtype=np.float32)
+            out[f"Yield/{aid}"] = np.full(t, float(sub.Yield[-1]), dtype=np.float32)
+            out[f"Reward/{aid}"] = np.full(t, float(rew_tot), dtype=np.float32)
+            out[f"Nue/{aid}"] = np.full(t, float(sub.Nue[-1]), dtype=np.float32)
+            out[f"Nsurp/{aid}"] = np.full(t, float(sub.Nsurp[-1]), dtype=np.float32)
 
-# ------------------------------------------------------------------ #
-# 2)  SAMPLE (dict)  →  np.ndarray
-# ------------------------------------------------------------------ #
-
+        return out
 
 def make_recurrent_policy(obs_dim: int, act_dim: int, lr: float = 3e-4, hidden: int = 128, layer_num: int = 1, key_order=None) -> PPOPolicy:
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -74,13 +93,23 @@ def make_recurrent_policy(obs_dim: int, act_dim: int, lr: float = 3e-4, hidden: 
         reward_normalization=False,
     ).to(device)
 
-def make_vec_env(parallel: bool = True, indep: bool = True, num_envs: int = 4) -> SubprocVectorEnv | DummyVectorEnv:
+def make_vec_env(
+        parallel: bool = True,
+        indep: bool = True,
+        num_envs: int = 4,
+        norm: bool = True,
+        train: bool = True
+    ) -> SubprocVectorEnv | DummyVectorEnv | VecNormObs:
     """Each subprocess builds → PettingZooEnv"""
     env_fns = [partial(get_petting_zoo_env, indep) for _ in range(num_envs)]
     if parallel:
-        return SubprocVectorEnv(env_fns)
+        env = SubprocVectorEnv(env_fns)
     else:
-        return DummyVectorEnv(env_fns)
+        env = DummyVectorEnv(env_fns)
+    if norm:
+        env = VecNormObs(env, update_obs_rms=train)
+    return env
+
 
 def get_petting_zoo_env(indep):
     env = make_env(independent_learning=indep)
@@ -101,7 +130,58 @@ def make_env(independent_learning=True): # type: ignore
 def get_dummy_env():
     return ParallelRLWorkers()
 
+def grab_spaces(seed):
+    # Inspect one spawned env to grab spaces & agent list
+    dummy_env = get_dummy_env()
+    dummy_env.reset(seed=seed)
+    sample_obs, _, _, _, _ = dummy_env.unwrapped.last()
+    first_agent = 'field-1'
+    observation_space = dummy_env.sample_observation_space_agent()
+    # flat_space, key_order = flatten_dict_space(observation_space)
+    obs_dim = observation_space.shape
+
+    # assuming Discrete(.) identical for all
+    act_dim = dummy_env.action_spaces[first_agent].n
+    agents = dummy_env.possible_agents
+
+    return dummy_env, agents, obs_dim, act_dim
+
+def create_logger(logdir):
+    # Logger
+    run_name = f"PPO_GRU_{datetime.datetime.now():%Y%m%d_%H%M%S}"
+    writer = SummaryWriter(os.path.join(logdir, run_name))
+    logger = TensorboardLogger(writer)
+    # make callbacks within this method
+    os.makedirs(os.path.join(logdir, run_name, "best"), exist_ok=True)
+    os.makedirs(os.path.join(logdir, run_name, "checkpoints"), exist_ok=True)
+    return logger, run_name
+
+
+def collect_test_episodes(collector: Collector, years: list[int] = list(range(2010, 2015))):
+    results = []
+    for year in years:
+        res = collector.collect(
+            n_episode=1,
+            render=False,
+            gym_reset_kwargs={
+                "options": {
+                    "year": year
+                }
+            }
+        )
+        results.append(res)
+
+    return results
+
+
+# Training methods
+
 def train_gru_ppo(hyperparams: dict):
+    """
+    Script to train a GRU-PPO agent
+    :param hyperparams:
+    :return:
+    """
 
     # extract dict
     indep = hyperparams.get('independent', True)
@@ -119,30 +199,16 @@ def train_gru_ppo(hyperparams: dict):
     repeat_per_collect = hyperparams.get('repeat_per_collect', 2)
     parallel = hyperparams.get('parallel', False)
 
-    # Inspect one spawned env to grab spaces & agent list
-    dummy_env = get_dummy_env()
-    dummy_env.reset(seed=seed)
-    sample_obs, _, _, _, _ = dummy_env.unwrapped.last()
-    first_agent = 'field-1'
-    observation_space = dummy_env.sample_observation_space_agent()
-    # flat_space, key_order = flatten_dict_space(observation_space)
-    obs_dim = observation_space.shape
+    dummy_env, agents, obs_dim, act_dim = grab_spaces(seed)
 
     # Create vector env
-    train_envs = make_vec_env(parallel, indep, train_envs_num)
-    test_envs = make_vec_env(parallel, indep, test_envs_num)
+    normalize = True
+    train_envs = make_vec_env(parallel, indep, train_envs_num, norm=normalize, train=True)
+    test_envs = make_vec_env(parallel, indep, test_envs_num, norm=normalize, train=False)
 
-    # Normalize Vector env,  using subclassed norm class
-    # train_envs = DictVectorEnvNormObs(train_envs, update_obs_rms=True)  #, dict_space=dummy_env.sample_observation_space_agent())
-    # test_envs = DictVectorEnvNormObs(test_envs, update_obs_rms=False)  #, dict_space=dummy_env.sample_observation_space_agent())
-    train_envs = VecNormObs(train_envs, update_obs_rms=True)
-    test_envs = VecNormObs(test_envs, update_obs_rms=False)
-    train_envs.reset(options={'year': np.random.choice(range(1951, 2024))})
-    test_envs.set_obs_rms(train_envs.get_obs_rms())
-
-    # assuming Discrete(.) identical for all
-    act_dim = dummy_env.action_spaces[first_agent].n
-    agents = dummy_env.possible_agents
+    if normalize:
+        train_envs.reset(options={'year': np.random.choice(range(1951, 2024))})
+        test_envs.set_obs_rms(train_envs.get_obs_rms())
 
     # Build policies
     if indep:
@@ -169,18 +235,7 @@ def train_gru_ppo(hyperparams: dict):
         env=test_envs,
     )
 
-
-    # Logger
-    run_name = f"PPO_GRU_{datetime.datetime.now():%Y%m%d_%H%M%S}"
-    writer = SummaryWriter(os.path.join(logdir, run_name))
-    # writer.add_text("hyperparams", str(*hyperparams.values()))
-    logger = TensorboardLogger(writer)
-
-    # make callbacks within this method
-    os.makedirs(os.path.join(logdir, run_name, "best"), exist_ok=True)
-    # os.makedirs(os.path.join(logdir, "best", run_name), exist_ok=True)
-    os.makedirs(os.path.join(logdir, run_name, "checkpoints"), exist_ok=True)
-    # os.makedirs(os.path.join(logdir, "checkpoints", run_name), exist_ok=True)
+    logger, run_name = create_logger(logdir)
 
     def save_best_fn(ma_policy: MultiAgentPolicyManager):
         torch.save(
@@ -218,14 +273,100 @@ def train_gru_ppo(hyperparams: dict):
         # step_per_collect=step_per_collect,
         episode_per_collect=episode_per_collect,
         repeat_per_collect=repeat_per_collect,
-        episode_per_test=2,
+        episode_per_test=1,
         batch_size=step_per_collect * len(train_envs),
+        test_fn=lambda epoch, _: yearly_eval_test_fn(epoch, env=test_envs, policy=policy_mgr, agents=agents, logger=logger, writer=logger.writer),
         save_best_fn=save_best_fn,
         save_checkpoint_fn=save_checkpoint_fn,
         logger=logger,
     ).run()
     print(f"Training done → best avg reward: {result['best_reward']:.3f}")
 
+
+def yearly_eval_test_fn(epoch, env, policy, agents, logger=None, writer=None):
+    test_results = {}
+    year_rewards = []
+
+    reset_options_list = [
+        {'year': year} for year in range(2010, 2015)
+    ]
+
+    # per year eval
+    for i, reset_opts in enumerate(reset_options_list):
+        year = reset_opts["year"]
+        env.reset(options=reset_opts)
+
+        # Create a test collector for this specific reset
+        test_collector = Collector(policy, env)
+
+        # Collect test episode(s)
+        result = test_collector.collect(
+            n_episode=1,
+            reset_before_collect=True,
+            gym_reset_kwargs={
+                'options' :reset_opts
+            },
+        )
+
+        infos = test_collector.buffer._meta.info
+        obs = test_collector.buffer._meta.obs
+        rew = test_collector.buffer._meta.rew
+
+        agent_ids = obs["agent_id"]
+
+        agent_dict = {}
+
+        for a, a_id in enumerate(agents):
+            agent = agent_ids == a_id
+
+            reward = [r[a] for r in rew[agent]]
+            nue = infos["Nue"][agent]
+            nsurp = infos["Nsurp"][agent]
+            budget_left = infos["BudgetLeft"][agent]
+            yld = infos["Yield"][agent]
+            n_action = infos["Action"][agent]
+
+            agent_reward = np.sum(reward)
+            agent_nue = nue[-1]
+            agent_nsurp = nsurp[-1]
+            agent_budget_left = budget_left[-1]
+            agent_yield = yld[-1]
+            agent_n_action = np.sum(n_action)
+
+            agent_dict[a_id] = {
+                "Reward": agent_reward,
+                "Nue": agent_nue,
+                "Nsurp": agent_nsurp,
+                "BudgetLeft": agent_budget_left,
+                "Yield": agent_yield,
+                "Naction": agent_n_action,
+            }
+
+            if writer:
+                writer.add_scalar(f"test/{a_id}/{year}/reward", agent_reward, epoch)
+                writer.add_scalar(f"test/{a_id}/{year}/NUE", agent_nue, epoch)
+                writer.add_scalar(f"test/{a_id}/{year}/Nsurp", agent_nsurp, epoch)
+                writer.add_scalar(f"test/{a_id}/{year}/BudgetLeft", agent_budget_left, epoch)
+                writer.add_scalar(f"test/{a_id}/{year}/Yield", agent_yield, epoch)
+                writer.add_scalar(f"test/{a_id}/{year}/Naction", agent_n_action, epoch)
+
+        # Store results with metadata
+        test_results[year] = agent_dict
+        year_reward = np.sum([v for y in test_results.values() for k, v in y.items() if k == "Reward"])
+        year_rewards.append(year_reward)
+
+        # Logging intermediate results
+        if writer:
+            writer.add_scalar(f"test/{year}/reward", year_reward, epoch)
+
+
+    # Final aggregated logging
+    mean_reward = np.mean(year_rewards)
+    #
+    if writer:
+        writer.add_scalar("test/mean_reward_all_years", mean_reward, epoch)
+
+    writer.flush()
 
 '''
 NOTE FOR WHEN RESUMING MODEL

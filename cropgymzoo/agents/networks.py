@@ -154,7 +154,10 @@ class MaskedActor(Actor):
         logits = self.last(latent)
         if isinstance(info, dict) and "action_mask" in info:
             mask = torch.as_tensor(info["action_mask"], device=logits.device)
-            logits[mask == 0] = -1e10
+            logits[mask == False] = -1e10
+        elif isinstance(obs, Batch) and "mask" in obs:
+            mask = torch.as_tensor(obs["mask"], device=logits.device)
+            logits[mask == False] = -1e10
         return logits, h
 
 

@@ -55,3 +55,12 @@ def make_super_arms_limited(max_q: list, Q: int):
 
     backtrack(0, Q, [])
     return super_arms
+
+
+def extract_info(agent_id, counters, rewards, info, agent_idx):
+    counters[agent_id]['Naction'] = info[0]['Naction']
+    counters[agent_id]['Reward'] = rewards[0][agent_idx[agent_id]]
+    counters[agent_id]['Nue'] = info[0]['Nue']
+    counters[agent_id]['Nsurp'] = info[0]['Nsurp']
+    counters[agent_id]['Yield'] = info[0]['Yield']
+    return counters
