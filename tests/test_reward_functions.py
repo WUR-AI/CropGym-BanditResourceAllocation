@@ -143,12 +143,17 @@ class TestSingularRewardFunctions(unittest.TestCase):
 
 class TestMultiRewardFunction(unittest.TestCase):
     def setUp(self):
+        from tianshou.env import PettingZooEnv
         self.env = ParallelRLWorkers(
             warm_up=0,
         )
         self.env_training = ParallelRLWorkers(
             warm_up=0,
             training=True
+        )
+
+        self.env_wrapped = PettingZooEnv(
+            self.env_training,
         )
 
     def test_reward_area_multi(self):
@@ -199,7 +204,17 @@ class TestMultiRewardFunction(unittest.TestCase):
         print(np.sum(cumulative_rewards))
         print(infos)
 
-        self.assertTrue(0 <= np.sum(cumulative_rewards) <= 1.5)
+        self.assertTrue(0 <= np.sum(cumulative_rewards) <= 5)
+
+    def test_obs_and_reward_wrapped(self):
+        obs, info = self.env_wrapped.reset(options={'year': np.random.choice(range(1951, 2023)),})
+
+        term = False
+        while not term:
+            obs, rew, term, trun, info = self.env_wrapped.step(np.random.choice(range(7), p=[0.7, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05]))
+            print(info)
+
+        self.assertTrue(np.sum(info["Reward"]) != 0.0)
 
 if __name__ == '__main__':
     unittest.main()

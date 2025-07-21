@@ -78,14 +78,26 @@ class ParallelRLWorkers(AECEnv):
             self.warm_up_infos = self._warm_up(warm_up)
 
     def reset(self, seed=None, options=None):
-        options = options or {'year': self.rng.choice(self.years)}
+        # reinitialize agents
+        self.agents = self.possible_agents[:]
+
+        # Still works sort-of parallel now: could change to date-based
+        # Is it useful to change it to date-based? Maybe for future functionality and tasks
+        # self._agent_selector.reinit(self.agents)
+        self.agent_selection = self._agent_selector.reset()
+
+        self.rewards = {ag: 0.0 for ag in self.possible_agents}
+        self._cumulative_rewards = {ag: 0.0 for ag in self.possible_agents}
+        self.terminations = {ag: False for ag in self.possible_agents}
+        self.truncations = {ag: False for ag in self.possible_agents}
+
+        self.current_step = {agent: 0 for agent in self.possible_agents}
 
         # reset infos and variables
         self._init_infos()
-        self.current_step = {agent: 0 for agent in self.possible_agents}
 
-        # reinitialize agents
-        self.agents = self.possible_agents.copy()
+        # get the options before reset
+        options = options or {'year': self.rng.choice(self.years)}
 
         # TODO Pass global budget into options if using allocator.
         self.global_budget = self._get_global_max_budget() if not self.random_budget else self._get_global_random_budget()
@@ -103,35 +115,33 @@ class ParallelRLWorkers(AECEnv):
             _, info = env.reset(seed=seed, options=options)
             infos[agent] = info
 
-        self.rewards = {ag: 0.0 for ag in self.possible_agents}
-        # self._clear_rewards()
-        self._cumulative_rewards = {ag: 0.0 for ag in self.possible_agents}
-        self.terminations = {ag: False for ag in self.possible_agents}
-        self.truncations = {ag: False for ag in self.possible_agents}
         self._update_infos(infos)
-
-        # Still works sort-of parallel now: could change to date-based
-        # Is it useful to change it to date-based? Maybe for future functionality and tasks
-        self._agent_selector.reinit(self.agents)
-        self.agent_selection = self._agent_selector.reset()
 
         # AECEnv doesn't return anything for reset()
 
    # following AEC env API
     def step(self, action: dict[str, int] | int | None):
-        # AEC Part
+        # need to call this apparently to make sure dead agent doesn't
+        # get called again in the iterator
+        if self.terminations[self.agent_selection] or self.truncations[self.agent_selection]:
+            # self._deads_step_first()
+            idx = self._agent_selector._current_agent - 1
+            self._was_dead_step(None)
+            if self.agent_selection not in self.agents:
+                self._agent_selector.agent_order = self.agents
+                if self.agents:
+                    self._agent_selector._current_agent = idx
+                    self.agent_selection = self._agent_selector.next()
+            # put infos back
+            self.infos = {agent: self.fields[agent].unwrapped.infos
+                          for agent in self.possible_agents}
+            # self._cumulative_rewards = {agent: 0.0 for agent in self.possible_agents}
+
+            return
+
         agent = self.agent_selection
 
         self.current_step[agent] += 1
-
-        # need to call this apparently to make sure dead agent doesn't
-        # get called again in the iterator
-        if self.terminations[agent] or self.truncations[agent]:
-            self._was_dead_step(action)
-            self._agent_selector.reinit(self.agents)
-            if self.agents:  # avoid empty-list call
-                self.agent_selection = self._agent_selector.next()
-            return
 
         # step the gymnasium PCSE parcel
         obs_parcel, rew_parcel, ter_parcel, tru_parcel, info_parcel = self.fields[agent].step(action)
@@ -154,7 +164,7 @@ class ParallelRLWorkers(AECEnv):
 
         self.agent_selection = self._agent_selector.next()
 
-        # AECEnv doesn't return anything for reset()
+        # AECEnv doesn't return anything for step()
 
     def observe(self, agent) -> dict:
         obs = self.fields[agent].unwrapped.observe()
@@ -253,39 +263,6 @@ class ParallelRLWorkers(AECEnv):
             self.set_per_parcel_budget(_agent, budget-choice)
 
         self.set_global_budget(self._get_global_budget())
-
-    '''
-    Overriding AECEnv methods
-    '''
-
-    def _was_dead_step(self, action) -> None:
-        if action is not None:
-            raise ValueError("when an agent is dead, the only valid action is None")
-
-        # removes dead agent
-        agent = self.agent_selection
-        assert (
-            self.terminations[agent] or self.truncations[agent]
-        ), "an agent that was not dead as attempted to be removed"
-        # deleting the deletion of the agents dicts... Why did they do this?
-        # make sure to delete everything just during reset
-        self.agents.remove(agent)
-
-        # finds next dead agent or loads next live agent (Stored in _skip_agent_selection)
-        _deads_order = [
-            agent
-            for agent in self.agents
-            if (self.terminations[agent] or self.truncations[agent])
-        ]
-        if _deads_order:
-            if getattr(self, "_skip_agent_selection", None) is None:
-                self._skip_agent_selection = self.agent_selection
-            self.agent_selection = _deads_order[0]
-        else:
-            if getattr(self, "_skip_agent_selection", None) is not None:
-                assert self._skip_agent_selection is not None
-                self.agent_selection = self._skip_agent_selection
-            self._skip_agent_selection = None
 
 
     '''
