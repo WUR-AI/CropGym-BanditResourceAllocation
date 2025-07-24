@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from tianshou.data import Batch
 from tianshou.data.types import RecurrentStateBatch
-from tianshou.utils.net.common import NetBase, Recurrent
+from tianshou.utils.net.common import NetBase, Recurrent, Net
 from tianshou.utils.net.discrete import Actor, Critic
 from torch import nn as nn
 
@@ -136,7 +136,6 @@ class RecurrentLSTM(Recurrent):
         if isinstance(obs, Batch):
             obs = obs.obs  # or dict(obs)   (no copy of scalars)
 
-        print(state)
         return super().forward(obs, state, info)
 
 
@@ -171,3 +170,24 @@ class DictObsCritic(Critic):
 
         logits, _ = self.preprocess(obs, state=kwargs.get("state", None))
         return self.last(logits)
+
+class NetObs(Net):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def forward(
+        self,
+        obs: np.ndarray | torch.Tensor,
+        state: Any = None,
+        info: dict[str, Any] | None = None,
+    ) -> tuple[torch.Tensor, Any]:
+        """Mapping: obs -> flatten (inside MLP)-> logits.
+
+        :param obs:
+        :param state: unused and returned as is
+        :param info: unused
+        """
+        if isinstance(obs, Batch):
+            obs = obs.obs
+
+        return super().forward(obs, state, info)

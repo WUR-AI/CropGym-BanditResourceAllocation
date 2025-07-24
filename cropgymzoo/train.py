@@ -1,7 +1,9 @@
 import os
 from functools import partial
 import datetime
+from typing import Sequence
 
+import pandas as pd
 import torch
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim import Adam
@@ -9,8 +11,8 @@ from torch.optim import Adam
 import numpy as np
 import gymnasium as gym
 
-from cropgymzoo.agents.networks import RecurrentGRU, MaskedActor, DictObsCritic
-from cropgymzoo.envs.worker_env import ParallelRLWorkers
+from cropgymzoo.agents.networks import RecurrentGRU, MaskedActor, DictObsCritic, NetObs
+from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 from cropgymzoo import _DEFAULT_LOGDIR
 
 from pettingzoo.utils.conversions import parallel_to_aec
@@ -24,8 +26,8 @@ try:
     # ---- Tianshou imports ----
     from tianshou.data import Collector, VectorReplayBuffer, Batch
     from tianshou.data.collector import EpisodeRolloutHookProtocol
-    from tianshou.env import PettingZooEnv, DummyVectorEnv, SubprocVectorEnv, VectorEnvNormObs, BaseVectorEnv, VectorEnvWrapper
-    from tianshou.utils.net.common import NetBase, RecurrentStateBatch
+    from tianshou.env import PettingZooEnv, DummyVectorEnv, SubprocVectorEnv, VectorEnvNormObs, BaseVectorEnv, VectorEnvWrapper, ShmemVectorEnv
+    from tianshou.utils.net.common import NetBase, RecurrentStateBatch, Net
     from tianshou.utils.net.discrete import Actor, Critic  # will wrap our GRU core
     from tianshou.utils.net.common import Recurrent
     from tianshou.utils.logger.tensorboard import TensorboardLogger
@@ -63,18 +65,33 @@ class CountStuffHook:  # (EpisodeRolloutHookProtocol):
 
         return out
 
-def make_recurrent_policy(obs_dim: int, act_dim: int, lr: float = 3e-4, hidden: int = 128, layer_num: int = 1, key_order=None) -> PPOPolicy:
+def make_ppo_policy(
+    obs_dim: int,
+    act_dim: int,
+    lr: float = 3e-4,
+    hidden: Sequence = [64],
+    recurrent: bool = False,
+) -> PPOPolicy:
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    actor_net = RecurrentGRU(layer_num=layer_num, state_shape=obs_dim, action_shape=act_dim, device=device, hidden_layer_size=hidden) #GRUBackbone(obs_dim, hidden_dim=[128, 128])
-    critic_net = RecurrentGRU(layer_num=layer_num, state_shape=obs_dim, action_shape=act_dim, device=device, hidden_layer_size=hidden) #GRUBackbone(obs_dim, hidden_dim=[128, 128])
 
-    actor = MaskedActor(preprocess_net=actor_net, action_dim=act_dim, key_order=key_order).to(device)
-    critic = DictObsCritic(preprocess_net=critic_net, key_order=key_order).to(device)
+    if not recurrent:
+        actor_net = NetObs(state_shape=obs_dim, action_shape=act_dim, hidden_sizes=hidden).to(device)
+        critic_net = NetObs(state_shape=obs_dim, action_shape=act_dim, hidden_sizes=hidden).to(device)
+
+        actor = MaskedActor(preprocess_net=actor_net, action_dim=act_dim).to(device)
+        critic = Critic(preprocess_net=critic_net, device=device)
+    else:
+        actor_net = RecurrentGRU(layer_num=1, state_shape=obs_dim, action_shape=act_dim, device=device, )  # GRUBackbone(obs_dim, hidden_dim=[128, 128])
+        critic_net = RecurrentGRU(layer_num=1, state_shape=obs_dim, action_shape=act_dim, device=device,)  # GRUBackbone(obs_dim, hidden_dim=[128, 128])
+
+        actor = MaskedActor(preprocess_net=actor_net, action_dim=act_dim).to(device)
+        critic = DictObsCritic(preprocess_net=critic_net).to(device)
 
     optim = Adam(list(actor.parameters()) + list(critic.parameters()), lr=lr)
     # dist = torch.distributions.Categorical  # DISCRETE!
 
     dist = lambda logits: torch.distributions.Categorical(logits=logits)
+    # dist = torch.distributions.Categorical
 
     return PPOPolicy(
         actor=actor,
@@ -101,34 +118,33 @@ def make_vec_env(
         train: bool = True
     ) -> SubprocVectorEnv | DummyVectorEnv | VecNormObs:
     """Each subprocess builds → PettingZooEnv"""
-    env_fns = [partial(get_petting_zoo_env, indep) for _ in range(num_envs)]
     if parallel:
+        env_fns = [partial(get_petting_zoo_env, indep, train) for _ in range(num_envs)]
         env = SubprocVectorEnv(env_fns)
     else:
+        env_fns = [partial(get_petting_zoo_env, indep, train) for _ in range(1)]
         env = DummyVectorEnv(env_fns)
     if norm:
         env = VecNormObs(env, update_obs_rms=train)
     return env
 
 
-def get_petting_zoo_env(indep):
-    env = make_env(independent_learning=indep)
+def get_petting_zoo_env(indep, training):
+    env = make_env(independent_learning=indep, training=training)
     env = PettingZooEnv(env)
     return env
 
-def make_env(independent_learning=True): # type: ignore
+def make_env(independent_learning=True, training=True): # type: ignore
     """Return one wrapped PettingZoo environment instance."""
-    env = ParallelRLWorkers(
+    env = MultiFieldEnv(
         warm_up=0,
         shared_obs=False if independent_learning else True,
-        training=True,
+        training=training,
     )
-    if isinstance(env, ParallelEnv):
-        env = parallel_to_aec(env)
     return env
 
 def get_dummy_env():
-    return ParallelRLWorkers()
+    return MultiFieldEnv()
 
 def grab_spaces(seed):
     # Inspect one spawned env to grab spaces & agent list
@@ -185,8 +201,8 @@ def train_gru_ppo(hyperparams: dict):
 
     # extract dict
     indep = hyperparams.get('independent', True)
-    train_envs_num = hyperparams.get('train_envs_num', 1)
-    test_envs_num = hyperparams.get('test_envs_num', 1)
+    train_envs_num = hyperparams.get('train_envs', 1)
+    test_envs_num = hyperparams.get('test_envs', 1)
     seed = hyperparams.get('seed', 107)
     lr = hyperparams.get('lr', 1e-3)
     buffer_size = hyperparams.get('buffer_size', int(10_000))
@@ -198,6 +214,8 @@ def train_gru_ppo(hyperparams: dict):
     episode_per_collect = hyperparams.get('episode_per_collect', 8)
     repeat_per_collect = hyperparams.get('repeat_per_collect', 2)
     parallel = hyperparams.get('parallel', False)
+    recurrent = hyperparams.get('recurrent', True)
+    debug = hyperparams.get('debug', False)
 
     dummy_env, agents, obs_dim, act_dim = grab_spaces(seed)
 
@@ -212,9 +230,9 @@ def train_gru_ppo(hyperparams: dict):
 
     # Build policies
     if indep:
-        policies = {a: make_recurrent_policy(obs_dim, act_dim, lr) for a in agents}
+        policies = {a: make_ppo_policy(obs_dim, act_dim, lr, recurrent=recurrent) for a in agents}
     else:
-        shared = make_recurrent_policy(obs_dim, act_dim, lr)
+        shared = make_ppo_policy(obs_dim, act_dim, lr, recurrent=recurrent)
         policies = {a: shared for a in agents}
 
     policy_mgr = MultiAgentPolicyManager(policies=list(policies.values()),
@@ -226,7 +244,8 @@ def train_gru_ppo(hyperparams: dict):
         env=train_envs,
         buffer=VectorReplayBuffer(
             total_size=buffer_size,
-            buffer_num=len(train_envs) * len(policies)
+            buffer_num=1,
+            stack_num=1,
         ),  # use this buffer
         exploration_noise=True
     )
@@ -263,6 +282,105 @@ def train_gru_ppo(hyperparams: dict):
             os.path.join(logdir, run_name, "checkpoints", f"check_{epoch:04d}.pth")
         )
 
+    def yearly_eval_test_fn(epoch, global_step):
+        test_results = {}
+        year_rewards = []
+
+        reset_options_list = [
+            {'year': year} for year in range(2010, 2011)
+        ]
+
+        dfs = []
+        writer = logger.writer
+        # per year eval
+        for i, reset_opts in enumerate(reset_options_list):
+            year = reset_opts["year"]
+
+            # Collect test episode(s)
+            result = test_collector.collect(
+                n_episode=1,
+                reset_before_collect=True,
+                gym_reset_kwargs={
+                    'options': reset_opts
+                },
+            )
+
+            infos = test_collector.buffer._meta.info
+            obs = test_collector.buffer._meta.obs
+            obs_next = test_collector.buffer._meta.obs_next
+            rew = test_collector.buffer._meta.rew
+
+            agent_ids = obs_next["agent_id"]
+
+            agent_dict = {}
+
+            if debug:
+                df = pd.DataFrame(index=agent_ids,
+                                  data={
+                                      'nue': infos["Nue"],
+                                      'Nsurp': infos["Nsurp"],
+                                      'BudgetLeft': infos["BudgetLeft"],
+                                      'action': infos["Action"],
+                                      'Yield': infos["Yield"]}
+                                  )
+
+                dfs.append(df)
+
+            for a, a_id in enumerate(agents):
+                agent = agent_ids == a_id
+
+                reward = [r[a] for r in rew[agent]]
+                nue = infos["Nue"][agent]
+                nsurp = infos["Nsurp"][agent]
+                budget_left = infos["BudgetLeft"][agent]
+                yld = infos["Yield"][agent]
+                n_action = infos["Action"][agent]
+
+                agent_reward = np.sum(reward)
+                agent_nue = nue[-1]
+                agent_nsurp = nsurp[-1]
+                agent_budget_left = budget_left[-1]
+                agent_yield = yld[-1]
+                agent_n_action = np.sum(n_action)
+
+                agent_dict[a_id] = {
+                    "Reward": agent_reward,
+                    "Nue": agent_nue,
+                    "Nsurp": agent_nsurp,
+                    "BudgetLeft": agent_budget_left,
+                    "Yield": agent_yield,
+                    "Naction": agent_n_action,
+                }
+
+                if writer:
+                    writer.add_scalar(f"test/{year}/{a_id}/reward", agent_reward, epoch)
+                    writer.add_scalar(f"test/{year}/{a_id}/NUE", agent_nue, epoch)
+                    writer.add_scalar(f"test/{year}/{a_id}/Nsurp", agent_nsurp, epoch)
+                    writer.add_scalar(f"test/{year}/{a_id}/BudgetLeft", agent_budget_left, epoch)
+                    writer.add_scalar(f"test/{year}/{a_id}/Yield", agent_yield, epoch)
+                    writer.add_scalar(f"test/{year}/{a_id}/Naction", agent_n_action, epoch)
+
+            # Store results with metadata
+            test_results[year] = agent_dict
+            year_reward = np.sum([v
+                                  for y in test_results.values()
+                                  for field in y.values()
+                                  for key, v in field.items()
+                                  if key == "Reward"])
+            year_rewards.append(year_reward)
+
+            # Logging intermediate results
+            if writer:
+                writer.add_scalar(f"test/{year}/reward", year_reward, epoch)
+
+        # Final aggregated logging
+        mean_reward = np.mean(year_rewards)
+        #
+        if writer:
+            writer.add_scalar("test/mean_reward_all_years", mean_reward, epoch)
+
+        writer.flush()
+
 
     result = OnpolicyTrainer(
         policy=policy_mgr,
@@ -275,7 +393,7 @@ def train_gru_ppo(hyperparams: dict):
         repeat_per_collect=repeat_per_collect,
         episode_per_test=1,
         batch_size=step_per_collect * len(train_envs),
-        test_fn=lambda epoch, _: yearly_eval_test_fn(epoch, env=test_envs, policy=policy_mgr, agents=agents, logger=logger, writer=logger.writer),
+        test_fn=yearly_eval_test_fn,
         save_best_fn=save_best_fn,
         save_checkpoint_fn=save_checkpoint_fn,
         logger=logger,
@@ -283,90 +401,7 @@ def train_gru_ppo(hyperparams: dict):
     print(f"Training done → best avg reward: {result['best_reward']:.3f}")
 
 
-def yearly_eval_test_fn(epoch, env, policy, agents, logger=None, writer=None):
-    test_results = {}
-    year_rewards = []
 
-    reset_options_list = [
-        {'year': year} for year in range(2010, 2015)
-    ]
-
-    # per year eval
-    for i, reset_opts in enumerate(reset_options_list):
-        year = reset_opts["year"]
-        env.reset(options=reset_opts)
-
-        # Create a test collector for this specific reset
-        test_collector = Collector(policy, env)
-
-        # Collect test episode(s)
-        result = test_collector.collect(
-            n_episode=1,
-            reset_before_collect=True,
-            gym_reset_kwargs={
-                'options' :reset_opts
-            },
-        )
-
-        infos = test_collector.buffer._meta.info
-        obs = test_collector.buffer._meta.obs
-        rew = test_collector.buffer._meta.rew
-
-        agent_ids = obs["agent_id"]
-
-        agent_dict = {}
-
-        for a, a_id in enumerate(agents):
-            agent = agent_ids == a_id
-
-            reward = [r[a] for r in rew[agent]]
-            nue = infos["Nue"][agent]
-            nsurp = infos["Nsurp"][agent]
-            budget_left = infos["BudgetLeft"][agent]
-            yld = infos["Yield"][agent]
-            n_action = infos["Action"][agent]
-
-            agent_reward = np.sum(reward)
-            agent_nue = nue[-1]
-            agent_nsurp = nsurp[-1]
-            agent_budget_left = budget_left[-1]
-            agent_yield = yld[-1]
-            agent_n_action = np.sum(n_action)
-
-            agent_dict[a_id] = {
-                "Reward": agent_reward,
-                "Nue": agent_nue,
-                "Nsurp": agent_nsurp,
-                "BudgetLeft": agent_budget_left,
-                "Yield": agent_yield,
-                "Naction": agent_n_action,
-            }
-
-            if writer:
-                writer.add_scalar(f"test/{a_id}/{year}/reward", agent_reward, epoch)
-                writer.add_scalar(f"test/{a_id}/{year}/NUE", agent_nue, epoch)
-                writer.add_scalar(f"test/{a_id}/{year}/Nsurp", agent_nsurp, epoch)
-                writer.add_scalar(f"test/{a_id}/{year}/BudgetLeft", agent_budget_left, epoch)
-                writer.add_scalar(f"test/{a_id}/{year}/Yield", agent_yield, epoch)
-                writer.add_scalar(f"test/{a_id}/{year}/Naction", agent_n_action, epoch)
-
-        # Store results with metadata
-        test_results[year] = agent_dict
-        year_reward = np.sum([v for y in test_results.values() for k, v in y.items() if k == "Reward"])
-        year_rewards.append(year_reward)
-
-        # Logging intermediate results
-        if writer:
-            writer.add_scalar(f"test/{year}/reward", year_reward, epoch)
-
-
-    # Final aggregated logging
-    mean_reward = np.mean(year_rewards)
-    #
-    if writer:
-        writer.add_scalar("test/mean_reward_all_years", mean_reward, epoch)
-
-    writer.flush()
 
 '''
 NOTE FOR WHEN RESUMING MODEL

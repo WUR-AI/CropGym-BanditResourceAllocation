@@ -6,6 +6,8 @@ import gymnasium as gym
 import numpy as np
 import pettingzoo
 import torch
+
+from gymnasium import spaces
 from tianshou.env import PettingZooEnv, VectorEnvNormObs, BaseVectorEnv, VectorEnvWrapper
 from tianshou.utils import RunningMeanStd
 
@@ -100,22 +102,27 @@ class VecNormObs(VectorEnvNormObs):
         # Process info
 
         info = []
-        for i, _i in enumerate(step_results[-1]):
-            info.append(self.collapse_info_dict(_i))
+        for i, _info in enumerate(step_results[-1]):
+            info.append(self.collapse_info_dict(_info))
         info = np.stack(info)
 
         # Process terminates
 
         terms = []
+        deads = []
         envs = self.venv.workers
         for env in envs:
             env = _get_env(env) # risky risky here
-            term = getattr(env, "terminations", {})
-            terms.append(term)
+            term_signal = getattr(env, "terminations", {})
+            dead_step = getattr(env, "dead_step", {})
+            terms.append(term_signal)
+            deads.append(dead_step)
 
         terminateds = []
-        for i, terms in enumerate(terms):
-            terminated = bool(terms) and all(terms.values())
+        for i, (term, dead) in enumerate(zip(terms, deads)):
+            termed = all(term.values())
+            # deaded = bool(dead) and all(dead.values()) # list(dead.values()).count(False) == 1  # hacky hacky wacky
+            terminated = termed
             terminateds.append(terminated)
         terminateds = np.array(terminateds, dtype=bool)
 

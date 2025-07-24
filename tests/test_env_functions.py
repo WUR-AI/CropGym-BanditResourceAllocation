@@ -1,4 +1,5 @@
 import unittest
+import datetime
 
 import cropgymzoo  # for gym make
 import gymnasium as gym
@@ -7,8 +8,11 @@ import numpy as np
 
 import matplotlib.pyplot as plt
 
-from cropgymzoo.envs.worker_env import ParallelRLWorkers
+import pcse
+
+from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 from cropgymzoo.utils.helper_for_unit_tests import run_aec_till_terminate
+from cropgymzoo.utils.domain_randomizer import NoisyOpenMeteo
 
 
 class TestSingularEnvFunctions(unittest.TestCase):
@@ -156,7 +160,7 @@ class TestSingularTrainingEnvFunctions(unittest.TestCase):
 
 class TestMultiEnvFunctions(unittest.TestCase):
     def setUp(self):
-        self.env = ParallelRLWorkers(
+        self.env = MultiFieldEnv(
             warm_up=0,
         )
 
@@ -203,7 +207,7 @@ class TestMultiEnvFunctions(unittest.TestCase):
 
 class TestMultiEnvTraining(unittest.TestCase):
     def setUp(self):
-        self.env = ParallelRLWorkers(
+        self.env = MultiFieldEnv(
             warm_up=0,
             random_budget=True,
         )
@@ -237,7 +241,7 @@ class TestMultiEnvTraining(unittest.TestCase):
 
 class TestMultiEnvWarmUp(unittest.TestCase):
     def setUp(self):
-        self.env = ParallelRLWorkers(
+        self.env = MultiFieldEnv(
             warm_up=10,
         )
 
@@ -247,6 +251,29 @@ class TestMultiEnvWarmUp(unittest.TestCase):
         print(next(iter(self.env.warm_up_infos.values()))['field-2']['Naction'])
 
         self.assertNotEqual(self.env.warm_up_infos, None)
+
+
+class TestWeatherFunctions(unittest.TestCase):
+    def setUp(self):
+        self.noisy_wdp = NoisyOpenMeteo(*(52.512, 5.545))
+        self.normal_wdp = NoisyOpenMeteo(*(52.512, 5.545))
+
+    def test_weather(self):
+        start_date = datetime.date(2010, 1, 1)
+
+        all_noisy = []
+        all_normal = []
+        for current in range(40):
+            current_date = start_date + datetime.timedelta(days=current)
+
+            noisy = self.noisy_wdp(current_date)
+            all_noisy.append(noisy.TMIN)
+            normal = self.normal_wdp(current_date)
+            all_normal.append(normal.TMIN)
+        print(all_noisy)
+        print(all_normal)
+
+        self.assertTrue(True)
 
 if __name__ == '__main__':
     unittest.main()

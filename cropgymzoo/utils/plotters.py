@@ -2,7 +2,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-from cropgymzoo.envs.worker_env import ParallelRLWorkers
+from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
 def plot_year(infos: dict, var: str = "Reward"):
     agents = list(infos.keys())

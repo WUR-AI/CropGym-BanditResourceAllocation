@@ -10,7 +10,7 @@ import datetime
 import cropgymzoo  # for gym make
 import gymnasium as gym
 
-from cropgymzoo.envs.worker_env import ParallelRLWorkers
+from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
 from cropgymzoo.utils.helper_for_unit_tests import run_aec_till_terminate, run_aec_step
 
@@ -144,10 +144,10 @@ class TestSingularRewardFunctions(unittest.TestCase):
 class TestMultiRewardFunction(unittest.TestCase):
     def setUp(self):
         from tianshou.env import PettingZooEnv
-        self.env = ParallelRLWorkers(
+        self.env = MultiFieldEnv(
             warm_up=0,
         )
-        self.env_training = ParallelRLWorkers(
+        self.env_training = MultiFieldEnv(
             warm_up=0,
             training=True
         )
@@ -162,14 +162,12 @@ class TestMultiRewardFunction(unittest.TestCase):
 
         traces = defaultdict(lambda: {"Date": [], "Reward": [], "Action": []})
 
-        cumulative_step_rewards = []  # farm-level reward per “parallel step”
-        running_sum = 0.0  # holds rewards until the last parcel acts
-
-        env, cumulative_step_rewards, running_sum = run_aec_till_terminate(self.env)
+        env, cumulative_step_rewards, cumulative_global_rewards = run_aec_till_terminate(self.env)
 
         agents = self.env.unwrapped.possible_agents
 
         print(np.sum(cumulative_step_rewards))
+        print(np.sum(cumulative_global_rewards))
 
         self.assertTrue(0 <= np.sum(cumulative_step_rewards) <= 1.5)
 
@@ -177,13 +175,15 @@ class TestMultiRewardFunction(unittest.TestCase):
         year = np.random.choice(range(1951, 2025))
         self.env_training.reset(options={'year': year})
 
-        self.env_training, cumulative_rewards, running_sum = run_aec_till_terminate(self.env_training)
+        self.env_training, cumulative_rewards, cumulative_global_rewards = run_aec_till_terminate(self.env_training)
 
         agents = self.env_training.unwrapped.possible_agents
 
         infos = self.env_training.infos
 
         print(infos[agents[2]]['Yield'])
+        print(cumulative_rewards)
+        print(cumulative_global_rewards)
 
         for i, agent in enumerate(agents):
             color = plt.get_cmap('tab10')
@@ -196,7 +196,7 @@ class TestMultiRewardFunction(unittest.TestCase):
                        [i / 10 for i in infos[agent]['Action']], color=color(i), alpha=0.3)
 
         date_range = [min_date + datetime.timedelta(days=i) for i in range(len(cumulative_rewards))]
-        plt.plot(date_range, np.cumsum(cumulative_rewards))
+        plt.plot(date_range, np.cumsum(cumulative_global_rewards))
 
         plt.legend()
         plt.show()

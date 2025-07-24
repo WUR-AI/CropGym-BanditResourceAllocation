@@ -724,25 +724,23 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self.infos['Action'].append(action)
         self.infos['Yield'].append(pcse_output[-1]['WSO'])
 
-        nue = None if not terminate else calculate_nue(
+        nue = -0.01 if not terminate else calculate_nue(
             n_input=self.reward_container.actions,
             n_so=pcse_output[-1]['NamountSO'],
             year=self.date.year,
             nh4_depo=pcse_output[-1]['RNH4DEPOSTT'],
             no3_depo=pcse_output[-1]['RNO3DEPOSTT'],
         )
-        if nue is not None:
-            self.infos['Nue'].append(nue)
+        self.infos['Nue'].append(nue)
 
-        nsurp = None if not terminate else get_surplus_n(
+        nsurp = -0.01 if not terminate else get_surplus_n(
             n_input=self.reward_container.actions,
             n_so=pcse_output[-1]['NamountSO'],
             year=self.date.year,
             nh4_depo=pcse_output[-1]['RNH4DEPOSTT'],
             no3_depo=pcse_output[-1]['RNO3DEPOSTT']
         )
-        if nsurp is not None:
-            self.infos['Nsurp'].append(nsurp)
+        self.infos['Nsurp'].append(nsurp)
 
         self.infos['Profit'].append(self.reward_container.cum_profit)
         not self.infos['CO2'] and self.infos['CO2'].append(self.carbon_dioxide_level)
@@ -795,7 +793,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         shift = self.rng.normal(loc=0, scale=10)
         shifted_date = self.agmt.crop_start_date + datetime.timedelta(days=shift)
         # shift sowing date and also campaign date proportionally by the random sowing
-        self._agro_management = self.agmt.update_attributes(crop_start_date=shifted_date,
+        self.agro_management = self.agmt.update_attributes(crop_start_date=shifted_date,
                                                             campaign_date=shifted_date - datetime.timedelta(weeks=8))
 
     '''

@@ -1,4 +1,4 @@
 independent: true
 lr: 0.001
-train_envs: 8
+train_envs: 1
 test_envs: 1

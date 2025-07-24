@@ -8,6 +8,7 @@ from collections import Counter
 import numpy as np
 
 import gymnasium as gym
+from gymnasium.utils.ezpickle import EzPickle
 from gymnasium.spaces import Discrete
 
 from pettingzoo import ParallelEnv, AECEnv
@@ -19,7 +20,7 @@ from cropgymzoo.envs.singular_env import ParcelEnv
 from cropgymzoo.utils.defaults import get_default_years
 
 
-class ParallelRLWorkers(AECEnv):
+class MultiFieldEnv(AECEnv, EzPickle):
     metadata = {
         "name": "CropGymZooEnv",
     }
@@ -39,6 +40,16 @@ class ParallelRLWorkers(AECEnv):
                  random_budget: bool = False,
                  shared_obs: bool = False,
                  render: bool = False,):
+        EzPickle.__init__(
+            self,
+            seed=seed,
+            warm_up=warm_up,
+            years=years,
+            training=training,
+            random_budget=random_budget,
+            shared_obs=shared_obs,
+            render=render,
+        )
         super().__init__()
         self.render_mode = None if not render else 'human'
         self.rng, self.seed = gym.utils.seeding.np_random(seed=seed)
@@ -54,7 +65,10 @@ class ParallelRLWorkers(AECEnv):
         self.n_agents = len(dict_fields)
         self.agents = [i for i in dict_fields.keys()]
         self.possible_agents = self.agents.copy()
+        # self._agent_selector = SkippingSelector(self.possible_agents) #   #
         self._agent_selector = agent_selector(self.possible_agents)
+        self.dead_step = {ag: False for ag in self.possible_agents}
+        self.agent_to_keep = None
 
         self.current_step = {agent: 0 for agent in self.possible_agents}
         self.current_obs = {agent: {} for agent in self.possible_agents}
@@ -79,12 +93,14 @@ class ParallelRLWorkers(AECEnv):
 
     def reset(self, seed=None, options=None):
         # reinitialize agents
+        self.dead_step = {ag: False for ag in self.possible_agents}
         self.agents = self.possible_agents[:]
 
         # Still works sort-of parallel now: could change to date-based
         # Is it useful to change it to date-based? Maybe for future functionality and tasks
-        # self._agent_selector.reinit(self.agents)
-        self.agent_selection = self._agent_selector.reset()
+        self._agent_selector.reinit(self.agents)
+        # self._agent_selector.reset()
+        self.agent_selection = self._agent_selector.next()
 
         self.rewards = {ag: 0.0 for ag in self.possible_agents}
         self._cumulative_rewards = {ag: 0.0 for ag in self.possible_agents}
@@ -123,19 +139,21 @@ class ParallelRLWorkers(AECEnv):
     def step(self, action: dict[str, int] | int | None):
         # need to call this apparently to make sure dead agent doesn't
         # get called again in the iterator
+
+        # called = False
+        if (self.terminations[self.agent_selection] and self.dead_step[self.agent_selection]) or action is None:
+            self.agent_selection = self._agent_selector.next()
+
         if self.terminations[self.agent_selection] or self.truncations[self.agent_selection]:
-            # self._deads_step_first()
-            idx = self._agent_selector._current_agent - 1
-            self._was_dead_step(None)
-            if self.agent_selection not in self.agents:
-                self._agent_selector.agent_order = self.agents
-                if self.agents:
-                    self._agent_selector._current_agent = idx
-                    self.agent_selection = self._agent_selector.next()
-            # put infos back
-            self.infos = {agent: self.fields[agent].unwrapped.infos
-                          for agent in self.possible_agents}
-            # self._cumulative_rewards = {agent: 0.0 for agent in self.possible_agents}
+            # self._was_dead_step(None)
+            self.agents.remove(self.agent_selection)
+            self.dead_step[self.agent_selection] = True
+            self._agent_selector.reinit(self.agents)
+            #
+            # self.agent_selection = self._agent_selector.next()
+
+            # return infos for logging
+            self.infos = {agent: self.fields[agent].unwrapped.infos for agent in self.possible_agents}
 
             return
 
@@ -274,7 +292,7 @@ class ParallelRLWorkers(AECEnv):
 
     def _init_fields(self):
         """
-        This is where we initialize the sub-environments where each agent will work at.
+        This is where we initialize the sub-environments where each agent will work.
         :return: a dict called "fields", filled with different CropGym envs
         """
         self.fields = {}
@@ -306,16 +324,17 @@ class ParallelRLWorkers(AECEnv):
         self.action_spaces = {agent: env.action_space
                               for agent, env in self.fields.items()}
 
-    def _process_rewards(self, rewards):
+    def _process_rewards(self, reward):
         """
         Uses the "weighted by area" policy reward.
         """
-        # Used for parallel agents
-        # weighted_reward = np.sum([rewards[agent] * self.get_field_size(agent) for agent in self.agents])
+        field_size = self.get_field_size(self.agent_selection)
+        weighted_reward = (reward * field_size) / self.total_area
 
-        reward = rewards / self.total_area
+        self.rewards[self.agent_selection] = weighted_reward
+        # reward = rewards / self.total_area
 
-        return reward
+        return weighted_reward
 
     def _build_shared(self) -> dict[str, np.ndarray | list]:
         """
@@ -539,5 +558,38 @@ class ParallelRLWorkers(AECEnv):
         lines.append(f"\nCrop distribution → {summary}")
 
         return "\n".join(lines)
+
+
+class SkippingSelector:
+    '''
+    Here we don't use the agent_selector from PettingZoo.
+    This loads agents just sequenti
+    '''
+    def __init__(self, order: list[str]):
+        self.order = order[:]                 # fixed global order
+        self.alive = {a: True for a in self.order} # or a set(order)
+        self.idx = -1                         # points to last returned
+
+    def kill(self, agent: str):
+        self.alive[agent] = False
+
+    def reset(self):
+        self.alive = {a: True for a in self.order} # or a set(order)
+
+    def next(self) -> str:
+        n = len(self.order)
+        if not any(self.alive.values()):
+            raise StopIteration("All agents are dead.")
+        for _ in range(n):
+            self.idx = (self.idx + 1) % n
+            cand = self.order[self.idx]
+            if self.alive[cand]:
+                return cand
+        # shouldn't get here
+        raise RuntimeError("Alive list inconsistent with order.")
+
+    @property
+    def selected_agent(self):
+        return self.order[self.idx] if self.idx >= 0 else None
 
 
