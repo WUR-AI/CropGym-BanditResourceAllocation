@@ -3,6 +3,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 import os
 import math
+from copy import deepcopy
 
 import yaml
 
@@ -170,6 +171,9 @@ class ParcelEnv(pcse_env.PCSEEnv):
             training=training,
         )
 
+        # safeguard for randomisation
+        self.original_agmt = getattr(self, "agmt")
+
         # possibly deprecated
         self.costs_nitrogen = costs_nitrogen
         self.action_multiplier = action_multiplier
@@ -189,8 +193,6 @@ class ParcelEnv(pcse_env.PCSEEnv):
             self.random_weather = True
             self.random_init = True
             self.random_params = True
-
-            # self.domain_randomizer.perturb_weather()
 
         # prices of crops and fertilizers
         self._init_prices()
@@ -260,6 +262,12 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         # Only for invalid action masking
         # self.reset_non_zero_action_count()
+
+        # return the original agro management class in case of shifts during randos
+        self.agmt = deepcopy(self.original_agmt)
+
+        # Can change training mode on reset
+        self.check_if_training()
 
         site_params = self._special_init_conditions()
 
@@ -342,6 +350,16 @@ class ParcelEnv(pcse_env.PCSEEnv):
     '''
     Helper functions for various things
     '''
+
+    def check_if_training(self):
+        if self.training:
+            self.random_weather = True
+            self.random_init = True
+            self.random_params = True
+        elif not self.training:
+            self.random_weather = False
+            self.random_init = False
+            self.random_params = False
 
     @staticmethod
     def _safe_replace_year(d, year):

@@ -1,5 +1,6 @@
 import unittest
 import datetime
+from copy import deepcopy
 
 import cropgymzoo  # for gym make
 import gymnasium as gym
@@ -285,6 +286,91 @@ class TestWeatherFunctions(unittest.TestCase):
 
             self.assertNotEquals(all_noisy_tmin, all_normal_tmin)
             self.assertNotEquals(all_noisy_vap, all_normal_vap)
+
+class TestParameterPerturber(unittest.TestCase):
+    def setUp(self):
+        self.env = gym.make("field-1", training=False)
+
+    def test_consistency(self):
+        env = self.env
+
+        env = self.run_env_episode(env, perturb=False)
+
+        dvs_normal_1 = env.unwrapped.infos['DVS']
+        dvs_changed = []
+        dvs_original = []
+
+        for i in range(40):
+            print(f"Iteration {i}")
+            env = self.run_env_episode(env, perturb=False if i != 20 else True)
+
+            dates_normal = env.unwrapped.infos['Date']
+            dvs_normal = env.unwrapped.infos['DVS']
+            plt.plot(dates_normal, dvs_normal, label="Normal")
+            plt.show()
+
+            if i == 19:
+                dvs_original = dvs_normal
+            if i == 20:
+                print('stop here')
+            if i == 21:
+                dvs_changed = dvs_normal
+            self.assertEqual(dvs_normal, dvs_changed if i > 20 else dvs_normal_1) if i != 20 else self.assertNotEqual(dvs_normal, dvs_normal_1)
+            if i > 21:
+                self.assertEqual(dvs_original, dvs_normal)
+
+            dvs_normal_1 = dvs_normal
+
+    def test_parameter_perturber(self):
+        env = self.env
+
+        for i in range(30):
+            print(f"iteration {i}")
+            env = self.run_env_episode(env, perturb=False)
+
+            infos_normal = env.unwrapped.infos
+            dvs_normal = infos_normal['DVS']
+            dates_normal = infos_normal['Date']
+
+            env = self.run_env_episode(env, perturb=True)
+
+            infos_perturbed = env.unwrapped.infos
+            dvs_perturbed = infos_perturbed['DVS']
+            dates_perturbed = infos_perturbed['Date']
+
+            dvs_normal, dvs_perturbed = self.align_length(dvs_normal, dvs_perturbed)
+            dates_normal, dates_perturbed = self.align_length(dates_normal, dates_perturbed, dates=True)
+
+            plt.plot(dates_normal, dvs_normal, label="Normal")
+            plt.plot(dates_normal, dvs_perturbed, label="Perturbed")
+            plt.legend()
+            plt.show()
+
+            self.assertNotEquals(dvs_perturbed, dvs_normal)
+
+    def align_length(self, a: list, b: list, dates=False) -> tuple:
+        if not len(a) == len(b):
+            if len(a) > len(b):
+                b = b + [b[-1]] if not dates else b + [b[-1] + datetime.timedelta(days=1)]
+                a, b = self.align_length(a, b, dates=dates)
+            else:
+                a = a + [a[-1]] if not dates else a + [a[-1] + datetime.timedelta(days=1)]
+                a, b = self.align_length(a, b, dates=dates)
+        return a, b
+
+    @staticmethod
+    def run_env_episode(env: gym.Env, perturb: bool = False):
+        if perturb:
+            env.unwrapped.training = True
+        else:
+            env.unwrapped.training = False
+        env.reset(options={'year': 2010})
+
+        terminated = False
+        while not terminated:
+            _, _, terminated, _, _ = env.step(0)
+
+        return env
 
 if __name__ == '__main__':
     unittest.main()
