@@ -263,20 +263,28 @@ class TestWeatherFunctions(unittest.TestCase):
 
 
         for i in range(500):
-            all_noisy = []
-            all_normal = []
+            all_noisy_tmin = []
+            all_normal_tmin = []
+            all_noisy_vap = []
+            all_normal_vap = []
             print(f"Iteration {i}")
             for current in range(7):
                 current_date = start_date + datetime.timedelta(days=current)
 
                 noisy = self.noisy_wdp(current_date)
-                all_noisy.append(noisy.TMIN)
+                all_noisy_tmin.append(noisy.TMIN)
+                all_noisy_vap.append(noisy.VAP)
                 normal = self.normal_wdp(current_date)
-                all_normal.append(normal.TMIN)
-            print(all_noisy)
-            print(all_normal)
+                all_normal_tmin.append(normal.TMIN)
+                all_normal_vap.append(normal.VAP)
+            print(f"TMIN Noisy: {all_noisy_tmin}")
+            print(f"TMIN Normal: {all_normal_tmin}\n")
 
-            self.assertNotEquals(all_noisy, all_normal)
+            print(f"VAP Noisy: {all_noisy_vap}")
+            print(f"VAP Normal: {all_normal_vap}")
+
+            self.assertNotEquals(all_noisy_tmin, all_normal_tmin)
+            self.assertNotEquals(all_noisy_vap, all_normal_vap)
 
 if __name__ == '__main__':
     unittest.main()

@@ -23,6 +23,7 @@ class NoisyOpenMeteo(OpenMeteoWeatherDataProvider):
 
         r = self._rng
 
+        # don't change the actual values in the WDP!
         copied_rec = deepcopy(rec)
 
         # update fields dicopied_rectly; __setattr__ writes into the container
@@ -58,5 +59,5 @@ class NoisyOpenMeteo(OpenMeteoWeatherDataProvider):
         for f in ["RAIN", "IRRAD", "TMAX", "TMIN", "VAP", "TEMP", "WIND"]:
             setattr(copied_rec, f, round(getattr(copied_rec, f), 2))
 
-        return copied_rec  # same object, now containing noisy values
+        return copied_rec  # same copied object, now containing noisy values
 
