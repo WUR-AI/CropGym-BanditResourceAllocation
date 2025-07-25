@@ -259,21 +259,24 @@ class TestWeatherFunctions(unittest.TestCase):
         self.normal_wdp = NoisyOpenMeteo(*(52.512, 5.545))
 
     def test_weather(self):
-        start_date = datetime.date(2010, 1, 1)
+        start_date = datetime.date(1951, 1, 1)
 
-        all_noisy = []
-        all_normal = []
-        for current in range(40):
-            current_date = start_date + datetime.timedelta(days=current)
 
-            noisy = self.noisy_wdp(current_date)
-            all_noisy.append(noisy.TMIN)
-            normal = self.normal_wdp(current_date)
-            all_normal.append(normal.TMIN)
-        print(all_noisy)
-        print(all_normal)
+        for i in range(500):
+            all_noisy = []
+            all_normal = []
+            print(f"Iteration {i}")
+            for current in range(7):
+                current_date = start_date + datetime.timedelta(days=current)
 
-        self.assertTrue(True)
+                noisy = self.noisy_wdp(current_date)
+                all_noisy.append(noisy.TMIN)
+                normal = self.normal_wdp(current_date)
+                all_normal.append(normal.TMIN)
+            print(all_noisy)
+            print(all_normal)
+
+            self.assertNotEquals(all_noisy, all_normal)
 
 if __name__ == '__main__':
     unittest.main()
