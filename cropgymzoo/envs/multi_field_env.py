@@ -273,18 +273,28 @@ class MultiFieldEnv(AECEnv, EzPickle):
         # get dict of default max budget
         parcel_budgets = {a: self.get_per_parcel_max_budget(a) for a in self.possible_agents}
 
+        lowest_budget = min(parcel_budgets.values())
+
         # get random reductions by choice for each agent limited by the default budget of the parcel
         # change the logic of random allocation here if needed!
-        choices = {
-            a: self.rng.choice([*np.arange(0., min(200., parcel_budgets[a]), 5.)])
-            for a in self.possible_agents
-        }
+        choices = {}
+        for (a, max_budget) in parcel_budgets.items():
+            list_choice = [*np.arange(40., max_budget, 10.)]
+            probs = self.left_heavy_weights(len(list_choice))
+            choices[a] = np.random.choice(list_choice, p=probs)
 
         # set random budget reduction for each parcel
         for (_agent, choice), (_, budget) in zip(choices.items(), parcel_budgets.items()):
-            self.set_per_parcel_budget(_agent, budget-choice)
+            self.set_per_parcel_budget(_agent, choice)
 
         self.set_global_budget(self._get_global_budget())
+
+    @staticmethod
+    def left_heavy_weights(x: int, steepness: float = 1.1) -> list[float]:
+        idx = np.arange(x)  # 0, 1, 2, …, x-1
+        raw = np.exp(-steepness * idx / (x - 1))  # exponential decay
+        weights = raw / raw.sum()  # normalise to 1
+        return weights.tolist()
 
 
     '''
