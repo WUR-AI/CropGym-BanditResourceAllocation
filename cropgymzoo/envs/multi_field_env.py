@@ -113,7 +113,11 @@ class MultiFieldEnv(AECEnv, EzPickle):
         self._init_infos()
 
         # get the options before reset
-        options = options or {'year': self.rng.choice(self.years)}
+        # If training, ignore all options and override with only year.
+        # Good idea? Check for resource allocation too.
+        options = options or {'year': 2000}
+        if self.training:
+            options = {'year': self.rng.choice(self.years)}
 
         # TODO Pass global budget into options if using allocator.
         self.global_budget = self._get_global_max_budget() if not self.random_budget else self._get_global_random_budget()
