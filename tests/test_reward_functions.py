@@ -25,6 +25,7 @@ class TestSingularRewardFunctions(unittest.TestCase):
 
         self.env_pnb_1 = gym.make('field-1', reward='PNB')
         self.env_pnb_2 = gym.make('field-2', reward='PNB')
+        self.env_pnb_3 = gym.make('field-3', reward='PNB')
 
     def test_nue(self):
         # crop sugarbeets
@@ -223,6 +224,53 @@ class TestSingularRewardFunctions(unittest.TestCase):
         _, reward, term, _, info = self.env_pnb_2.step(8)
         while not term:
             _, reward, term, _, info = self.env_pnb_2.step(0)
+
+        reward = info["Reward"]
+
+        print(f"Fertilizer price: {info['FertilizerPrice'][-1]}, Crop price: {info['CropPrice'][-1]}")
+        print(f"Reward: {reward}")
+        print(f"NUE: {info['Nue'][-1]}, Nsurp {info['Nsurp'][-1]} ")
+        print(f"Profit: {info['Profit'][-1]}")
+
+        plt.plot(info["Date"], np.cumsum(info["Reward"]))
+        plt.show()
+
+        sum_reward = sum(info["Reward"])
+        print(f"Sum reward: {sum_reward}")
+
+        self.assertTrue(sum_reward > 0)
+
+    def test_pnb_potato(self):
+        _, info = self.env_pnb_3.reset(options={'year': 2015})
+
+        term = False
+        while not term:
+            _, reward, term, _, info = self.env_pnb_3.step(0)
+
+        reward = info["Reward"]
+
+        print(f"Fertilizer price: {info['FertilizerPrice'][-1]}, Crop price: {info['CropPrice'][-1]}")
+        print(f"Reward: {reward}")
+        print(f"NUE: {info['Nue'][-1]}, Nsurp {info['Nsurp'][-1]} ")
+        print(f"Profit: {info['Profit'][-1]}")
+
+        plt.plot(info["Date"], np.cumsum(info["Reward"]))
+        plt.show()
+
+        sum_reward = sum(info["Reward"])
+        print(f"Sum reward: {sum_reward}")
+
+        self.assertTrue(sum_reward <= 0)
+
+        _, info = self.env_pnb_3.reset(options={'year': 2015})
+
+        for _ in range(8):
+            _, reward, term, _, info = self.env_pnb_3.step(0)
+        _, reward, term, _, info = self.env_pnb_3.step(6)
+        _, reward, term, _, info = self.env_pnb_3.step(0)
+        _, reward, term, _, info = self.env_pnb_3.step(8)
+        while not term:
+            _, reward, term, _, info = self.env_pnb_3.step(0)
 
         reward = info["Reward"]
 

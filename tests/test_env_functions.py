@@ -324,7 +324,8 @@ class TestParameterPerturber(unittest.TestCase):
     def test_parameter_perturber(self):
         env = self.env
 
-        for i in range(30):
+        perturbs = []
+        for i in range(50):
             print(f"iteration {i}")
             env = self.run_env_episode(env, perturb=False)
 
@@ -340,13 +341,24 @@ class TestParameterPerturber(unittest.TestCase):
 
             dvs_normal, dvs_perturbed = self.align_length(dvs_normal, dvs_perturbed)
             dates_normal, dates_perturbed = self.align_length(dates_normal, dates_perturbed, dates=True)
-
-            plt.plot(dates_normal, dvs_normal, label="Normal")
-            plt.plot(dates_normal, dvs_perturbed, label="Perturbed")
-            plt.legend()
-            plt.show()
+            perturbs.append(dvs_perturbed)
 
             self.assertNotEquals(dvs_perturbed, dvs_normal)
+
+        lowest_len = min([len(dvs_perturbed) for dvs_perturbed in perturbs])
+        perturbs = [x[0: lowest_len] for x in perturbs]
+        mean_perturb = np.mean(perturbs, axis=0)
+        low_perturb = np.quantile(perturbs, 0.05, axis=0)
+        high_perturb = np.quantile(perturbs, 0.95, axis=0)
+        dates_normal = dates_normal[0:lowest_len]
+
+        plt.plot(dates_normal, dvs_normal[0:lowest_len], label="Normal")
+        plt.plot(dates_normal, mean_perturb, label="Perturbed", color="red")
+        plt.fill_between(dates_normal, low_perturb, high_perturb, alpha=0.3, color="orange")
+        plt.legend()
+        plt.show()
+
+
 
     def align_length(self, a: list, b: list, dates=False) -> tuple:
         if not len(a) == len(b):
