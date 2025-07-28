@@ -175,7 +175,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self.original_agmt = getattr(self, "agmt")
 
         # possibly deprecated
-        self.costs_nitrogen = costs_nitrogen
+        # self.costs_nitrogen = costs_nitrogen
         self.action_multiplier = action_multiplier
 
         # env stuff
@@ -269,20 +269,20 @@ class ParcelEnv(pcse_env.PCSEEnv):
         # Can change training mode on reset
         self.check_if_training()
 
-        site_params = self._special_init_conditions()
-
-        options['site_params'] = site_params
-
         # reset reward runners
         self.reward_container.reset()
         self.rewards_obj.reset()
 
-        # overwrite for new eps
-        self.overwrite_year(year=options['year'])
-
         # reset various variables
         self._reset_action_variables()
         self._reset_prices()
+
+        # overwrite for new eps
+        self.overwrite_year(year=options['year'])
+
+        # use options. Shift soil and randomise N conditions
+        site_params = self._special_init_conditions()
+        options['site_params'] = site_params
 
         # randomise domain
         options = self._randomise_domain(options)
@@ -336,6 +336,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
     def set_budget(self, budget):
         self.budget_n = budget
         self.budget_left = self.budget_n
+        self._update_budget_left()
 
     def get_max_allowed(self):
         # TODO fill in
@@ -374,6 +375,11 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         self.crop_price = self._get_crop_price()
 
+        self._update_budget_left()
+
+    def _update_budget_left(self):
+        self.reward_class.budget_left = self.budget_left
+
     def _update_action_variables(self, action):
         if isinstance(action, np.ndarray):
             action = action[0]
@@ -400,6 +406,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         if isinstance(action, np.ndarray):
             action = action.item()
 
+        # TIMES 10 HERE
         amount = action * 10  #kg/ha
 
         output_baseline = []
@@ -415,12 +422,24 @@ class ParcelEnv(pcse_env.PCSEEnv):
                     output_baseline.append(filtered_dict)
             assert len(output_baseline) != 0, f'OUTPUT BASELINE EMPTY'
 
-        prices = {'price_fertilizer': self.fertilizer_price, 'price_crop': self.crop_price}
-        reward, growth = self.reward_class.return_reward(output, amount,
-                                                         output_baseline=output_baseline,
-                                                         obj=self.reward_container,
-                                                         **prices if self.reward_function == 'PNY' else {})
         self.rewards_obj.update_profit(output, amount, year=self.date.year)
+
+        prices = {
+            'price_fertilizer': self.fertilizer_price,
+            'price_crop': self.crop_price,
+            'budget_left': self.budget_left,
+        }
+        reward, growth = self.reward_class.return_reward(
+            output,
+            amount,
+            output_baseline=output_baseline,
+            obj=self.reward_container,
+            **prices
+            if self.reward_function in ['PNY', 'PNB']
+            else {}
+        )
+        del prices
+
         reward += self._terminated_reward_signal(output, reward, terminated)
 
         return reward, growth
@@ -452,6 +471,20 @@ class ParcelEnv(pcse_env.PCSEEnv):
                 nh4_depo=get_nh4_deposition_pcse(output),)
             )
             return reward
+
+        elif terminated and self.reward_function == 'PNB':
+            reward = (
+                self.reward_class.return_final_reward(
+                    obj=self.reward_container,
+                    n_fertilized=self.reward_container.get_total_fertilization,
+                    n_output=process_pcse.get_n_storage_organ(output),
+                    no3_depo=get_no3_deposition_pcse(output),
+                    nh4_depo=get_nh4_deposition_pcse(output),
+                    budget_left=self.budget_left,
+                )
+            )
+            return reward
+
         return 0
 
     def _overwrite_initial_conditions(self):
@@ -576,7 +609,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
             **{name: [] for name in self.action_features},
             **{name: [] for name in self.misc_features},
             'Reward': [], 'Action': [], 'Yield': [],
-            'BudgetTotal': [], 'BudgetLeft': [],
+            'BudgetTotal': [], 'BudgetLeft': [], 'CropName': [],
             'Nue': [], 'Nsurp': [], 'Profit': [], "CO2": []
         }
 
@@ -625,8 +658,10 @@ class ParcelEnv(pcse_env.PCSEEnv):
         }
 
         # initialize price
-        self.fertilizer_price = self.fertilizer_prices[self.year]
-        self.crop_price = self.crop_prices[self.crop][self.year]
+        self.fertilizer_price = self._get_fertilizer_price()
+        self.costs_nitrogen = self.fertilizer_price
+
+        self.crop_price = self._get_crop_price()
 
 
     def _generate_realistic_n(self) -> tuple[list, list]:
@@ -707,11 +742,13 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
     def _get_fertilizer_price(self):
         try:
-            return self.fertilizer_prices[self.year] \
-                if not self.training \
-                else self.rng.choice(list(self.fertilizer_prices.values()))
+            fert_price = self.fertilizer_prices[self.year] \
+                            if not self.training \
+                            else self.rng.choice(list(self.fertilizer_prices.values()))
+            return fert_price
         except KeyError:
-            return list(self.fertilizer_prices.values())[0]
+            fert_price = list(self.fertilizer_prices.values())[0]
+            return fert_price
 
     def _get_crop_price(self):
         try:
@@ -741,6 +778,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self.infos['Reward'].append(reward)
         self.infos['Action'].append(action)
         self.infos['Yield'].append(pcse_output[-1]['WSO'])
+        self.infos['CropName'].append(self.crop)
 
         nue = -0.01 if not terminate else calculate_nue(
             n_input=self.reward_container.actions,
@@ -842,8 +880,9 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
     def _init_reward_function(self, costs_nitrogen, kwargs):
 
-        self.rewards_obj = Rewards(kwargs.get('reward_var'), self.timestep, costs_nitrogen)
+        self.rewards_obj: Rewards = Rewards(kwargs.get('reward_var'), self.timestep, costs_nitrogen)
         self.reward_container: ActionsContainer | Rewards.__class__ = ActionsContainer()
+        self.reward_class: Rewards.__class__ = None
 
         if self.reward_function == 'ANE':
             self.reward_class = self.rewards_obj.DEF(self.timestep, costs_nitrogen)
@@ -869,9 +908,17 @@ class ParcelEnv(pcse_env.PCSEEnv):
             self.reward_class = self.rewards_obj.NUE(self.timestep, costs_nitrogen)
             self.reward_container = self.rewards_obj.ContainerNUE(self.timestep, costs_nitrogen)
 
+        elif self.reward_function == 'PNB':
+            self.reward_class = self.rewards_obj.PNB(self.timestep, costs_nitrogen, budget_left=self.budget_left)
+            self.reward_container = self.rewards_obj.ContainerNUE(self.timestep, costs_nitrogen)
+            self.rewards_obj.crop_price = self.crop_price
+            self.rewards_obj.fertilizer_price = self.fertilizer_price
+
         elif self.reward_function == 'PNY':
             self.reward_class = self.rewards_obj.PNY(self.timestep, costs_nitrogen)
             self.reward_container = self.rewards_obj.ContainerNUE(self.timestep, costs_nitrogen)
+            self.rewards_obj.crop_price = self.crop_price
+            self.rewards_obj.fertilizer_price = self.fertilizer_price
 
         elif self.reward_function == 'DNE':
             self.reward_class = self.rewards_obj.DNE(self.timestep, costs_nitrogen)

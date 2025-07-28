@@ -2,6 +2,7 @@ import numpy as np
 
 from abc import ABC, abstractmethod
 
+from cropgymzoo.envs.pcse_env import get_random_weather_provider
 from cropgymzoo.utils.nitrogen_helpers import input_nue, get_surplus_n, get_n_deposition_pcse, get_nh4_deposition_pcse, get_no3_deposition_pcse
 import cropgymzoo.utils.process_pcse_output as process_pcse
 
@@ -44,6 +45,10 @@ class Rewards:
         self.vrr = vrr
         self.profit = 0
         self.with_year = with_year
+
+        # fertilizer_price and costs_nitrogen redundant
+        self.crop_price = 0
+        self.fertilizer_price = costs_nitrogen
 
     def growth_storage_organ(self, output, amount, multiplier=1):
         growth = process_pcse.compute_growth_storage_organ(output, self.timestep, multiplier)
@@ -139,9 +144,10 @@ class Rewards:
     """
 
     class Rew(ABC):
-        def __init__(self, timestep, costs_nitrogen):
+        def __init__(self, timestep, costs_nitrogen, budget_left = None):
             self.timestep = timestep
             self.costs_nitrogen = costs_nitrogen
+            self.budget_left = budget_left
 
         @abstractmethod
         def return_reward(self, output, amount, output_baseline=None, multiplier=1, obj=None):
@@ -271,6 +277,72 @@ class Rewards:
 
             return reward, growth
 
+    class PNB(Rew):
+        """
+        Profit, NUE, Budget left reward function
+        """
+
+        def __init__(self, timestep, costs_nitrogen, fertilizer_price=None, crop_price=None, budget_left=None):
+            super().__init__(timestep, costs_nitrogen)
+            self.timestep = timestep
+            self.costs_nitrogen = costs_nitrogen
+            self.fertilizer_price = fertilizer_price
+            self.crop_price = crop_price
+
+            self.fertilizer_beta = 10
+            self.budget_beta = 10
+
+        def return_reward(self, output, amount, output_baseline=None, multiplier=1, obj=None,
+                          price_crop=None, price_fertilizer=None, budget_left=None):
+
+            obj.calculate_amount(amount)
+
+            self.update_crop_price(price_crop)
+            self.update_fertilizer_price(price_fertilizer)
+            obj.update_fertilizer_price(price_fertilizer)
+            obj.update_crop_price(price_crop)
+
+            growth = process_pcse.compute_growth_storage_organ(output, self.timestep, multiplier)
+            obj.calculate_positive_reward_cumulative(output, output_baseline, multiplier)
+
+            # get profit
+            profit_now = obj.calculate_profit_term(
+                action=amount,
+                growth=growth,
+                price_crop=price_crop,
+                price_fertilizer=price_fertilizer
+            )
+
+            return profit_now, growth
+
+        def return_final_reward(self, obj=None, n_fertilized=None, n_output=None, no3_depo=None, nh4_depo=None, budget_left=None):
+            # Give negative reward if did not act at all; soil mining most likely
+            if obj.get_total_fertilization == 0:
+                return -obj.cum_profit - 100
+
+            n_surplus = get_surplus_n(n_input=n_fertilized, n_so=n_output, no3_depo=no3_depo, nh4_depo=nh4_depo)
+
+            nue = calculate_nue(n_input=n_fertilized, n_so=n_output, no3_depo=no3_depo, nh4_depo=nh4_depo)
+
+            n_surplus_penalty =  self.fertilizer_beta * obj.n_surplus_penalty(n_surplus)
+            nue_penalty = obj.nue_penalty(nue)
+
+            budget_left_bonus = self.budget_beta * obj.budget_left_bonus(budget_left)
+
+            # End reward in three terms that describe profit
+            reward = budget_left_bonus - n_surplus_penalty - nue_penalty
+            return reward
+
+
+        def update_fertilizer_price(self, fertilizer_price):
+            self.fertilizer_price = fertilizer_price
+
+        def update_crop_price(self, crop_price):
+            self.crop_price = crop_price
+
+
+
+
     class PNY(Rew):
         """
         Profit, NUE and Yield reward function
@@ -304,7 +376,7 @@ class Rewards:
             assert max_possible <= 1.0, "all the beta terms should be <= 1"
 
         def return_reward(self, output, amount, output_baseline=None, multiplier=1, obj=None,
-                          price_crop=None, price_fertilizer=None):
+                          price_crop=None, price_fertilizer=None, budget_left=None):
             # generic
             obj.calculate_amount(amount)
             growth = process_pcse.compute_growth_storage_organ(output, self.timestep, multiplier)
@@ -316,7 +388,6 @@ class Rewards:
             # also updates obj.cum_profit
             profit_now = obj.calculate_profit_term(action=amount, growth=growth,
                                        price_crop=price_crop, price_fertilizer=price_fertilizer)
-            obj.accumulate_profit(profit_now)
 
             # get gradient from previous
             profit_reward = self.squash_profit_reward(obj.cum_profit) - self.squash_profit_reward(prev_profit)
@@ -521,6 +592,9 @@ class Rewards:
             self.timestep = timestep
             self.costs_nitrogen = costs_nitrogen
 
+            self.fertilizer_price = .0
+            self.crop_price = .0
+
             self.cum_growth = .0
             self.cum_amount = .0
             self.cum_positive_reward = .0
@@ -595,6 +669,12 @@ class Rewards:
             else:
                 return self.cum_amount - threshold
 
+        def update_fertilizer_price(self, fertilizer_price):
+            self.fertilizer_price = fertilizer_price
+
+        def update_crop_price(self, crop_price):
+            self.crop_price = crop_price
+
         @property
         def get_total_fertilization(self):
             return self.actions
@@ -645,12 +725,15 @@ class Rewards:
             n_surplus = get_surplus_n(n_fertilized, n_output, no3_depo=no3_depo, nh4_depo=nh4_depo)
             return self.n_surplus_formula(n_surplus, nue)
 
-        @staticmethod
-        def calculate_profit_term(action, growth, price_crop, price_fertilizer):
+        def calculate_profit_term(self, action, growth, price_crop, price_fertilizer):
             expense = action * price_fertilizer
             income = growth * price_crop
             profit = income - expense
+            self.accumulate_profit(profit)
             return profit
+
+        def budget_left_bonus(self, budget_left):
+            return budget_left * self.fertilizer_price
 
         #  piecewise conditions
         @staticmethod
@@ -700,12 +783,22 @@ class Rewards:
             base_nue = max(0, min(1, 1 - (abs(nue - 0.7) - 0.2) / nue_width))
             return base_nue
 
-        @staticmethod
-        def n_surplus_penalty(nsurplus, reduction=100):
+        def n_surplus_penalty(self, nsurplus):
             if 0 < nsurplus <= 40:
                 return 0
             else:
-                return reduction * min(abs(nsurplus), abs(nsurplus - 40))
+                return nsurplus * self.fertilizer_price
+
+        def nue_penalty(self, nue):
+            if 0.5 <= nue <= 0.9:
+                return 0
+            elif nue < 0.5:
+                excess = nue - 0.5
+                return self.fertilizer_price * excess * 200  # penalty * 2 per 0.01 NUE
+            elif nue > 0.9:
+                excess = nue - 0.9
+                return self.fertilizer_price * excess * 100  # same, but half for soil mining
+            raise ValueError("This should never happen")
 
         @staticmethod
         def n_surplus_formula(n_surplus, nue, nsurp_width=100, nue_width=1):
