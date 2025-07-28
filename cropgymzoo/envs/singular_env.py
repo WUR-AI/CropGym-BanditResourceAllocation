@@ -644,7 +644,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         # 4) Build the nested-dict {crop: {year: value}}
         self.crop_prices = {
             crop: {
-                int(year): val
+                int(year): val / 100  # since all prices are euros/ha
                 for year, val in df_crop[crop].items()
                 if not pd.isna(val)
             }
@@ -652,7 +652,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         }
 
         self.fertilizer_prices = {
-            int(year): val
+            int(year): val / 100
             for year, val in df_fert["Value"].items()
             if not pd.isna(val)
         }
