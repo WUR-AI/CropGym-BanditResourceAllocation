@@ -26,7 +26,7 @@ class NoisyOpenMeteo(OpenMeteoWeatherDataProvider):
         # don't change the actual values in the WDP!
         copied_rec = deepcopy(rec)
 
-        # update fields dicopied_rectly; __setattr__ writes into the container
+        # update fields copied directly; __setattr__ writes into the container
         copied_rec.RAIN = np.clip(copied_rec.RAIN * r.normal(1.0, self.SIGMA_RAIN), 0, 25)
         copied_rec.IRRAD = round(np.clip(copied_rec.IRRAD + r.normal(0, self.SIGMA_OTHER * abs(copied_rec.IRRAD)), 0., 40e6), 0)
         copied_rec.WIND = np.clip(copied_rec.WIND + r.normal(0, self.SIGMA_OTHER * abs(copied_rec.WIND)), 0., 100.)
