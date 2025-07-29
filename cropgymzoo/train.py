@@ -203,6 +203,7 @@ def train_gru_ppo(args: Namespace):
 
     print(f"\nTraining PPO with {'GRU' if args.recurrent else 'MLP'} Network")
     print(f"Using {'Dummy' if not args.parallel else 'SubProc'}VectorEnv\n")
+    print(f"Training with {args.train_envs_num} env(s)\n")
 
     dummy_env, agents, obs_dim, act_dim = grab_spaces(args.seed)
 
