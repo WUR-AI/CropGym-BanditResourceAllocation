@@ -21,7 +21,9 @@ _FIELDS_CONFIG = os.path.join(_CONFIG_PATH, 'fields.yaml')
 _CROPS_CONFIG = os.path.join(_CONFIG_PATH, 'crop_info.yaml')
 _WOFOST_CONFIG = os.path.join(_CONFIG_PATH, 'Wofost81_NWLP_MLWB_SNOMIN.conf')
 
+_DEFAULT_MODEL_DIR = os.path.join(_BASE_PATH, 'models')
 _DEFAULT_LOGDIR = os.path.join(_BASE_PATH, 'logs')
+_DEFAULT_PLOTDIR = os.path.join(_DEFAULT_LOGDIR, 'plots')
 
 
 # Initialize singular gymnasium envs

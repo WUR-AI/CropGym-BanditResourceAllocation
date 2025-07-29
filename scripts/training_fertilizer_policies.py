@@ -31,7 +31,7 @@ if __name__ == "__main__":
     parser.add_argument("--test_envs_num", type=int, default=1)
     parser.add_argument("--episode_per_collect", type=int, default=4)
     parser.add_argument("--step_per_collect", type=int, default=0)
-    # parser.add_argument("--batch_size", type=int, default=64)  # Not explicitly defining batch size
+    parser.add_argument("--batch_size", type=int, default=0)  # Not explicitly defining batch size
 
 
     # Meta stuff
