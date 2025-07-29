@@ -4,7 +4,6 @@ import datetime
 from typing import Sequence
 from argparse import Namespace
 
-import pandas as pd
 import torch
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim import Adam
@@ -14,14 +13,9 @@ import gymnasium as gym
 
 from cropgymzoo.agents.networks import RecurrentGRU, MaskedActor, DictObsCritic, NetObs
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
-from cropgymzoo import _DEFAULT_LOGDIR
 
-from pettingzoo.utils.conversions import parallel_to_aec
-from pettingzoo import ParallelEnv
-
-from cropgymzoo.utils.wrappers import VecNormObs
+from cropgymzoo.envs.wrappers import VecNormObs
 from cropgymzoo.utils.callbacks import yearly_eval_test_fn, save_checkpoint_fn, save_best_fn
-from cropgymzoo.utils.agent_helpers import extract_info
 
 try:
     # ---- Tianshou imports ----
@@ -258,7 +252,7 @@ def train_gru_ppo(args: Namespace):
                             else None,
         repeat_per_collect=args.repeat_per_collect,
         episode_per_test=1,
-        batch_size=(args.step_per_collect or 64) * len(train_envs),
+        batch_size=args.batch_size or ((args.step_per_collect or 64) * len(train_envs)),
 
         # use lambdas for callbacks
         test_fn=lambda epoch, _: yearly_eval_test_fn(
