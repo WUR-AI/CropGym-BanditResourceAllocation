@@ -8,7 +8,7 @@ import torch
 from tianshou.data import Collector
 from tianshou.policy import MultiAgentPolicyManager
 
-from cropgymzoo.utils.wrappers import VecNormObs
+from cropgymzoo.envs.wrappers import VecNormObs
 
 def yearly_eval_test_fn(epoch, test_collector: Collector, agents, logger, args):
     test_results = {}
@@ -123,10 +123,10 @@ def save_checkpoint_fn(
     test_envs.set_obs_rms(train_envs.get_obs_rms())
     torch.save(
         {
-            "epoch": epoch,
-            "env_step": env_step,
-            "grad_step": grad_step,
-            "model": policy_mgr.state_dict(),
+            "model": {
+                aid: p.state_dict()  # one file for every agent
+                for aid, p in policy_mgr.policies.items()
+            },
             "obs_rms": train_envs.get_obs_rms(),
         },
         os.path.join(args.logdir, run_name, "checkpoints", f"check_{epoch:04d}.pth")
