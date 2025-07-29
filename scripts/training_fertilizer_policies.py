@@ -17,7 +17,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=107)
 
     #--------- Hyperparams
-    parser.add_argument("--lr", type=float, default=7e-4)
+    parser.add_argument("--lr", type=float, default=1e-3)
 
     # epoch * step_per_epoch = training steps
     parser.add_argument("--epoch", type=int, default=300)

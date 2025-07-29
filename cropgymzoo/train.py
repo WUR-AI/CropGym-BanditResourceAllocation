@@ -250,13 +250,15 @@ def train_gru_ppo(args: Namespace):
         test_collector=test_collector,
         max_epoch=args.epoch,
         step_per_epoch=args.step_per_epoch,
-        step_per_collect=args.step_per_collect,
+        step_per_collect=args.step_per_collect
+                         if args.step_per_collect
+                         else None,
         episode_per_collect=args.episode_per_collect
                             if not args.step_per_collect
                             else None,
         repeat_per_collect=args.repeat_per_collect,
         episode_per_test=1,
-        batch_size=(args.step_per_collect or 3200) * len(train_envs),
+        batch_size=(args.step_per_collect or 64) * len(train_envs),
 
         # use lambdas for callbacks
         test_fn=lambda epoch, _: yearly_eval_test_fn(
