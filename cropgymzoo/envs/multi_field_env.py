@@ -317,7 +317,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
         print("Parcels initialized!")
 
     def _init_infos(self):
-        self.infos = {}
+        self.infos = {ag: {} for ag in self.possible_agents}
 
     def _init_spaces(self):
         self.shared_space = gym.spaces.Dict(

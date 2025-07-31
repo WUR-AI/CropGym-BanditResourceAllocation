@@ -8,17 +8,18 @@ import pettingzoo
 import torch
 
 from gymnasium import spaces
-from tianshou.env import PettingZooEnv, VectorEnvNormObs, BaseVectorEnv, VectorEnvWrapper
+from tianshou.env import PettingZooEnv, VectorEnvNormObs, BaseVectorEnv, VectorEnvWrapper, SubprocVectorEnv
 from tianshou.utils import RunningMeanStd
 
 
 
-class VecNormObs(VectorEnvNormObs):
+class MultiAgentVecNormObs(VectorEnvNormObs):
     """
     Normalises observation and runs several Batch pre-processing for Tianshou training.
     """
     def __init__(self,
                  venv: BaseVectorEnv,
+                 agents: list[str],
                  update_obs_rms: bool = True,
                  shared: bool = False,
                  device="cpu",):
@@ -26,8 +27,10 @@ class VecNormObs(VectorEnvNormObs):
         self.device = device
 
         # hacky here; do we need just an input?
-        self.agents = _get_env(venv.workers[0].env).agents
+        # OK this doesn't work with subprocvecenv...
+        # self.agents = _get_env(venv.workers[0].env).agents
 
+        self.agents = agents
         self.shared = shared
         self.num_agents = len(self.agents)
         self.obs_rms: RunningMeanStd | dict = (
@@ -36,6 +39,20 @@ class VecNormObs(VectorEnvNormObs):
                 for agent_id in self.agents
             }
         )
+
+        self._terminateds = None
+        self._vec_ids = None
+        self.subproc = False
+        if isinstance(self.venv, SubprocVectorEnv):
+            self.subproc = True
+            self._vec_ids = list(range(self.venv.env_num))
+            self._terminateds = {
+                id: {
+                    ag: False
+                    for ag in self.agents
+                }
+                for id in self._vec_ids
+            }
 
     # ---------------- overrides ------------------------- #
     def reset(
@@ -71,8 +88,15 @@ class VecNormObs(VectorEnvNormObs):
         for i, venv_obs in enumerate(obs_extracted):
             obs[i]["obs"] = obs_extracted[i]
 
-        for i, _i in enumerate(info):
-            info[i] = self.collapse_info_dict(_i)
+        for i, _info in enumerate(info):
+            info[i] = self.collapse_info_dict(_info)
+
+        # Reset terminations
+        if self.subproc and env_id is not None:
+            for idx in env_id:
+                self._terminateds[idx] = {
+                    agent_id: False for agent_id in self.agents
+                }
 
         return obs, info
 
@@ -110,29 +134,48 @@ class VecNormObs(VectorEnvNormObs):
         info = []
         for i, _info in enumerate(step_results[-1]):
             info.append(self.collapse_info_dict(_info))
+            # Add resets flag in info
+            info[i]["ResetMask"] = False
         info = np.stack(info)
 
         # Process terminates
+        terminateds = self._get_terminateds(obs, step_results[2])
 
-        terms = []
-        deads = []
-        envs = self.venv.workers
-        for env in envs:
-            env = _get_env(env) # risky risky here
-            term_signal = getattr(env, "terminations", {})
-            dead_step = getattr(env, "dead_step", {})
-            terms.append(term_signal)
-            deads.append(dead_step)
-
-        terminateds = []
-        for i, (term, dead) in enumerate(zip(terms, deads)):
-            termed = all(term.values())
-            # deaded = bool(dead) and all(dead.values()) # list(dead.values()).count(False) == 1  # hacky hacky wacky
-            terminated = termed
-            terminateds.append(terminated)
-        terminateds = np.array(terminateds, dtype=bool)
+        # safeguard for
+        if len(terminateds) != len(info):
+            env_ids = [i for env in info for idx, i in env.items() if idx == 'env_id']
+            terminateds = terminateds[env_ids]
 
         return obs, step_results[1], terminateds, step_results[-2], info
+
+    def _get_terminateds(self, obs, terminated_ids) -> np.array:
+        if not self.subproc:
+            terms = []
+            envs = self.venv.workers
+            for env in envs:
+                env = _get_env(env)  # risky risky here
+                term_signal = getattr(env, "terminations", {})
+                terms.append(term_signal)
+
+            terminateds = []
+            for i, (term) in enumerate(terms):
+                termed = all(term.values())
+                terminated = termed
+                terminateds.append(terminated)
+            terminateds = np.array(terminateds, dtype=bool)
+        else:
+            agent_ids = [o['agent_id'] for o in obs]
+            for idx, term_signal in enumerate(terminated_ids):
+                self._terminateds[idx][agent_ids[idx]] = term_signal
+
+            terms = [
+                all(self._terminateds[idx].values())
+                for idx in self._vec_ids
+            ]
+
+            terminateds = np.array(terms, dtype=bool)
+
+        return terminateds
 
     def _norm_obs(self, obs: np.ndarray, agent_id=None) -> np.ndarray:
         if self.shared:

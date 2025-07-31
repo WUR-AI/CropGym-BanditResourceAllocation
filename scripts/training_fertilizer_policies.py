@@ -50,7 +50,6 @@ if __name__ == "__main__":
     hyperparams = parser.parse_args()
 
     # safeguard
-    hyperparams.train_envs_num = 2 if (hyperparams.parallel is True and hyperparams.train_envs_num == 1) else 1
-
+    hyperparams.train_envs_num = 2 if (hyperparams.parallel is True and hyperparams.train_envs_num == 1) else hyperparams.train_envs_num
 
     train_gru_ppo(hyperparams)

@@ -4,7 +4,10 @@ import datetime
 from typing import Sequence
 from argparse import Namespace
 
+from copy import deepcopy
+
 import torch
+torch.autograd.set_detect_anomaly(True)
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim import Adam
 
@@ -14,13 +17,13 @@ import gymnasium as gym
 from cropgymzoo.agents.networks import RecurrentGRU, MaskedActor, DictObsCritic, NetObs
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
-from cropgymzoo.envs.wrappers import VecNormObs
+from cropgymzoo.envs.wrappers import MultiAgentVecNormObs
 from cropgymzoo.utils.callbacks import yearly_eval_test_fn, save_checkpoint_fn, save_best_fn
 
 try:
     # ---- Tianshou imports ----
     from tianshou.data import Collector, VectorReplayBuffer, Batch
-    from tianshou.data.collector import EpisodeRolloutHookProtocol
+    from tianshou.data.collector import EpisodeRolloutHookProtocol, StepHook
     from tianshou.env import PettingZooEnv, DummyVectorEnv, SubprocVectorEnv, VectorEnvNormObs, BaseVectorEnv, VectorEnvWrapper, ShmemVectorEnv
     from tianshou.utils.net.common import NetBase, RecurrentStateBatch, Net
     from tianshou.utils.net.discrete import Actor, Critic  # will wrap our GRU core
@@ -34,31 +37,32 @@ except ImportError:
     tianshou = None
 
 
-class CountStuffHook:  # (EpisodeRolloutHookProtocol):
-    def __init__(self, agent_names):
-        # cache the mapping once
-        self.aid2idx = {aid: i for i, aid in enumerate(agent_names)}
-    """Compute per-agent episode stats and return them as numpy arrays."""
-    def __call__(self, episode_batch):
-        # episode_batch.info is a list/array of `info` dicts for *every* step
-        t = len(episode_batch)
-        agent_ids = np.asarray(episode_batch.obs.agent_id)  # (T,) strings
-        infos = episode_batch.info  # (T,) dicts
-        agents = np.unique(agent_ids)
-        out: dict[str, np.ndarray] = {} # {agent: metric value}
-        for aid, idx in self.aid2idx.items():
-            # out.setdefault(aid, {})
-            mask = agent_ids == aid  # which timesteps belong to this agent
-            sub = infos[mask]  # same length as #steps for that agent
-            rew_tot = episode_batch.rew[:, idx].sum()
+class HiddenStateHook(StepHook):
+    """
+    Let's try using this. Because of the stupid MARL RNN bug from the Tianshou collector.
+    """
+    def __init__(self, agents):
+        self.hidden_state_bank = {
+            agent: Batch() for agent in agents
+        }
 
-            out[f"Naction/{aid}"] = np.full(t, float(sub.Naction[-1]), dtype=np.float32)
-            out[f"Yield/{aid}"] = np.full(t, float(sub.Yield[-1]), dtype=np.float32)
-            out[f"Reward/{aid}"] = np.full(t, float(rew_tot), dtype=np.float32)
-            out[f"Nue/{aid}"] = np.full(t, float(sub.Nue[-1]), dtype=np.float32)
-            out[f"Nsurp/{aid}"] = np.full(t, float(sub.Nsurp[-1]), dtype=np.float32)
+    def __call__(
+            self,
+            action_batch,
+            rollout_batch,
+    ) -> None:
+        hidden_state = getattr(action_batch, "hidden_state", None)
+        temp_hidden_state = deepcopy(hidden_state)
+        hidden_state.replace_empty_batches_by_none()
+        if isinstance(hidden_state, Batch) and len(hidden_state):
+            for agent, state in hidden_state.items():
+                if state is not None:
+                    self.hidden_state_bank[agent] = state
 
-        return out
+        action_batch.hidden_state = deepcopy(self.hidden_state_bank)
+        action_batch.hidden_state.policy_entry = deepcopy(self.hidden_state_bank)
+        rollout_batch.policy.hidden_state = deepcopy(temp_hidden_state)
+
 
 def make_ppo_policy(
     obs_dim: int,
@@ -76,8 +80,18 @@ def make_ppo_policy(
         actor = MaskedActor(preprocess_net=actor_net, action_dim=act_dim).to(device)
         critic = Critic(preprocess_net=critic_net, device=device)
     else:
-        actor_net = RecurrentGRU(layer_num=1, state_shape=obs_dim, action_shape=act_dim, device=device, )  # GRUBackbone(obs_dim, hidden_dim=[128, 128])
-        critic_net = RecurrentGRU(layer_num=1, state_shape=obs_dim, action_shape=act_dim, device=device,)  # GRUBackbone(obs_dim, hidden_dim=[128, 128])
+        actor_net = RecurrentGRU(
+            layer_num=1,
+            state_shape=obs_dim,
+            action_shape=act_dim,
+            device=device,
+        )  # GRUBackbone(obs_dim, hidden_dim=[128, 128])
+        critic_net = RecurrentGRU(
+            layer_num=1,
+            state_shape=obs_dim,
+            action_shape=act_dim,
+            device=device,
+        )  # GRUBackbone(obs_dim, hidden_dim=[128, 128])
 
         actor = MaskedActor(preprocess_net=actor_net, action_dim=act_dim).to(device)
         critic = DictObsCritic(preprocess_net=critic_net).to(device)
@@ -107,20 +121,25 @@ def make_ppo_policy(
 
 def make_vec_env(
         parallel: bool = True,
-        indep: bool = True,
+        independent: bool = True,
         num_envs: int = 4,
         norm: bool = True,
-        train: bool = True
-    ) -> SubprocVectorEnv | DummyVectorEnv | VecNormObs:
+        train: bool = True,
+        agents: list['str'] = None,
+    ) -> SubprocVectorEnv | DummyVectorEnv | MultiAgentVecNormObs:
     """Each subprocess builds → PettingZooEnv"""
     if parallel:
-        env_fns = [partial(get_petting_zoo_env, indep, train) for _ in range(num_envs)]
-        env = SubprocVectorEnv(env_fns)
+        env_fns = [
+            lambda indep=independent, tr=train:
+            get_petting_zoo_env(indep, tr)
+            for _ in range(num_envs)
+        ]
+        env = SubprocVectorEnv(env_fns, context='fork')
     else:
-        env_fns = [partial(get_petting_zoo_env, indep, train) for _ in range(1)]
+        env_fns = [partial(get_petting_zoo_env, independent, train) for _ in range(1)]
         env = DummyVectorEnv(env_fns)
     if norm:
-        env = VecNormObs(env, update_obs_rms=train)
+        env = MultiAgentVecNormObs(env, agents=agents, update_obs_rms=train)
     return env
 
 
@@ -203,8 +222,22 @@ def train_gru_ppo(args: Namespace):
 
     # Create vector env
     normalize = True
-    train_envs = make_vec_env(args.parallel, args.independent, args.train_envs_num, norm=normalize, train=True)
-    test_envs = make_vec_env(args.parallel, args.independent, args.test_envs_num, norm=normalize, train=False)
+    train_envs = make_vec_env(
+        parallel=args.parallel,
+        independent=args.independent,
+        num_envs=args.train_envs_num,
+        norm=normalize,
+        train=True,
+        agents=agents,
+    )
+    test_envs = make_vec_env(
+        parallel=args.parallel,
+        independent=args.independent,
+        num_envs=args.test_envs_num,
+        norm=normalize,
+        train=False,
+        agents=agents,
+    )
 
     if normalize:
         train_envs.reset(options={'year': np.random.choice(range(1951, 2024))})
@@ -212,7 +245,14 @@ def train_gru_ppo(args: Namespace):
 
     # Build policies
     if args.independent:
-        policies = {a: make_ppo_policy(obs_dim, act_dim, args.lr, recurrent=args.recurrent) for a in agents}
+        policies = {
+            a: make_ppo_policy(
+                obs_dim=obs_dim,
+                act_dim=act_dim,
+                lr=args.lr,
+                recurrent=args.recurrent)
+            for a in agents
+        }
     else:
         shared = make_ppo_policy(obs_dim, act_dim, args.lr, recurrent=args.recurrent)
         policies = {a: shared for a in agents}
@@ -226,14 +266,16 @@ def train_gru_ppo(args: Namespace):
         env=train_envs,
         buffer=VectorReplayBuffer(
             total_size=args.buffer_size,
-            buffer_num=1,
+            buffer_num=args.train_envs_num if args.parallel else 1,
             stack_num=1,
         ),  # use this buffer
-        exploration_noise=True
+        exploration_noise=True,
+        on_step_hook=HiddenStateHook(agents),  # For RNN bug
     )
     test_collector = Collector(
         policy=policy_mgr,
         env=test_envs,
+        on_step_hook=HiddenStateHook(agents),
     )
 
     logger, run_name = create_logger(args.logdir)
@@ -261,7 +303,7 @@ def train_gru_ppo(args: Namespace):
             agents,
             logger,
             args
-        ),
+        ) if not args.parallel else None,
         save_best_fn=lambda ma_policy: save_best_fn(
             ma_policy,
             train_envs,

@@ -8,7 +8,7 @@ import torch
 from tianshou.data import Collector
 from tianshou.policy import MultiAgentPolicyManager
 
-from cropgymzoo.envs.wrappers import VecNormObs
+from cropgymzoo.envs.wrappers import MultiAgentVecNormObs
 
 def yearly_eval_test_fn(epoch, test_collector: Collector, agents, logger, args):
     test_results = {}
@@ -114,8 +114,8 @@ def save_checkpoint_fn(
         env_step: int,
         grad_step: int,
         run_name: str,
-        train_envs: VecNormObs,
-        test_envs: VecNormObs,
+        train_envs: MultiAgentVecNormObs,
+        test_envs: MultiAgentVecNormObs,
         policy_mgr: MultiAgentPolicyManager,
         args: argparse.Namespace,
 ) -> None | str:
@@ -134,7 +134,7 @@ def save_checkpoint_fn(
 
 def save_best_fn(
         ma_policy: MultiAgentPolicyManager,
-        train_envs: VecNormObs,
+        train_envs: MultiAgentVecNormObs,
         run_name: str,
         args: argparse.Namespace,
 ) -> None:

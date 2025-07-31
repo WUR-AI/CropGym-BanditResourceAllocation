@@ -1,12 +1,14 @@
 from typing import Sequence, Any
 
+from copy import deepcopy
+
 import numpy as np
 import torch
 from tianshou.data import Batch
 from tianshou.data.types import RecurrentStateBatch
 from tianshou.utils.net.common import NetBase, Recurrent, Net
 from tianshou.utils.net.discrete import Actor, Critic
-from torch import nn as nn
+from torch import nn
 
 
 class GRUBackbone(nn.Module):
@@ -58,12 +60,15 @@ class RecurrentGRU(NetBase[RecurrentStateBatch]):
         action_shape: int | Sequence[int],
         hidden_layer_size: int = 128,
         device: str | int | torch.device = "cpu",
-        key_order: tuple[str, Any] | None = None,
     ) -> None:
         super().__init__()
         self.device = device
-        self.key_order = key_order
         self.output_dim = int(np.prod(action_shape))
+        self.obs_dim = state_shape
+        self.hidden_dim = hidden_layer_size
+        self.env_num = 1
+        self.flag = False
+
 
         self.fc1 = nn.Linear(int(np.prod(state_shape)), hidden_layer_size)
         self.gru = nn.GRU(
@@ -94,18 +99,43 @@ class RecurrentGRU(NetBase[RecurrentStateBatch]):
         # 2. feed-forward + add time dim
         x = torch.tanh(self.fc1(obs)) # [B, H]
         x = x.unsqueeze(1)  # [B, 1, H]
-        self.gru.flatten_parameters()
 
         if state is None or "hidden" not in state:
             y, h_in = self.gru(x)            # hidden: [num_layers, bsz, h]
         else:
-            h_in = state["hidden"].transpose(0, 1).contiguous()
-        y, hidden = self.gru(x, h_in)
+            # state["hidden"] MUST be [B, H] coming from previous step
+            h_in = state["hidden"].unsqueeze(0)  # .transpose(0, 1).contiguous()
 
-        logits = self.fc2(y.squeeze(1))              # take last time-step
+        y, h = self.gru(x, h_in)
+        logits = self.fc2(y.squeeze(1))  # [B_alive, A]
 
-        next_state = Batch({"hidden": hidden.transpose(0, 1).detach()})
-        return logits, next_state
+        next_hidden = h
+
+        return logits, Batch(hidden=next_hidden.squeeze(0).detach())
+
+    @staticmethod
+    def is_consecutive_and_ordered(arr):
+        arr = np.asarray(arr)  # ensure it's a NumPy array
+        expected = np.arange(arr[0], arr[0] + len(arr))
+        return np.array_equal(arr, expected)
+
+    @staticmethod
+    def to_batch_mask(raw_mask, B, idx=None, device=None):
+        """Return a bool mask of length B.
+        If raw_mask length == B -> pass through.
+        If raw_mask length == idx.sum() -> scatter into B using idx (alive mask)."""
+        if raw_mask is None:
+            return torch.zeros(B, dtype=torch.bool, device=device)
+        m = torch.as_tensor(raw_mask, device=device, dtype=torch.bool).flatten()
+        if m.numel() == B:
+            return m
+        if idx is not None:
+            idx = torch.as_tensor(idx, device=device, dtype=torch.bool).flatten()
+            if m.numel() == int(idx.sum().item()):
+                full = torch.zeros(B, dtype=torch.bool, device=device)
+                full[idx] = m
+                return full
+        raise ValueError(f"Mask length {m.numel()} doesn’t match B={B} (and no valid idx).")
 
 
 class RecurrentLSTM(Recurrent):
@@ -142,21 +172,66 @@ class RecurrentLSTM(Recurrent):
 class MaskedActor(Actor):
     """Actor that zeroes logits for illegal actions via provided mask."""
 
-    def __init__(self, preprocess_net, action_dim, device='cpu', key_order = None):
+    def __init__(self, preprocess_net, action_dim, device='cpu'):
         super().__init__(preprocess_net=preprocess_net, action_shape=action_dim,
                          softmax_output=False, device=device)  # remember for logits
-        self.key_order = key_order
+        self.previous_env_ids = None
+        self.max_env = 1
 
-    def forward(self, obs: torch.Tensor, state: torch.Tensor | None = None, info: dict = {}):
+    def forward(self, obs: torch.Tensor, state: torch.Tensor | None = None, info: dict | Batch = None):
 
-        latent, h = self.preprocess(obs, state)
-        logits = self.last(latent)
+        env_num = self.preprocess.env_num
+        obs_dim = self.preprocess.obs_dim[0]
+        out_dim = self.preprocess.output_dim
+
+        initial_shape = obs.shape[0]
+        if initial_shape > self.max_env:
+            self.max_env = initial_shape
+
+        if state:
+            if obs.shape[0] != state.shape[0]:
+                dim_to_align = state.shape[0]
+                idx = torch.zeros(dim_to_align, dtype=torch.bool)
+
+                try:  # quite hacky here hmmmm is there a better way to do this?
+                    idx[info['env_id']] = True
+                except IndexError:
+                    if set(self.previous_env_ids) != set(info['env_id']):
+                        odd_out = [b for b in self.previous_env_ids if b not in info['env_id']]
+                        idx = [b not in odd_out for b in self.previous_env_ids]
+
+                # Don't change in-place for back propagation
+                obs = deepcopy(obs)
+
+                # Preallocate zeros with matching dtypes
+                zero_obs = np.zeros((dim_to_align, obs_dim), dtype=obs.obs.dtype)
+                zero_mask = np.zeros((dim_to_align, out_dim), dtype=obs.mask.dtype)
+
+                # Fill only alive slots
+                zero_obs[idx] = obs.obs
+                zero_mask[idx] = obs.mask
+
+                obs.obs = zero_obs
+                obs.mask = zero_mask
+                obs.agent_id = np.array([obs.agent_id[-1]] * dim_to_align, dtype=object)
+
+
+        logits, h = self.preprocess(obs, state, info)
+        # logits = self.last(logits)
         if isinstance(info, dict) and "action_mask" in info:
             mask = torch.as_tensor(info["action_mask"], device=logits.device)
             logits[mask == False] = -1e10
         elif isinstance(obs, Batch) and "mask" in obs:
             mask = torch.as_tensor(obs["mask"], device=logits.device)
             logits[mask == False] = -1e10
+
+        if initial_shape != logits.shape[0]:
+            logits = logits[info['env_id']]
+
+        # to save for later
+        if hasattr(info, "env_id"):
+            self.previous_env_ids = info['env_id']
+
         return logits, h
 
 

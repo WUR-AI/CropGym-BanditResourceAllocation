@@ -1,15 +1,13 @@
 import unittest
 
 import gymnasium as gym
-import pettingzoo
 
 import numpy as np
-from numba.core.typing.old_builtins import Print
 
 from cropgymzoo.envs.singular_env import ParcelEnv
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
-from cropgymzoo.utils.wrappers import VecNormObs, PettingZooEnvChecker
+from cropgymzoo.envs.wrappers import MultiAgentVecNormObs
 
 try:
     from tianshou.env import PettingZooEnv, SubprocVectorEnv, DummyVectorEnv
@@ -146,11 +144,11 @@ class TestEnvWrappers(unittest.TestCase):
         )
 
     def test_norm_wrapper(self):
-        train_env = VecNormObs(
+        train_env = MultiAgentVecNormObs(
             self.venv_train,
             update_obs_rms=True,
         )
-        test_env = VecNormObs(
+        test_env = MultiAgentVecNormObs(
             self.venv_test,
             update_obs_rms=False,
         )
