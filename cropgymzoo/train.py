@@ -42,9 +42,10 @@ class HiddenStateHook(StepHook):
     Let's try using this. Because of the stupid MARL RNN bug from the Tianshou collector.
     """
     def __init__(self, agents):
-        self.hidden_state_bank = {
+        self.hidden_state_bank = Batch({
             agent: Batch() for agent in agents
-        }
+        })
+        # self.previous_hidden_state = Batch()
 
     def __call__(
             self,
@@ -52,7 +53,7 @@ class HiddenStateHook(StepHook):
             rollout_batch,
     ) -> None:
         hidden_state = getattr(action_batch, "hidden_state", None)
-        temp_hidden_state = deepcopy(hidden_state)
+        # temp_hidden_state = deepcopy(hidden_state)
         hidden_state.replace_empty_batches_by_none()
         if isinstance(hidden_state, Batch) and len(hidden_state):
             for agent, state in hidden_state.items():
@@ -61,7 +62,7 @@ class HiddenStateHook(StepHook):
 
         action_batch.hidden_state = deepcopy(self.hidden_state_bank)
         action_batch.hidden_state.policy_entry = deepcopy(self.hidden_state_bank)
-        rollout_batch.policy.hidden_state = deepcopy(temp_hidden_state)
+        rollout_batch.policy.hidden_state = deepcopy(self.hidden_state_bank)
 
 
 def make_ppo_policy(
@@ -116,7 +117,7 @@ def make_ppo_policy(
         value_clip=True,
         action_space=gym.spaces.Discrete(act_dim),
         action_scaling=False,
-        reward_normalization=False,
+        reward_normalization=True,
     ).to(device)
 
 def make_vec_env(
@@ -300,6 +301,7 @@ def train_gru_ppo(args: Namespace):
         test_fn=lambda epoch, _: yearly_eval_test_fn(
             epoch,
             test_collector,
+            train_collector.env,
             agents,
             logger,
             args

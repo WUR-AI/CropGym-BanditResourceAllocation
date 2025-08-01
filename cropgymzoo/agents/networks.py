@@ -180,7 +180,6 @@ class MaskedActor(Actor):
 
     def forward(self, obs: torch.Tensor, state: torch.Tensor | None = None, info: dict | Batch = None):
 
-        env_num = self.preprocess.env_num
         obs_dim = self.preprocess.obs_dim[0]
         out_dim = self.preprocess.output_dim
 

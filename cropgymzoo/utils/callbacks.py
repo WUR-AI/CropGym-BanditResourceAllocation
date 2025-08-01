@@ -6,11 +6,12 @@ import pandas as pd
 import torch
 
 from tianshou.data import Collector
+from tianshou.env import BaseVectorEnv
 from tianshou.policy import MultiAgentPolicyManager
 
 from cropgymzoo.envs.wrappers import MultiAgentVecNormObs
 
-def yearly_eval_test_fn(epoch, test_collector: Collector, agents, logger, args):
+def yearly_eval_test_fn(epoch, test_collector: Collector, train_env: BaseVectorEnv, agents, logger, args):
     test_results = {}
     year_rewards = []
 
@@ -20,6 +21,8 @@ def yearly_eval_test_fn(epoch, test_collector: Collector, agents, logger, args):
 
     dfs = []
     writer = logger.writer
+
+    test_collector.env.set_obs_rms(train_env.get_obs_rms())
     # per year eval
     for i, reset_opts in enumerate(reset_options_list):
         year = reset_opts["year"]
