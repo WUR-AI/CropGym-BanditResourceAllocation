@@ -248,6 +248,7 @@ class DictObsCritic(Critic):
 class NetObs(Net):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.obs_dim = (kwargs.get("state_shape", None),)
 
     def forward(
         self,

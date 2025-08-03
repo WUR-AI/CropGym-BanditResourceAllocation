@@ -1,4 +1,4 @@
-import copy
+from copy import deepcopy
 from collections import defaultdict
 from typing import Any
 
@@ -33,13 +33,16 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
         self.agents = agents
         self.shared = shared
         self.num_agents = len(self.agents)
+
+        # observations
         self.obs_rms: RunningMeanStd | dict = (
             RunningMeanStd() if shared else {
                 agent_id: RunningMeanStd()
                 for agent_id in self.agents
             }
-        )
+        ) if self.norm_obs else None
 
+        # terminateds
         self._terminateds = None
         self._vec_ids = None
         self.subproc = False
@@ -53,6 +56,8 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
                 }
                 for id in self._vec_ids
             }
+
+        self.old_obs = None
 
     # ---------------- overrides ------------------------- #
     def reset(
@@ -69,6 +74,7 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
             )
 
         obs_extracted = obs.copy()
+        self.old_obs = obs
         if isinstance(obs_extracted, (list, np.ndarray)):  # the common case
             agent_ids = np.array([d["agent_id"] for d in obs_extracted])
             obs_extracted = np.array([d["observation"] if "observation" in d else d["obs"] for d in obs_extracted])
@@ -81,7 +87,7 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
         else:
             for i, agent_id in enumerate(agent_ids):
                 if self.obs_rms[agent_id] and self.update_obs_rms:
-                    self.obs_rms[agent_id].update(obs_extracted)
+                    self.obs_rms[agent_id].update(obs_extracted[i])
                 obs_extracted[i] = self._norm_obs(obs_extracted[i], agent_id)
                 obs_extracted[i] = obs_extracted[i].astype(np.float32)
 
@@ -110,9 +116,11 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
         # Process obs
 
         obs = step_results[0].copy()
-        if isinstance(obs, (list, np.ndarray)):  # the common case
-            agent_ids = np.array([d["agent_id"] for d in obs])
-            obs_extracted = np.array([d["observation"] if "observation" in d else d["obs"] for d in obs])
+
+        self.old_obs = obs
+
+        agent_ids = np.array([d["agent_id"] for d in obs])
+        obs_extracted = np.array([d["observation"] if "observation" in d else d["obs"] for d in obs])
 
         if self.shared:
             if self.obs_rms and self.update_obs_rms:
@@ -186,8 +194,12 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
                 return self.obs_rms[agent_id].norm(obs)
         return obs
 
-    def get_obs_rms(self) -> RunningMeanStd | dict[str, RunningMeanStd]:
-        return self.obs_rms
+    def get_original_obs(self):
+        return deepcopy(self.old_obs)
+
+    def get_original_reward(self) -> np.ndarray:
+        return self.old_rew.copy()
+
 
     @staticmethod
     def collapse_info_dict(info: dict[str, dict[str, list | float]]) -> dict[str, dict[str, float]]:

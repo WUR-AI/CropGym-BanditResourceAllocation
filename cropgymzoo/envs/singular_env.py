@@ -609,7 +609,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
             **{name: [] for name in self.action_features},
             **{name: [] for name in self.misc_features},
             'Reward': [], 'Action': [], 'Yield': [],
-            'BudgetTotal': [], 'BudgetLeft': [], 'CropName': [],
+            'BudgetTotal': [], 'BudgetLeft': [], 'CropName': [], 'Alive': [],
             'Nue': [], 'Nsurp': [], 'Profit': [], "CO2": []
         }
 
@@ -779,6 +779,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self.infos['Action'].append(action)
         self.infos['Yield'].append(pcse_output[-1]['WSO'])
         self.infos['CropName'].append(self.crop)
+        self.infos['Alive'].append(True if not terminate else False)
 
         nue = -0.01 if not terminate else calculate_nue(
             n_input=self.reward_container.actions,

@@ -15,6 +15,7 @@ import numpy as np
 import gymnasium as gym
 
 from cropgymzoo.agents.networks import RecurrentGRU, MaskedActor, DictObsCritic, NetObs
+from cropgymzoo.agents.marl_algorithms import IPPOPolicy
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
 from cropgymzoo.envs.wrappers import MultiAgentVecNormObs
@@ -103,7 +104,7 @@ def make_ppo_policy(
     dist = lambda logits: torch.distributions.Categorical(logits=logits)
     # dist = torch.distributions.Categorical
 
-    return PPOPolicy(
+    return IPPOPolicy(
         actor=actor,
         critic=critic,
         optim=optim,
@@ -117,6 +118,7 @@ def make_ppo_policy(
         value_clip=True,
         action_space=gym.spaces.Discrete(act_dim),
         action_scaling=False,
+        advantage_normalization=True,
         reward_normalization=True,
     ).to(device)
 
@@ -140,7 +142,10 @@ def make_vec_env(
         env_fns = [partial(get_petting_zoo_env, independent, train) for _ in range(1)]
         env = DummyVectorEnv(env_fns)
     if norm:
-        env = MultiAgentVecNormObs(env, agents=agents, update_obs_rms=train)
+        env = MultiAgentVecNormObs(
+            env,
+            agents=agents,
+            update_obs_rms=train)
     return env
 
 
@@ -243,6 +248,7 @@ def train_gru_ppo(args: Namespace):
     if normalize:
         train_envs.reset(options={'year': np.random.choice(range(1951, 2024))})
         test_envs.set_obs_rms(train_envs.get_obs_rms())
+        test_envs.set_rew_rms(train_envs.get_rew_rms())
 
     # Build policies
     if args.independent:
