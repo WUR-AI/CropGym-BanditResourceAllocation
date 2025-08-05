@@ -20,6 +20,21 @@ from cropgymzoo.envs.singular_env import ParcelEnv
 from cropgymzoo.utils.defaults import get_default_years
 
 
+def make_multi_env(
+        *,
+        training: bool = False,
+        random_budget: bool = False,
+        warm_up: int = 0,
+        **kwargs
+    ):
+    env = MultiFieldEnv(
+        training=training,
+        random_budget=random_budget,
+        warm_up=warm_up,
+        **kwargs)          # build the base env
+    return env
+
+
 class MultiFieldEnv(AECEnv, EzPickle):
     metadata = {
         "name": "CropGymZooEnv",

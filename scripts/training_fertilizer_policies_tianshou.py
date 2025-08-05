@@ -4,7 +4,7 @@ import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 import os
-from cropgymzoo.train import train_gru_ppo
+from cropgymzoo.train_tianshou import train_gru_ppo
 from cropgymzoo import _DEFAULT_LOGDIR
 import yaml
 

@@ -6,7 +6,7 @@ import torch
 import pickle
 
 from cropgymzoo import _DEFAULT_MODEL_DIR
-from cropgymzoo.train import make_vec_env, grab_spaces, make_ppo_policy
+from cropgymzoo.train_tianshou import make_vec_env, grab_spaces, make_ppo_policy
 
 
 def load_model(args: argparse.Namespace) -> pickle:

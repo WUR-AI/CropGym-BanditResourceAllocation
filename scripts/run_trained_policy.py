@@ -3,7 +3,7 @@ import os
 import argparse
 
 from cropgymzoo import _DEFAULT_MODEL_DIR
-from cropgymzoo.inference import load_model, run_inference
+from cropgymzoo.inference_tianshou import load_model, run_inference
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

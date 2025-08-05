@@ -56,6 +56,38 @@ def register_predefined_cropgym_instances() -> None:
 
 register_predefined_cropgym_instances()
 
+# def register_multi_agent_env() -> None:
+#     gym.register(
+#         id='cropgymzoo-train',
+#         entry_point='cropgymzoo.envs.multi_field_env:make_multi_env',
+#         kwargs={
+#             'training': True,
+#             'random_budget': True,
+#             'warm_up': False,
+#         }
+#     )
+#     gym.register(
+#         id='cropgymzoo-test',
+#         entry_point='cropgymzoo.envs.multi_field_env:make_multi_env',
+#         kwargs={
+#             'training': False,
+#             'random_budget': False,
+#             'warm_up': False,
+#             'render': True,
+#         }
+#     )
+#     gym.register(
+#         id='cropgymzoo-train-allocator',
+#         entry_point='cropgymzoo.envs.multi_field_env:make_multi_env',
+#         kwargs={
+#             'training': True,
+#             'random_budget': False,
+#             'warm_up': True,
+#         }
+#     )
+#
+# register_multi_agent_env()
+
 # from cropgymzoo.envs.pcse_env import PCSEEnv
 # from cropgymzoo.envs.singular_env import ParcelEnv
 # from cropgymzoo.envs.worker_env import ParallelRLWorkers

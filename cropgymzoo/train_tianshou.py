@@ -18,8 +18,8 @@ from cropgymzoo.agents.networks import RecurrentGRU, MaskedActor, DictObsCritic,
 from cropgymzoo.agents.marl_algorithms import IPPOPolicy
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
-from cropgymzoo.envs.wrappers import MultiAgentVecNormObs
-from cropgymzoo.utils.callbacks import yearly_eval_test_fn, save_checkpoint_fn, save_best_fn
+from cropgymzoo.envs.wrappers_tianshou import MultiAgentVecNormObs
+from cropgymzoo.utils.callbacks_tianshou import yearly_eval_test_fn, save_checkpoint_fn, save_best_fn
 
 try:
     # ---- Tianshou imports ----
@@ -53,6 +53,7 @@ class HiddenStateHook(StepHook):
             action_batch,
             rollout_batch,
     ) -> None:
+        # check states
         hidden_state = getattr(action_batch, "hidden_state", None)
         # temp_hidden_state = deepcopy(hidden_state)
         hidden_state.replace_empty_batches_by_none()
@@ -60,6 +61,13 @@ class HiddenStateHook(StepHook):
             for agent, state in hidden_state.items():
                 if state is not None:
                     self.hidden_state_bank[agent] = state
+
+        # check deaths
+        alives = getattr(rollout_batch.info, "Alive")
+        agent_ids = getattr(rollout_batch.obs, "agent_id")
+        for i, (agent_id, alive) in enumerate(zip(agent_ids, alives)):
+            if alive is False:
+                self.hidden_state_bank[agent_id] = Batch()
 
         action_batch.hidden_state = deepcopy(self.hidden_state_bank)
         action_batch.hidden_state.policy_entry = deepcopy(self.hidden_state_bank)

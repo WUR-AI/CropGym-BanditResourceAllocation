@@ -4,7 +4,7 @@ from gymnasium import spaces
 
 from cropgymzoo.utils.agent_helpers import make_super_arms
 
-from cropgymzoo.envs.worker_env import ParallelRLWorkers
+from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 from cropgymzoo.utils.defaults import get_default_years
 
 
@@ -72,20 +72,26 @@ class AllocationBandit(gym.Env):
 
         assert 'year' in options, "If testing, make sure to pass 'year' in the options dictionary!"
 
+        # TODO reset farm in step...
         self.farm.reset(seed=seed, options=options)
 
-        return self._get_context(), self._construct_info()
+        return self._get_context(), self._construct_info(options)
 
     def step(self, action):
-        if self.random_allocation:
-            allocations = self._allocate_random_budgets()
-            reward = 0
-            return np.zeros(1, dtype=np.float32), reward, True, False, self.infos
-        else:
-            assert self.action_space.contains(action), "invalid action"
-            self.infos['alloc_quanta'] = self.super_arms[action]
-            reward = self._get_reward()
-            return np.zeros(1, dtype=np.float32), reward, True, False, self.infos
+        assert self.action_space.contains(action), "invalid action"
+
+        context, infos = self.farm.reset(seed=self.seed, options=self.infos.get('current_year', self._get_default_reset_options()['year']))
+
+        self.infos['alloc_quanta'] = self.super_arms[action]
+
+        terminateds = {agent: False for agent in self.farm.unwrapped.agents}
+        while not all(terminateds.values()):
+            _, rewards, terminateds, _, infos = self.farm.step({
+                self.farm.action_space.sample()  # get from learning agent
+                for agent in self.farm.unwrapped.agents
+            })
+        reward = self._get_reward()
+        return np.zeros(1, dtype=np.float32), reward, True, False, self.infos
 
 
     def _get_reward(self):
@@ -128,8 +134,11 @@ class AllocationBandit(gym.Env):
     Helper functions
     '''
 
-    def _construct_info(self):
-        self.infos = {}
+    def _construct_info(self, options=None):
+        if options is not None and 'year' in options:
+            self.infos = {'current_year': options['year']}
+        else:
+            self.infos = {}
 
     def _get_default_reset_options(self):
         return {'year': self.rng.choice(self.years)}
@@ -189,7 +198,7 @@ class AllocationBandit(gym.Env):
     '''
 
     def _init_envs(self):
-        self.farm = ParallelRLWorkers(
+        self.farm = MultiFieldEnv(
             warm_up=self.warm_up_eps,
             years=self.years,
         )

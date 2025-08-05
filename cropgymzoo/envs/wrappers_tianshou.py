@@ -86,9 +86,17 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
         else:
             for i, agent_id in enumerate(agent_ids):
                 if self.obs_rms[agent_id] and self.update_obs_rms:
-                    self.obs_rms[agent_id].update(obs_extracted[i])
-                obs_extracted[i] = self._norm_obs(obs_extracted[i], agent_id)
-                obs_extracted[i] = obs_extracted[i].astype(np.float32)
+                    self.obs_rms[agent_id].update(obs_extracted)
+            if env_id is not None:
+                for i, (e, agent_id) in enumerate(zip(env_id, agent_ids)):
+                    if self.obs_rms[agent_id]:
+                        normed_obs = self.obs_rms[agent_id].norm([obs_extracted[e]])  # notice wrapped obs
+                        obs_extracted[e] = normed_obs[0]
+            else:
+                for agent_id in self.agents:
+                    if self.obs_rms[agent_id]:
+                        self.obs_rms[agent_id].update(obs_extracted)
+                obs_extracted = obs_extracted.astype(np.float32)
 
         for i, venv_obs in enumerate(obs_extracted):
             obs[i]["obs"] = obs_extracted[i]
@@ -108,9 +116,9 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
     def step(
             self,
             action: np.ndarray | torch.Tensor | None,
-            id: int | list[int] | np.ndarray | None = None,
+            env_id: int | list[int] | np.ndarray | None = None,
     ):
-        step_results = self.venv.step(action, id)
+        step_results = self.venv.step(action, env_id)
 
         # Process obs
 
@@ -129,9 +137,12 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
         else:
             for i, agent_id in enumerate(agent_ids):
                 if self.obs_rms[agent_id] and self.update_obs_rms:
-                    self.obs_rms[agent_id].update(obs_extracted[i])
-                obs_extracted[i] = self._norm_obs(obs_extracted[i], agent_id)
-                obs_extracted[i] = obs_extracted[i].astype(np.float32)
+                    self.obs_rms[agent_id].update(obs_extracted)
+            for i, (e, agent_id) in enumerate(zip(env_id, agent_ids)):
+                if self.obs_rms[agent_id]:
+                    normed_obs = self.obs_rms[agent_id].norm([obs_extracted[e]])  # notice wrapped obs
+                    obs_extracted[e] = normed_obs[0]
+            obs_extracted = obs_extracted.astype(np.float32)
 
         for i, venv_obs in enumerate(obs_extracted):
             obs[i]["obs"] = obs_extracted[i]
@@ -185,12 +196,8 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
         return terminateds
 
     def _norm_obs(self, obs: np.ndarray, agent_id=None) -> np.ndarray:
-        if self.shared:
-            if self.obs_rms:
-                return self.obs_rms.norm(obs)  # type: ignore
-        else:
-            if self.obs_rms[agent_id]:
-                return self.obs_rms[agent_id].norm(obs)
+        if self.obs_rms:
+            return self.obs_rms.norm(obs)  # type: ignore
         return obs
 
     def get_original_obs(self):

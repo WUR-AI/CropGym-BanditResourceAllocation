@@ -9,7 +9,7 @@ from tianshou.data import Collector
 from tianshou.env import BaseVectorEnv
 from tianshou.policy import MultiAgentPolicyManager
 
-from cropgymzoo.envs.wrappers import MultiAgentVecNormObs
+from cropgymzoo.envs.wrappers_tianshou import MultiAgentVecNormObs
 
 def yearly_eval_test_fn(epoch, test_collector: Collector, train_env: BaseVectorEnv, agents, logger, args):
     test_results = {}
