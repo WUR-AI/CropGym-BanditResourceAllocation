@@ -608,7 +608,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
             **{name: [] for name in self.weather_features},
             **{name: [] for name in self.action_features},
             **{name: [] for name in self.misc_features},
-            'Reward': [], 'Action': [], 'Yield': [],
+            'Reward': [], 'Action': [], 'Yield': [], 'NAVAIL': [],
             'BudgetTotal': [], 'BudgetLeft': [], 'CropName': [],
             'Nue': [], 'Nsurp': [], 'Profit': [], "CO2": [],
             'Alive': [], 'ActionMask': []
@@ -775,6 +775,8 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
         for feature in self.misc_features:
             self.infos[feature].append(self._misc_features_mapper()[feature])
+
+        self.infos['NAVAIL'].append(pcse_output[-1]['NAVAIL'])
 
         self.infos['Reward'].append(reward)
         self.infos['Action'].append(action)

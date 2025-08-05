@@ -1,13 +1,14 @@
 import unittest
-
+import os
 import gymnasium as gym
 
 import numpy as np
 
+from cropgymzoo import _DEFAULT_PLOTDIR
 from cropgymzoo.envs.singular_env import ParcelEnv
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
-
-from cropgymzoo.envs.wrappers import MultiAgentVecNormObs
+from cropgymzoo.envs.wrappers_tianshou import MultiAgentVecNormObs
+from cropgymzoo.utils.plotters import plot_results
 
 try:
     from tianshou.env import PettingZooEnv, SubprocVectorEnv, DummyVectorEnv
@@ -98,94 +99,25 @@ class TestCreationMultiFieldEnv(unittest.TestCase):
                 self.assertNotEquals(self.env.fields[agent].unwrapped.infos['Nue'][-1], 0.0)
 
 
-class TestEnvWrappers(unittest.TestCase):
+class TestEnvPlotter(unittest.TestCase):
     def setUp(self):
-        self.env = PettingZooEnvChecker(
-                MultiFieldEnv(
+        self.env = MultiFieldEnv(
                     warm_up=0,
                     training=True
                 )
-            )
-
-        self.venv_subproc_train = SubprocVectorEnv(
-            [lambda: PettingZooEnvChecker(
-                MultiFieldEnv(
-                    warm_up=0,
-                    training=True
-                )
-            ) for _ in range(2)]
-        )
-
-        self.venv_subproc_test = SubprocVectorEnv(
-            [lambda: PettingZooEnvChecker(
-                MultiFieldEnv(
-                    warm_up=0,
-                    training=False
-                )
-            ) for _ in range(1)]
-        )
-
-        self.venv_train = DummyVectorEnv(
-            [lambda: PettingZooEnvChecker(
-                MultiFieldEnv(
-                    warm_up=0,
-                    training=True
-                )
-            )]
-        )
-
-        self.venv_test = DummyVectorEnv(
-            [lambda: PettingZooEnvChecker(
-                MultiFieldEnv(
-                    warm_up=0,
-                    training=False
-                )
-            )]
-        )
-
-    def test_norm_wrapper(self):
-        train_env = MultiAgentVecNormObs(
-            self.venv_train,
-            update_obs_rms=True,
-        )
-        test_env = MultiAgentVecNormObs(
-            self.venv_test,
-            update_obs_rms=False,
-        )
-
-        train_env.reset(options={'year': np.random.choice(range(1951, 2024))})
-
-        print(train_env)
-
-        self.assertTrue(train_env is not None)
-
-    def test_pettingzoo_tianshou_wrapper(self):
-        obs, info = self.env.reset(options={'year': np.random.choice(range(1951, 2024))})
-
-        print(obs)
-
-        self.assertTrue(isinstance(info, dict))
-
-        obs, rew, term, trunc, info = self.env.step(1)
-
-        print(info)
-
-        self.assertTrue(isinstance(info, dict))
-
 
     def test_episode(self):
 
-        self.venv_train.reset(options={'year': np.random.choice(range(1951, 2024))})
+        self.env.reset(options={'year': np.random.choice(range(1951, 2024))})
 
-        for agent in self.venv_train.workers[0].env.env.agent_iter():
-            obs, rew, term, trunc, info = self.venv_train.last()
+        for agent in self.env.agent_iter():
+            action = self.env.sample_masked_action(agent)
+            self.env.step(action)
 
-            if term:
-                action = None
-            else:
-                action = self.venv_train.action_space(agent).sample()
-
-            self.venv_train.step(action)
+        plot_results(
+            self.env.infos,
+            save_path=os.path.join(_DEFAULT_PLOTDIR, 'test_episode.png'),
+        )
 
         self.assertTrue(True)
 

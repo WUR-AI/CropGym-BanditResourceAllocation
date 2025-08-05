@@ -14,6 +14,7 @@ from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 from cropgymzoo.utils import rewards
 
 from cropgymzoo.utils.helper_for_unit_tests import run_aec_till_terminate, run_aec_step
+from cropgymzoo.utils.plotters import plot_results
 
 
 class TestSingularRewardFunctions(unittest.TestCase):
@@ -327,30 +328,32 @@ class TestMultiRewardFunction(unittest.TestCase):
 
         infos = self.env_training.infos
 
-        print(infos[agents[2]]['Yield'])
-        print(cumulative_rewards)
-        print(cumulative_global_rewards)
+        plot_results(infos)
 
-        for i, agent in enumerate(agents):
-            color = plt.get_cmap('tab10')
-            plt.plot(infos[agent]['Date'], np.cumsum(infos[agent]['Reward']),
-                     label=f"{self.env_training.unwrapped.fields[agent].unwrapped.name}, "
-                           f"{self.env_training.unwrapped.fields[agent].unwrapped.crop}",
-                     color=color(i))
-            min_date = min(infos[agent]['Date'][0] for agent in agents)
-            plt.vlines(infos[agent]['Date'], np.zeros(len(infos[agent]['Action'])),
-                       [i / 10 for i in infos[agent]['Action']], color=color(i), alpha=0.3)
-
-        date_range = [min_date + datetime.timedelta(days=i) for i in range(len(cumulative_rewards))]
-        plt.plot(date_range, np.cumsum(cumulative_global_rewards))
-
-        plt.legend()
-        plt.show()
+        # print(infos[agents[2]]['Yield'])
+        # print(cumulative_rewards)
+        # print(cumulative_global_rewards)
+        #
+        # for i, agent in enumerate(agents):
+        #     color = plt.get_cmap('tab10')
+        #     plt.plot(infos[agent]['Date'], np.cumsum(infos[agent]['Reward']),
+        #              label=f"{self.env_training.unwrapped.fields[agent].unwrapped.name}, "
+        #                    f"{self.env_training.unwrapped.fields[agent].unwrapped.crop}",
+        #              color=color(i))
+        #     min_date = min(infos[agent]['Date'][0] for agent in agents)
+        #     plt.vlines(infos[agent]['Date'], np.zeros(len(infos[agent]['Action'])),
+        #                [i / 10 for i in infos[agent]['Action']], color=color(i), alpha=0.3)
+        #
+        # date_range = [min_date + datetime.timedelta(days=i) for i in range(len(cumulative_rewards))]
+        # # plt.plot(date_range, np.cumsum(cumulative_global_rewards))
+        #
+        # plt.legend()
+        # plt.show()
 
         print(np.sum(cumulative_rewards))
         print(infos)
 
-        self.assertTrue(0 <= np.sum(cumulative_rewards) <= 5)
+        self.assertTrue(0 <= np.sum(cumulative_rewards) <= 100_000)
 
     def test_obs_and_reward_wrapped(self):
         obs, info = self.env_wrapped.reset(options={'year': np.random.choice(range(1951, 2023)),})

@@ -88,3 +88,6 @@ def get_default_action_space():
     import gymnasium as gym
     action_space = gym.spaces.Discrete(3)
     return action_space
+
+def get_default_plot_vars():
+    return ["DVS", "RAIN", "NAVAIL", "Yield", "Action", "Profit"]

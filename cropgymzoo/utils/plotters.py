@@ -3,6 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
+from cropgymzoo.utils.defaults import get_default_plot_vars
+from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
 def plot_year(infos: dict, var: str = "Reward"):
     agents = list(infos.keys())
@@ -21,4 +23,74 @@ def plot_year(infos: dict, var: str = "Reward"):
     # plt.plot(date_range, np.cumsum(cumulative_rewards))
 
     plt.legend()
+    plt.show()
+
+def plot_results(
+        infos: dict,
+        variable_list: list = get_default_plot_vars(),
+        cmap_str: str = "tab10",
+        save_path: str = None,
+):
+    agents = list(infos.keys())
+    agent_crops = [
+        infos[agent]['CropName'][-1]
+        for agent in agents
+    ]
+
+    # fig = plt.figure(figsize=(12, 10))
+
+    # subfig = fig.subfigures(1, 2, width_ratios=[2, 1])
+
+    fig, axes = plt.subplots(
+        nrows=len(variable_list),
+        ncols=1,
+        figsize=(12, 10),
+        constrained_layout=True,
+    )
+
+    for i, (agent, crop) in enumerate(zip(agents, agent_crops)):
+        for j, variable in enumerate(variable_list):
+            color = plt.get_cmap(cmap_str)
+            axes[j].text(
+                0.015, 0.85, variable,
+                transform=axes[j].transAxes,
+                va="top", ha="left",
+                bbox=dict(facecolor="white",
+                          edgecolor="lightgrey",
+                          boxstyle="round,pad=0.25")
+            )
+            plot_function = axes[j].bar if variable in ['Action', 'RAIN'] else axes[j].plot
+            plot_function(
+                infos[agent]['Date'],
+                np.array(infos[agent][variable]),
+                label=f"{agent} - {crop}",
+                color=color(i),
+            )
+
+    # axes.legend()
+    # Add legends to each subplot
+    handles, labels = [], []
+    for ax in axes:
+        h, l = ax.get_legend_handles_labels()
+        handles.extend(h)
+        labels.extend(l)
+
+    # keep only the first occurrence of each label
+    by_label = dict(zip(labels, handles))
+
+    fig.legend(
+        by_label.values(), by_label.keys(),
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.05),  # y < 0 ⇒ place *below* the figure
+        ncol=min(3, len(by_label)),  # wrap into rows if many entries
+        frameon=False,
+        # bbox_transform=fig.transFigure
+    )
+
+    if save_path is not None:
+        if not save_path.endswith(".png"):
+            save_path += ".png"
+        plt.savefig(save_path, dpi=300)
+
+    plt.tight_layout(rect=[0, 0.05, 1, 1])
     plt.show()
