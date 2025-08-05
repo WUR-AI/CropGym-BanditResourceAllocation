@@ -12,12 +12,14 @@ class IPPOPolicy(PPOPolicy):
         if self.recompute_adv:
             # buffer input `buffer` and `indices` to be used in `learn()`.
             self._buffer, self._indices = buffer, indices
-        batch = self._compute_returns(batch, buffer, indices)
-        batch.act = to_torch_as(batch.act, batch.v_s)
         # build per-step done that includes agent deaths
         if "Alive" in batch.info:
-            done = batch.info["Alive"] == False
+            done  = batch.info["Alive"] == False
+            term = batch.info["Alive"] == False
             batch.done = done
+            batch.terminated = term
+        batch = self._compute_returns(batch, buffer, indices)
+        batch.act = to_torch_as(batch.act, batch.v_s)
         logp_old = []
         with torch.no_grad():
             for minibatch in batch.split(self.max_batchsize, shuffle=False, merge_last=True):

@@ -609,8 +609,9 @@ class ParcelEnv(pcse_env.PCSEEnv):
             **{name: [] for name in self.action_features},
             **{name: [] for name in self.misc_features},
             'Reward': [], 'Action': [], 'Yield': [],
-            'BudgetTotal': [], 'BudgetLeft': [], 'CropName': [], 'Alive': [],
-            'Nue': [], 'Nsurp': [], 'Profit': [], "CO2": []
+            'BudgetTotal': [], 'BudgetLeft': [], 'CropName': [],
+            'Nue': [], 'Nsurp': [], 'Profit': [], "CO2": [],
+            'Alive': [], 'ActionMask': []
         }
 
     def _init_random_init_conditions_params(self):
@@ -780,6 +781,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         self.infos['Yield'].append(pcse_output[-1]['WSO'])
         self.infos['CropName'].append(self.crop)
         self.infos['Alive'].append(True if not terminate else False)
+        self.infos['ActionMask'].append(self.action_mask())
 
         nue = -0.01 if not terminate else calculate_nue(
             n_input=self.reward_container.actions,

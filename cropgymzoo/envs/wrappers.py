@@ -21,7 +21,7 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
                  venv: BaseVectorEnv,
                  agents: list[str],
                  update_obs_rms: bool = True,
-                 shared: bool = False,
+                 shared: bool = True,
                  device="cpu",):
         super().__init__(venv, update_obs_rms)
         self.device = device
@@ -40,7 +40,7 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
                 agent_id: RunningMeanStd()
                 for agent_id in self.agents
             }
-        ) if self.norm_obs else None
+        )
 
         # terminateds
         self._terminateds = None
@@ -75,9 +75,8 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
 
         obs_extracted = obs.copy()
         self.old_obs = obs
-        if isinstance(obs_extracted, (list, np.ndarray)):  # the common case
-            agent_ids = np.array([d["agent_id"] for d in obs_extracted])
-            obs_extracted = np.array([d["observation"] if "observation" in d else d["obs"] for d in obs_extracted])
+        agent_ids = np.array([d["agent_id"] for d in obs_extracted])
+        obs_extracted = np.array([d["observation"] if "observation" in d else d["obs"] for d in obs_extracted])
 
         if self.shared:
             if self.obs_rms and self.update_obs_rms:
@@ -130,7 +129,7 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
         else:
             for i, agent_id in enumerate(agent_ids):
                 if self.obs_rms[agent_id] and self.update_obs_rms:
-                    self.obs_rms[agent_id].update(obs_extracted)
+                    self.obs_rms[agent_id].update(obs_extracted[i])
                 obs_extracted[i] = self._norm_obs(obs_extracted[i], agent_id)
                 obs_extracted[i] = obs_extracted[i].astype(np.float32)
 

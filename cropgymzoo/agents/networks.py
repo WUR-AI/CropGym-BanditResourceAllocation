@@ -219,9 +219,11 @@ class MaskedActor(Actor):
         # logits = self.last(logits)
         if isinstance(info, dict) and "action_mask" in info:
             mask = torch.as_tensor(info["action_mask"], device=logits.device)
+            logits = deepcopy(logits)
             logits[mask == False] = -1e10
         elif isinstance(obs, Batch) and "mask" in obs:
             mask = torch.as_tensor(obs["mask"], device=logits.device)
+            logits = logits.clone()
             logits[mask == False] = -1e10
 
         if initial_shape != logits.shape[0]:

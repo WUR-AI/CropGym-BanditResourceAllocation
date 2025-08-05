@@ -248,7 +248,6 @@ def train_gru_ppo(args: Namespace):
     if normalize:
         train_envs.reset(options={'year': np.random.choice(range(1951, 2024))})
         test_envs.set_obs_rms(train_envs.get_obs_rms())
-        test_envs.set_rew_rms(train_envs.get_rew_rms())
 
     # Build policies
     if args.independent:
