@@ -12,7 +12,7 @@ from gymnasium.utils.ezpickle import EzPickle
 from gymnasium.spaces import Discrete
 
 from pettingzoo import ParallelEnv, AECEnv
-from pettingzoo.utils import agent_selector
+from pettingzoo.utils import agent_selector, AgentSelector
 
 from cropgymzoo import _FIELDS_CONFIG, _CONFIG_PATH
 
@@ -81,7 +81,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
         self.agents = [i for i in dict_fields.keys()]
         self.possible_agents = self.agents.copy()
         # self._agent_selector = SkippingSelector(self.possible_agents) #   #
-        self._agent_selector = agent_selector(self.possible_agents)
+        self._agent_selector = AgentSelector(self.possible_agents)
         self.dead_step = {ag: False for ag in self.possible_agents}
         self.agent_to_keep = None
 

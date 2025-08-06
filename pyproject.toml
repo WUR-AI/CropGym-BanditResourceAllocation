@@ -1,34 +1,33 @@
-[tool.poetry]
+[project]
 name = "cropgymzoo"
 version = "0.1.0"
 description = "Crop Management Environment for Resource Allocation"
-authors = ["Hilmy Baja <hilmy.baja@wur.nl>"]
+authors = [
+    { name = "Hilmy Baja", email = "hilmy.baja@wur.nl" }
+]
 readme = "README.md"
-
-[tool.poetry.dependencies]
-python = ">=3.11,<3.13"
-pettingzoo = ">=1.12.0,<1.25.0"
-pyyaml = "^6.0.2"
-torch = ">=1.9.0,<2.7.0"
-matplotlib = "^3.9.0"
-pandas = "^2.2.2"
-gymnasium = ">=0.28.1,<1.1.0"
-
-SQLAlchemy = '>=1.3.0, <2.0'
-PyYAML = '>=5.1'
-openpyxl = '>=3.0.0'
-requests = '>=2.0.0'
-traitlets-pcse = '==5.0.0.dev'
-dotmap = '>=1.3'
-
-#ray = {extras = ["rllib"], version = "^2.47.1", optional = true}
-ipython-genutils = "^0.2.0"
-comet-ml = "^3.50.0"
-ray = {extras = ["rllib"], version = "^2.48.0"}
-
-[tool.poetry.extras]
-#rllib = ["ray"]
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "pettingzoo>=1.12.0,<1.25.0",
+    "pyyaml>=6.0.2",
+    "torch>=1.9.0,<2.7.0",
+    "matplotlib>=3.9.0",
+    "pandas>=2.2.2",
+    "gymnasium>=0.28.1,<1.1.0",
+    "SQLAlchemy>=1.3.0,<2.0",
+    "PyYAML>=5.1",
+    "openpyxl>=3.0.0",
+    "requests>=2.0.0",
+    "traitlets-pcse==5.0.0.dev",
+    "dotmap>=1.3",
+    "ipython-genutils>=0.2.0",
+    "comet-ml>=3.50.0",
+    "ray[rllib]>=2.48.0"
+]
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["cropgymzoo"]

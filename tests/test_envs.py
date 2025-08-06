@@ -7,7 +7,6 @@ import numpy as np
 from cropgymzoo import _DEFAULT_PLOTDIR
 from cropgymzoo.envs.singular_env import ParcelEnv
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
-from cropgymzoo.envs.wrappers_tianshou import MultiAgentVecNormObs
 from cropgymzoo.utils.plotters import plot_results
 
 try:
