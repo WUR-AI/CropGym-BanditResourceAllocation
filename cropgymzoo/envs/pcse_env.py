@@ -604,7 +604,7 @@ class PCSEEnv(gym.Env):
 
         # Apply action
         if isinstance(action, np.ndarray):
-            action = action[0]
+            action = action[0] if action.shape else action
         action = self._apply_action(action)  # is subclassed by sb3
 
         # Run the crop growth model

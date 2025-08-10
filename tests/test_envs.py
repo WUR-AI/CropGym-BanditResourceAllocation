@@ -87,7 +87,11 @@ class TestCreationMultiFieldEnv(unittest.TestCase):
             for agent in self.env.agent_iter():
                 obs, rew, term, trunc, info = self.env.last()
 
-                self.env.step(0)
+                action = self.env.sample_masked_action(agent)
+                if self.env.terminations[agent]:
+                    self.env.step(None)
+                else:
+                    self.env.step(action)
 
             for agent in self.env.possible_agents:
                 print(f"{agent}'s crop is {self.env.fields[agent].unwrapped.crop} and start date is {self.env.fields[agent].unwrapped.date}")
@@ -111,7 +115,10 @@ class TestEnvPlotter(unittest.TestCase):
 
         for agent in self.env.agent_iter():
             action = self.env.sample_masked_action(agent)
-            self.env.step(action)
+            if self.env.terminations[agent]:
+                self.env.step(None)
+            else:
+                self.env.step(action)
 
         plot_results(
             self.env.infos,
@@ -119,6 +126,46 @@ class TestEnvPlotter(unittest.TestCase):
         )
 
         self.assertTrue(True)
+
+class TestAgentOrder(unittest.TestCase):
+    def setUp(self):
+        self.env = MultiFieldEnv(
+                warm_up=0,
+        )
+
+    @staticmethod
+    def is_in_canonical_order(seq, order) -> bool:
+        """Return True if `seq` is a subsequence of `order` (strictly increasing positions)."""
+        pos = {v: i for i, v in enumerate(order)}
+        # All elements must exist in the canonical order
+        try:
+            idxs = [pos[x] for x in seq]
+        except KeyError:
+            return False
+        # Must be strictly increasing (no reordering or repeats)
+        return all(a < b for a, b in zip(idxs, idxs[1:]))
+
+    def test_episode(self):
+        agent_order = self.env.possible_agents
+
+        self.env.reset(options={'year': np.random.choice(range(1951, 2024))})
+
+        for agent in self.env.agent_iter():
+
+            obs, rew, term, trunc, info = self.env.last()
+
+            action = self.env.sample_masked_action(agent)
+            if self.env.terminations[agent]:
+                self.env.step(None)
+            else:
+                self.env.step(action)
+
+            print(self.env._agent_selector.agent_order)
+
+            self.assertTrue(self.is_in_canonical_order(self.env._agent_selector.agent_order, agent_order))
+
+
+
 
 
 
