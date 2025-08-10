@@ -23,9 +23,18 @@ dependencies = [
     "dotmap>=1.3",
     "ipython-genutils>=0.2.0",
     "comet-ml>=3.50.0",
-    "ray[rllib]>=2.48.0",
     "pcse",
-    "id-mava",
+]
+
+[project.optional-dependencies]
+mava = ["id-mava"]
+tianshou = ["tianshou==1.2.0"]
+rllib = ["ray[rllib]>=2.48.0"]
+sb3 = ["stable_baselines3", "sb3_contrib"]
+
+[tool.uv]
+conflicts = [
+  [ { extra = "mava" }, { extra = "tianshou" }, { extra = "rllib" }, { extra = "sb3" } ],
 ]
 
 [tool.uv.sources]
