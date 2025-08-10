@@ -164,8 +164,8 @@ class MultiFieldEnv(AECEnv, EzPickle):
         # need to call this apparently to make sure dead agent doesn't
         # get called again in the iterator
 
-        if self.terminations[self.agent_selection]:
-            self._was_dead_step(action)
+        if self.terminations[self.agent_selection] or self.truncations[self.agent_selection]:
+            self._was_dead_step(None)
             return
 
         agent = self.agent_selection
@@ -186,15 +186,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
         self.truncations.update({agent: tru_parcel})
         self.infos.update({agent: info_parcel})
 
-        if is_last:
-            iter_agents = self.agents[:]
-            for agent in self.terminations:
-                if self.terminations[agent] or self.truncations[agent]:
-                    iter_agents.remove(agent)
-            self._agent_selector.reinit(iter_agents)
-
-        if self._agent_selector.agent_order:
-            self.agent_selection = self._agent_selector.next()
+        self.agent_selection = self._agent_selector.next()
 
 
         # advance to next agent in the cycle
@@ -219,35 +211,49 @@ class MultiFieldEnv(AECEnv, EzPickle):
     def render(self):
         print(self)
 
-
     '''
-    AEC Overrides
+    AECenv overrides
     '''
 
-    def _next_live_after(self, removed: str) -> str | None:
-        """Find the next live agent after `removed` in possible_agents order."""
-        order = self.possible_agents
-        if not self.agents:
-            return None
-        start = order.index(removed)
-        n = len(order)
-        for k in range(1, n + 1):
-            cand = order[(start + k) % n]
-            if cand in self.agents and not self.terminations.get(cand, False) and not self.truncations.get(cand, False):
-                return cand
-        return None  # none live
+    def _was_dead_step(self, action) -> None:
+        if action is not None:
+            raise ValueError("when an agent is dead, the only valid action is None")
 
-    def _reinit_selector_pointing_to(self, current: str | None):
-        # Rebuild the order to exclude removed agents
-        self._agent_selector.reinit(self.agents)
-        if not self.agents or current is None:
-            return
-        # Fast-sync the internal pointer so .selected_agent == current
-        order = self._agent_selector.agent_order
-        i = order.index(current)  # must exist if current is valid
-        # AgentSelector stores "selected_agent = agent_order[_current_agent - 1]"
-        self._agent_selector._current_agent = (i + 1) % len(order)
-        self._agent_selector.selected_agent = order[i]
+        # removes dead agent
+        agent = self.agent_selection
+        assert (
+            self.terminations[agent] or self.truncations[agent]
+        ), "an agent that was not dead as attempted to be removed"
+        del self.terminations[agent]
+        del self.truncations[agent]
+        del self.rewards[agent]
+        del self._cumulative_rewards[agent]
+        del self.infos[agent]
+        self.agents.remove(agent)
+
+        # finds next dead agent or loads next live agent (Stored in _skip_agent_selection)
+        _deads_order = [
+            agent
+            for agent in self.agents
+            if (self.terminations[agent] or self.truncations[agent])
+        ]
+        if _deads_order:
+            if getattr(self, "_skip_agent_selection", None) is None:
+                self._skip_agent_selection = self.agent_selection
+            self.agent_selection = _deads_order[0]
+        else:
+            if getattr(self, "_skip_agent_selection", None) is not None:
+                assert self._skip_agent_selection is not None
+                self.agent_selection = self._skip_agent_selection
+            self._skip_agent_selection = None
+
+            # don't keep pointing to dead agent
+            # not doing this will call env.last() and crash
+            if self.agents:
+                self._agent_selector._current_agent = self.possible_agents.index(self.agent_selection)
+                self.agent_selection = self._agent_selector.next()
+
+        self._clear_rewards()
 
 
     '''
