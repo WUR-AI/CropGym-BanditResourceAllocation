@@ -1,6 +1,7 @@
 import os
 import yaml
 import functools
+import copy
 import pickle
 
 from collections import Counter
@@ -12,7 +13,10 @@ from gymnasium.utils.ezpickle import EzPickle
 from gymnasium.spaces import Discrete
 
 from pettingzoo import ParallelEnv, AECEnv
-from pettingzoo.utils import agent_selector
+try:
+    from pettingzoo.utils import AgentSelector
+except ImportError:
+    from pettingzoo.utils import agent_selector as AgentSelector
 
 from cropgymzoo import _FIELDS_CONFIG, _CONFIG_PATH
 
@@ -38,6 +42,7 @@ def make_multi_env(
 class MultiFieldEnv(AECEnv, EzPickle):
     metadata = {
         "name": "CropGymZooEnv",
+        "is_parallelizable": True,
     }
     """
     MARL Petting Zoo environment for Multi-agent RL with CropGym.
@@ -79,9 +84,9 @@ class MultiFieldEnv(AECEnv, EzPickle):
 
         self.n_agents = len(dict_fields)
         self.agents = [i for i in dict_fields.keys()]
-        self.possible_agents = self.agents.copy()
+        self.possible_agents = self.agents[:]
         # self._agent_selector = SkippingSelector(self.possible_agents) #   #
-        self._agent_selector = agent_selector(self.possible_agents)
+        self._agent_selector = AgentSelector(self.possible_agents)
         self.dead_step = {ag: False for ag in self.possible_agents}
         self.agent_to_keep = None
 
@@ -113,8 +118,8 @@ class MultiFieldEnv(AECEnv, EzPickle):
 
         # Still works sort-of parallel now: could change to date-based
         # Is it useful to change it to date-based? Maybe for future functionality and tasks
+        # self.agent_selection = self._agent_selector.reset()
         self._agent_selector.reinit(self.agents)
-        # self._agent_selector.reset()
         self.agent_selection = self._agent_selector.next()
 
         self.rewards = {ag: 0.0 for ag in self.possible_agents}
@@ -159,26 +164,12 @@ class MultiFieldEnv(AECEnv, EzPickle):
         # need to call this apparently to make sure dead agent doesn't
         # get called again in the iterator
 
-        # called = False
-        if (self.terminations[self.agent_selection] and self.dead_step[self.agent_selection]) or action is None:
-            self.agent_selection = self._agent_selector.next()
-
-        if self.terminations[self.agent_selection] or self.truncations[self.agent_selection]:
-            # self._was_dead_step(None)
-            self.agents.remove(self.agent_selection)
-            self.dead_step[self.agent_selection] = True
-            self._agent_selector.reinit(self.agents)
-            #
-            # self.agent_selection = self._agent_selector.next()
-
-            # return infos for logging
-            self.infos = {agent: self.fields[agent].unwrapped.infos for agent in self.possible_agents}
-
+        if self.terminations[self.agent_selection]:
+            self._was_dead_step(action)
             return
 
         agent = self.agent_selection
-
-        self.current_step[agent] += 1
+        is_last = self._agent_selector.is_last()
 
         # step the gymnasium PCSE parcel
         obs_parcel, rew_parcel, ter_parcel, tru_parcel, info_parcel = self.fields[agent].step(action)
@@ -186,28 +177,40 @@ class MultiFieldEnv(AECEnv, EzPickle):
         # scaled reward based on farm area
         rew_parcel = self._process_rewards(rew_parcel)
 
+        # update global budget left
+        self.global_budget_left = self._get_global_budget_left()
+
         # write results into the mandatory dicts
-        # observations are obtained by calling self.observe()
         self.rewards.update({agent: rew_parcel})
         self.terminations.update({agent: ter_parcel})
         self.truncations.update({agent: tru_parcel})
         self.infos.update({agent: info_parcel})
 
+        if is_last:
+            iter_agents = self.agents[:]
+            for agent in self.terminations:
+                if self.terminations[agent] or self.truncations[agent]:
+                    iter_agents.remove(agent)
+            self._agent_selector.reinit(iter_agents)
+
+        if self._agent_selector.agent_order:
+            self.agent_selection = self._agent_selector.next()
+
+
         # advance to next agent in the cycle
         self._accumulate_rewards()  # provided by AECEnv
 
-        # update global budget left
-        self.global_budget_left = self._get_global_budget_left()
-
-        self.agent_selection = self._agent_selector.next()
+        self.current_step[agent] += 1
 
         # AECEnv doesn't return anything for step()
 
     def observe(self, agent) -> dict:
         obs = self.fields[agent].unwrapped.observe()
+        if isinstance(obs, np.ndarray):
+            obs = obs.astype(np.float32)
         mask = self.fields[agent].unwrapped.action_mask()
         return {
-            "agent_id": str(agent),
+            # "agent_id": str(agent),
             "observation": obs,
             **({"shared": self._build_shared()} if self.shared_obs else {}),
             "action_mask": mask,
@@ -215,6 +218,37 @@ class MultiFieldEnv(AECEnv, EzPickle):
 
     def render(self):
         print(self)
+
+
+    '''
+    AEC Overrides
+    '''
+
+    def _next_live_after(self, removed: str) -> str | None:
+        """Find the next live agent after `removed` in possible_agents order."""
+        order = self.possible_agents
+        if not self.agents:
+            return None
+        start = order.index(removed)
+        n = len(order)
+        for k in range(1, n + 1):
+            cand = order[(start + k) % n]
+            if cand in self.agents and not self.terminations.get(cand, False) and not self.truncations.get(cand, False):
+                return cand
+        return None  # none live
+
+    def _reinit_selector_pointing_to(self, current: str | None):
+        # Rebuild the order to exclude removed agents
+        self._agent_selector.reinit(self.agents)
+        if not self.agents or current is None:
+            return
+        # Fast-sync the internal pointer so .selected_agent == current
+        order = self._agent_selector.agent_order
+        i = order.index(current)  # must exist if current is valid
+        # AgentSelector stores "selected_agent = agent_order[_current_agent - 1]"
+        self._agent_selector._current_agent = (i + 1) % len(order)
+        self._agent_selector.selected_agent = order[i]
+
 
     '''
     Callable helper functions and property

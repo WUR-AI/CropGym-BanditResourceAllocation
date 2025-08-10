@@ -305,7 +305,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
         max_units = max(int(self.budget_left // 10), 0)
         mask = np.zeros(self.action_space.n, dtype=bool)
         mask[: max_units + 1] = True  # valid actions are 0 … max_units
-        return mask
+        return np.array(mask, dtype=np.int8)
 
     def sample_masked_action(self):
         mask = self.action_mask()
@@ -382,7 +382,7 @@ class ParcelEnv(pcse_env.PCSEEnv):
 
     def _update_action_variables(self, action):
         if isinstance(action, np.ndarray):
-            action = action[0]
+            action = action[0] if action.shape else action
 
         if action > 0:
             self.n_action += action * 10
