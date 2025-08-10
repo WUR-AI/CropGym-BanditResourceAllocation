@@ -9,6 +9,7 @@ readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "pettingzoo>=1.12.0,<1.25.0",
+    "supersuit<=3.10.0",
     "pyyaml>=6.0.2",
     "torch>=1.9.0,<2.7.0",
     "matplotlib>=3.9.0",
@@ -22,8 +23,14 @@ dependencies = [
     "dotmap>=1.3",
     "ipython-genutils>=0.2.0",
     "comet-ml>=3.50.0",
-    "ray[rllib]>=2.48.0"
+    "ray[rllib]>=2.48.0",
+    "pcse",
+    "id-mava",
 ]
+
+[tool.uv.sources]
+pcse = { path = "../pcse", editable = true }  # ← local editable dep
+id-mava = { path = "../Mava", editable = true}
 
 [build-system]
 requires = ["setuptools", "wheel"]
