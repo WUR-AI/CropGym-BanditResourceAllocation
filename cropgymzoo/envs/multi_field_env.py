@@ -13,7 +13,10 @@ from gymnasium.utils.ezpickle import EzPickle
 from gymnasium.spaces import Discrete
 
 from pettingzoo import ParallelEnv, AECEnv
-from pettingzoo.utils import agent_selector, AgentSelector
+try:
+    from pettingzoo.utils import AgentSelector
+except ImportError:
+    from pettingzoo.utils import agent_selector as AgentSelector
 
 from cropgymzoo import _FIELDS_CONFIG, _CONFIG_PATH
 
