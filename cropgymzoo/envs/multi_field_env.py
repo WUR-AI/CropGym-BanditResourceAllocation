@@ -58,6 +58,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
                  years: list = get_default_years(),
                  training: bool = False,
                  random_budget: bool = False,
+                 dict_obs: bool = True,
                  shared_obs: bool = False,
                  render: bool = False,):
         EzPickle.__init__(
@@ -76,6 +77,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
         self.years = years
         self.training = training
         self.shared_obs = shared_obs
+        self.dict_obs = dict_obs
 
         self.has_reset = False
 
@@ -200,6 +202,8 @@ class MultiFieldEnv(AECEnv, EzPickle):
         obs = self.fields[agent].unwrapped.observe()
         if isinstance(obs, np.ndarray):
             obs = obs.astype(np.float32)
+        if not self.dict_obs:
+            return obs
         mask = self.fields[agent].unwrapped.action_mask()
         return {
             # "agent_id": str(agent),
@@ -381,13 +385,19 @@ class MultiFieldEnv(AECEnv, EzPickle):
         )
 
         # observation_spaces from locals, shared and action mask
-        self.observation_spaces = {
-            ag: gym.spaces.Dict({
-                "observation": env.observation_space,
-                **({"shared": self.shared_space} if self.shared_obs else {}),
-                "action_mask": gym.spaces.MultiBinary(env.unwrapped.action_space.n),
-            }) for ag, env in self.fields.items()
-        }
+        if self.dict_obs:
+            self.observation_spaces = {
+                ag: gym.spaces.Dict({
+                    "observation": env.observation_space,
+                    **({"shared": self.shared_space} if self.shared_obs else {}),
+                    "action_mask": gym.spaces.MultiBinary(env.unwrapped.action_space.n),
+                }) for ag, env in self.fields.items()
+            }
+        else:
+            self.observation_spaces = {
+                ag: env.observation_space
+                for ag, env in self.fields.items()
+            }
 
         # action space from individual parcels
         self.action_spaces = {agent: env.action_space
