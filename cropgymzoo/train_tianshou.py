@@ -13,9 +13,10 @@ from torch.optim import Adam
 
 import numpy as np
 import gymnasium as gym
+import supersuit as ss
 
 from cropgymzoo.agents.networks import RecurrentGRU, MaskedActor, DictObsCritic, NetObs
-from cropgymzoo.agents.marl_algorithms import IPPOPolicy
+from cropgymzoo.agents.marl_algorithms_tianshou import IPPOPolicy
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
 from cropgymzoo.envs.wrappers_tianshou import MultiAgentVecNormObs
@@ -121,7 +122,7 @@ def make_ppo_policy(
         gae_lambda=0.95,
         max_grad_norm=0.5,
         vf_coef=0.5,
-        ent_coef=0.01,
+        ent_coef=0.0,
         eps_clip=0.2,
         value_clip=True,
         action_space=gym.spaces.Discrete(act_dim),
