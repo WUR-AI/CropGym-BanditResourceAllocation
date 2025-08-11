@@ -1,11 +1,11 @@
-# PCSE-Zoo
+# CropGymZoo
 
 
 install with
 
 `uv sync`
 
-choose the MARL framework to use, from either `Tianshou`, `Rllib`, `Stable-Baselines3` or `Mava`.
+choose the MARL framework to use, from either `tianshou`, `rllib`, `stable-baselines3` or `id-mava` (Mava).
 
 Install a specific framework with, for instance,
 
