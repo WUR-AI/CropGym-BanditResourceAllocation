@@ -15,8 +15,8 @@ import numpy as np
 import gymnasium as gym
 import supersuit as ss
 
-from cropgymzoo.agents.networks import RecurrentGRU, MaskedActor, DictObsCritic, NetObs
-from cropgymzoo.agents.marl_algorithms_tianshou import IPPOPolicy
+from cropgymzoo.agents.networks_tianshou import RecurrentGRU, MaskedActor, DictObsCritic, NetObs
+from cropgymzoo.agents.marl_algorithms_tianshou import IPPOPolicy, IPPOCollector
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
 from cropgymzoo.envs.wrappers_tianshou import MultiAgentVecNormObs
@@ -24,7 +24,7 @@ from cropgymzoo.utils.callbacks_tianshou import yearly_eval_test_fn, save_checkp
 
 try:
     # ---- Tianshou imports ----
-    from tianshou.data import Collector, VectorReplayBuffer, Batch
+    from tianshou.data import Collector, VectorReplayBuffer, Batch, ReplayBuffer
     from tianshou.data.collector import EpisodeRolloutHookProtocol, StepHook
     from tianshou.env import PettingZooEnv, DummyVectorEnv, SubprocVectorEnv, VectorEnvNormObs, BaseVectorEnv, VectorEnvWrapper, ShmemVectorEnv
     from tianshou.utils.net.common import NetBase, RecurrentStateBatch, Net
@@ -43,10 +43,14 @@ class HiddenStateHook(StepHook):
     """
     Let's try using this. Because of the stupid MARL RNN bug from the Tianshou collector.
     """
-    def __init__(self, agents):
+    def __init__(self, agents: list, buffer: ReplayBuffer, num_envs: int):
         self.hidden_state_bank = Batch({
             agent: Batch() for agent in agents
         })
+
+        self.buffer = buffer
+        # global_env_id -> { agent_id -> last pending buffer index }
+        self._pending_idx_by_env_agent: dict[int, dict] = {i: {} for i in range(num_envs)}
         # self.previous_hidden_state = Batch()
 
     def __call__(
@@ -54,6 +58,70 @@ class HiddenStateHook(StepHook):
             action_batch,
             rollout_batch,
     ) -> None:
+        hidden_state = getattr(action_batch, "hidden_state", None)
+        # temp_hidden_state = deepcopy(hidden_state)
+        hidden_state.replace_empty_batches_by_none()
+        if isinstance(hidden_state, Batch) and len(hidden_state):
+            for agent, state in hidden_state.items():
+                if state is not None:
+                    self.hidden_state_bank[agent] = state
+
+        # check deaths
+        alives = getattr(rollout_batch.info, "Alive")
+        agent_ids = getattr(rollout_batch.obs, "agent_id")
+        for i, (agent_id, alive) in enumerate(zip(agent_ids, alives)):
+            if alive is False:
+                self.hidden_state_bank[agent_id] = Batch()
+
+        action_batch.hidden_state = deepcopy(self.hidden_state_bank)
+        action_batch.hidden_state.policy_entry = deepcopy(self.hidden_state_bank)
+        rollout_batch.policy.hidden_state = deepcopy(self.hidden_state_bank)
+
+        # """Pre-add: close previous pending transitions with the *current* obs (same agent)."""
+        # # Which agent acted in each ready env this step:
+        # agent_ids = getattr(rollout_batch.obs, "agent_id")
+        # done_R = getattr(rollout_batch, "done")
+        #
+        # for local_i, global_env_id in enumerate(ready_env_ids_R):
+        #     agent_id = agent_ids[local_i]
+        #     pendings = self._pending_idx_by_env_agent[int(global_env_id)]
+        #     prev_idx = pendings.pop(agent_id, None)
+        #     if prev_idx is not None:
+        #         # Set obs_next of the previous same-agent transition to the *current* obs
+        #         self.buffer.set_array_at_key(
+        #             rollout_batch.obs[local_i],
+        #             key="obs_next",
+        #             index=np.array([int(prev_idx)]),
+        #         )
+        #
+        # # If an env finished now, flush any leftovers with a terminal-like obs_next (shape-safe)
+        # for local_i, global_env_id in enumerate(ready_env_ids_R):
+        #     if bool(done_R[local_i]):
+        #         pendings = self._pending_idx_by_env_agent[int(global_env_id)]
+        #         if pendings:
+        #             terminal_obs_like = rollout_batch.obs_next[local_i]
+        #             for _, prev_idx in list(pendings.items()):
+        #                 self.buffer.set_array_at_key(
+        #                     terminal_obs_like,
+        #                     key="obs_next",
+        #                     index=np.array([int(prev_idx)]),
+        #                 )
+        #             self._pending_idx_by_env_agent[int(global_env_id)] = {}
+
+    def post_add(self, insertion_idx_R: np.ndarray, rollout_batch: Batch, *, ready_env_ids_R: np.ndarray) -> None:
+        """Post-add: register the just-added transitions as pending for when the agent acts next."""
+        agent_ids = getattr(rollout_batch.obs, "agent_id")
+        for local_i, global_env_id in enumerate(ready_env_ids_R):
+            agent_id = agent_ids[local_i]
+            self._pending_idx_by_env_agent[int(global_env_id)][agent_id] = int(insertion_idx_R[local_i])
+
+    def reset_env(self, env_done_global_idx_D: np.ndarray) -> None:
+        """Optional: call on resets to clear any stale pendings for those envs."""
+        for g in env_done_global_idx_D:
+            self._pending_idx_by_env_agent[int(g)] = {}
+
+
+    def hidden_state_stuff(self, action_batch, rollout_batch):
         # check states
         hidden_state = getattr(action_batch, "hidden_state", None)
         # temp_hidden_state = deepcopy(hidden_state)
@@ -74,6 +142,16 @@ class HiddenStateHook(StepHook):
         action_batch.hidden_state.policy_entry = deepcopy(self.hidden_state_bank)
         rollout_batch.policy.hidden_state = deepcopy(self.hidden_state_bank)
 
+        return action_batch, rollout_batch
+
+def marl_reward_calculator(
+        rewards: np.ndarray  # with shape (num_episode, agent_num)
+) -> np.ndarray:  # with shape (num_episode,)
+    avg = []
+    for env_idx, reward in enumerate(rewards):
+        avg_env_reward = np.mean(reward)
+        avg.append(avg_env_reward)
+    return np.array(avg)
 
 def make_ppo_policy(
     obs_dim: int,
@@ -276,7 +354,7 @@ def train_gru_ppo(args: Namespace):
                                          env=PettingZooEnv(dummy_env),)
 
     # Buffers / collectors
-    train_collector = Collector(
+    train_collector = IPPOCollector(
         policy=policy_mgr,
         env=train_envs,
         buffer=VectorReplayBuffer(
@@ -285,12 +363,12 @@ def train_gru_ppo(args: Namespace):
             stack_num=1,
         ),  # use this buffer
         exploration_noise=True,
-        on_step_hook=HiddenStateHook(agents),  # For RNN bug
+        on_step_hook=HiddenStateHook(agents, ReplayBuffer, args.train_envs_num),  # For RNN bug
     )
-    test_collector = Collector(
+    test_collector = IPPOCollector(
         policy=policy_mgr,
         env=test_envs,
-        on_step_hook=HiddenStateHook(agents),
+        on_step_hook=HiddenStateHook(agents, ReplayBuffer, args.train_envs_num),
     )
 
     logger, run_name = create_logger(args.logdir)
@@ -314,6 +392,8 @@ def train_gru_ppo(args: Namespace):
         # use lambdas for callbacks
         test_fn=lambda epoch, _: yearly_eval_test_fn(
             epoch,
+            dummy_env,
+            policy_mgr,
             test_collector,
             train_collector.env,
             agents,
@@ -337,6 +417,7 @@ def train_gru_ppo(args: Namespace):
             args
         ),
         logger=logger,
+        reward_metric=marl_reward_calculator,
     ).run()
     print(f"Training done → best avg reward: {result['best_reward']:.3f}")
 

@@ -188,7 +188,7 @@ class MaskedActor(Actor):
             self.max_env = initial_shape
 
         if state:
-            if obs.shape[0] != state.shape[0]:
+            if obs.shape[0] != state.shape[0] and len(obs.obs.shape) != 1:
                 dim_to_align = state.shape[0]
                 idx = torch.zeros(dim_to_align, dtype=torch.bool)
 
@@ -224,9 +224,11 @@ class MaskedActor(Actor):
         elif isinstance(obs, Batch) and "mask" in obs:
             mask = torch.as_tensor(obs["mask"], device=logits.device)
             logits = logits.clone()
+            if logits.shape != mask.shape:  #maybe inference?
+                mask = mask.unsqueeze(0)
             logits[mask == False] = -1e10
 
-        if initial_shape != logits.shape[0]:
+        if hasattr(info, 'env_id') and initial_shape != logits.shape[0]:
             logits = logits[info['env_id']]
 
         # to save for later

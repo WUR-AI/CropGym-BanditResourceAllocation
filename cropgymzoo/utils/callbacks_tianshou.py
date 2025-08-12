@@ -1,114 +1,121 @@
 import argparse
 import os
 
+
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import torch
 
-from tianshou.data import Collector
+from tianshou.data import Collector, Batch
 from tianshou.env import BaseVectorEnv
-from tianshou.policy import MultiAgentPolicyManager
+from tianshou.policy import MultiAgentPolicyManager, BasePolicy
 
 from cropgymzoo.envs.wrappers_tianshou import MultiAgentVecNormObs
+from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
-def yearly_eval_test_fn(epoch, test_collector: Collector, train_env: BaseVectorEnv, agents, logger, args):
+
+def yearly_eval_test_fn(
+        epoch,
+        raw_env: MultiFieldEnv,
+        policy_mgr: MultiAgentPolicyManager,
+        test_collector: Collector,
+        train_env: BaseVectorEnv,
+        agents,
+        logger,
+        args
+):
     test_results = {}
     year_rewards = []
 
     reset_options_list = [
-        {'year': year} for year in range(2010, 2011)
+        year for year in range(2010, 2011)
     ]
 
     dfs = []
     writer = logger.writer
 
     test_collector.env.set_obs_rms(train_env.get_obs_rms())
-    # per year eval
-    for i, reset_opts in enumerate(reset_options_list):
-        year = reset_opts["year"]
 
-        # Collect test episode(s)
-        result = test_collector.collect(
-            n_episode=1,
-            reset_before_collect=True,
-            gym_reset_kwargs={
-                'options': reset_opts
-            },
-        )
+    obs_rms = train_env.get_obs_rms()
 
-        infos = test_collector.buffer._meta.info
-        obs = test_collector.buffer._meta.obs
-        obs_next = test_collector.buffer._meta.obs_next
-        rew = test_collector.buffer._meta.rew
+    info_dict = {}
+    for i, year in enumerate(reset_options_list):
+        info_dict[year] = {}
 
-        agent_ids = obs_next["agent_id"]
+        next_states = {
+            ag: None for ag in agents
+        }
 
-        agent_dict = {}
+        raw_env.reset(year)
 
-        if args.debug:
-            df = pd.DataFrame(index=agent_ids,
-                              data={
-                                  'nue': infos["Nue"],
-                                  'Nsurp': infos["Nsurp"],
-                                  'BudgetLeft': infos["BudgetLeft"],
-                                  'action': infos["Action"],
-                                  'Yield': infos["Yield"]}
-                              )
+        for agent in raw_env.agent_iter():
+            obs, rew, term, trunc, info = raw_env.last()
 
-            dfs.append(df)
+            # get appropriate info shape for policy
+            processed_info = Batch({k: [i[-1]] for k, i in info.items()})
+            processed_info['env_id'] = [0]
 
-        for a, a_id in enumerate(agents):
-            agent = agent_ids == a_id
+            with torch.no_grad():
+                out = policy_mgr.policies[agent](
+                    batch = Batch(
+                        {
+                            'obs': {
+                                'obs': obs_rms.norm(obs['observation']),
+                                'mask': raw_env._get_mask(agent),
+                            },
+                            'info': processed_info,
+                        }
+                    ),
+                    state=Batch(next_states[agent]),
+                )
 
-            reward = [r[a] for r in rew[agent]]
-            nue = infos["Nue"][agent]
-            nsurp = infos["Nsurp"][agent]
-            budget_left = infos["BudgetLeft"][agent]
-            yld = infos["Yield"][agent]
-            n_action = infos["Action"][agent]
+            action = out.act.item()
+            state = None if not hasattr(out, 'state') else out.state
 
-            agent_reward = np.sum(reward)
-            agent_nue = nue[-1]
-            agent_nsurp = nsurp[-1]
-            agent_budget_left = budget_left[-1]
-            agent_yield = yld[-1]
-            agent_n_action = np.sum(n_action)
+            next_states[agent] = state
 
-            agent_dict[a_id] = {
-                "Reward": agent_reward,
-                "Nue": agent_nue,
-                "Nsurp": agent_nsurp,
-                "BudgetLeft": agent_budget_left,
-                "Yield": agent_yield,
-                "Naction": agent_n_action,
-            }
+            if raw_env.terminations[agent]:
+                info_dict[year][agent] = info  # grab info before agent dies
+                raw_env.step(None)
+            else:
+                raw_env.step(action)
+
+        # log results to tensorboard
+        across_years_reward = {}
+        for year, agent_info in info_dict.items():
+            across_years_reward[year] = []
+            reward_year = []
+            for a_id, full_info in agent_info.items():
+                agent_reward = np.sum(full_info['Reward'])
+                agent_nue = full_info['Nue'][-1]
+                agent_nsurp = full_info['Nsurp'][-1]
+                agent_budget_left = full_info['BudgetLeft'][-1]
+                agent_yield = full_info['Yield'][-1]
+                agent_n_action = full_info['Naction'][-1]
+
+                # put into year reward
+                reward_year.append(agent_reward)
+
+                if writer:
+                    writer.add_scalar(f"test/{year}/{a_id}/Reward", agent_reward, epoch)
+                    writer.add_scalar(f"test/{year}/{a_id}/NUE", agent_nue, epoch)
+                    writer.add_scalar(f"test/{year}/{a_id}/Nsurp", agent_nsurp, epoch)
+                    writer.add_scalar(f"test/{year}/{a_id}/BudgetLeft", agent_budget_left, epoch)
+                    writer.add_scalar(f"test/{year}/{a_id}/Yield", agent_yield, epoch)
+                    writer.add_scalar(f"test/{year}/{a_id}/Naction", agent_n_action, epoch)
+            else:
+                across_years_reward[year].append(np.sum(reward_year))
+                # Logging intermediate results
+                if writer:
+                    writer.add_scalar(f"test/{year}/total_reward", np.sum(reward_year), epoch)
+        else:
+            # Final aggregated logging
+            mean_reward = np.mean(list(across_years_reward.values()))
 
             if writer:
-                writer.add_scalar(f"test/{year}/{a_id}/reward", agent_reward, epoch)
-                writer.add_scalar(f"test/{year}/{a_id}/NUE", agent_nue, epoch)
-                writer.add_scalar(f"test/{year}/{a_id}/Nsurp", agent_nsurp, epoch)
-                writer.add_scalar(f"test/{year}/{a_id}/BudgetLeft", agent_budget_left, epoch)
-                writer.add_scalar(f"test/{year}/{a_id}/Yield", agent_yield, epoch)
-                writer.add_scalar(f"test/{year}/{a_id}/Naction", agent_n_action, epoch)
-
-        # Store results with metadata
-        test_results[year] = agent_dict
-        year_reward = np.sum([v
-                              for y in test_results.values()
-                              for field in y.values()
-                              for key, v in field.items()
-                              if key == "Reward"])
-        year_rewards.append(year_reward)
-
-        # Logging intermediate results
-        if writer:
-            writer.add_scalar(f"test/{year}/reward", year_reward, epoch)
-
-    # Final aggregated logging
-    mean_reward = np.mean(year_rewards)
-    #
-    if writer:
-        writer.add_scalar("test/mean_reward_all_years", mean_reward, epoch)
+                writer.add_scalar("test/mean_reward_all_years", mean_reward, epoch)
 
     writer.flush()
 
