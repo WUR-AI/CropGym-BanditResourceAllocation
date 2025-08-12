@@ -266,7 +266,16 @@ class IPPOCollector(Collector):
             # so we copy to not affect the data in the buffer
             last_obs_RO = copy(obs_next_RO)
             last_info_R = copy(info_R)
-            last_hidden_state_RH = copy(collect_action_computation_batch_R.hidden_state)
+
+            # preserve agent hidden state
+            if last_hidden_state_RH is None:
+                last_hidden_state_RH = copy(collect_action_computation_batch_R.hidden_state)
+            else:
+                _temp_last_hidden_state_RH: Batch = copy(collect_action_computation_batch_R.hidden_state)
+                _temp_last_hidden_state_RH.replace_empty_batches_by_none()
+                for agent_id, _state in _temp_last_hidden_state_RH.items():
+                    if _state is not None:
+                        last_hidden_state_RH[agent_id] = _temp_last_hidden_state_RH[agent_id]
 
             # Preparing last_obs_RO, last_info_R, last_hidden_state_RH for the next while-loop iteration
             # Resetting envs that reached done, or removing some of them from the collection if needed (see below)

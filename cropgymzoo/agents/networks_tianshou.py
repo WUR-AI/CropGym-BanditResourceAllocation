@@ -214,7 +214,7 @@ class MaskedActor(Actor):
                 obs.mask = zero_mask
                 obs.agent_id = np.array([obs.agent_id[-1]] * dim_to_align, dtype=object)
 
-
+        obs.obs = obs.obs.astype(np.float32)
         logits, h = self.preprocess(obs, state, info)
         # logits = self.last(logits)
         if isinstance(info, dict) and "action_mask" in info:

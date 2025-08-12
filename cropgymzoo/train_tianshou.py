@@ -363,12 +363,10 @@ def train_gru_ppo(args: Namespace):
             stack_num=1,
         ),  # use this buffer
         exploration_noise=True,
-        on_step_hook=HiddenStateHook(agents, ReplayBuffer, args.train_envs_num),  # For RNN bug
     )
     test_collector = IPPOCollector(
         policy=policy_mgr,
         env=test_envs,
-        on_step_hook=HiddenStateHook(agents, ReplayBuffer, args.train_envs_num),
     )
 
     logger, run_name = create_logger(args.logdir)
