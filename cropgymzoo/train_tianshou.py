@@ -350,12 +350,14 @@ def train_gru_ppo(args: Namespace):
         shared = make_ppo_policy(obs_dim, act_dim, args.lr, recurrent=args.recurrent)
         policies = {a: shared for a in agents}
 
-    policy_mgr = MultiAgentPolicyManager(policies=list(policies.values()),
-                                         env=PettingZooEnv(dummy_env),)
+    marl_policy_manager = MultiAgentPolicyManager(
+        policies=list(policies.values()),
+        env=PettingZooEnv(dummy_env),
+    )
 
     # Buffers / collectors
     train_collector = IPPOCollector(
-        policy=policy_mgr,
+        policy=marl_policy_manager,
         env=train_envs,
         buffer=VectorReplayBuffer(
             total_size=args.buffer_size,
@@ -365,14 +367,14 @@ def train_gru_ppo(args: Namespace):
         exploration_noise=True,
     )
     test_collector = IPPOCollector(
-        policy=policy_mgr,
+        policy=marl_policy_manager,
         env=test_envs,
     )
 
     logger, run_name = create_logger(args.logdir)
 
     result = OnpolicyTrainer(
-        policy=policy_mgr,
+        policy=marl_policy_manager,
         train_collector=train_collector,
         test_collector=test_collector,
         max_epoch=args.epoch,
@@ -391,7 +393,7 @@ def train_gru_ppo(args: Namespace):
         test_fn=lambda epoch, _: yearly_eval_test_fn(
             epoch,
             dummy_env,
-            policy_mgr,
+            marl_policy_manager,
             test_collector,
             train_collector.env,
             agents,
@@ -411,7 +413,7 @@ def train_gru_ppo(args: Namespace):
             run_name,
             train_envs,
             test_envs,
-            policy_mgr,
+            marl_policy_manager,
             args
         ),
         logger=logger,
