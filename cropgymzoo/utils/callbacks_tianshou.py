@@ -14,6 +14,7 @@ from tianshou.policy import MultiAgentPolicyManager, BasePolicy
 
 from cropgymzoo.envs.wrappers_tianshou import MultiAgentVecNormObs
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
+from cropgymzoo.utils.eval_tianshou import evaluate_policy
 
 
 def yearly_eval_test_fn(
@@ -26,8 +27,6 @@ def yearly_eval_test_fn(
         logger,
         args
 ):
-    test_results = {}
-    year_rewards = []
 
     reset_options_list = [
         year for year in range(2010, 2011)
