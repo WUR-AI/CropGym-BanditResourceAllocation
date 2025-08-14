@@ -1,4 +1,4 @@
-from typing import Sequence, Any
+from typing import Sequence, Any, cast
 
 from copy import deepcopy
 
@@ -84,34 +84,52 @@ class RecurrentGRU(NetBase[RecurrentStateBatch]):
         obs: Batch,
         state: RecurrentStateBatch | None = None,
         info: dict[str, Any] | None = None,
-    ) -> tuple[torch.Tensor, Batch]:
+    ) -> tuple[torch.Tensor, RecurrentStateBatch]:
 
         if isinstance(obs, Batch):
             obs = obs.obs  # or dict(obs)   (no copy of scalars)
 
-        # input -> [bsz, len, dim] for training, [bsz, dim] for eval
+        # input -> [B, T, H] for training, [B, H] for eval
         if not torch.is_tensor(obs):
             obs = torch.from_numpy(obs).to(self.device)
 
         if obs.ndim == 1:  # single env
-            obs = obs.unsqueeze(0)  # [1, D]
+            obs = obs.unsqueeze(0)  # for eval, dim: [B, H]
+        elif obs.ndim == 2:
+            obs = obs.unsqueeze(-2)  # for training, dim: [B, T, H]
 
         # 2. feed-forward + add time dim
-        x = torch.tanh(self.fc1(obs)) # [B, H]
-        x = x.unsqueeze(1)  # [B, 1, H]
+        x = self.fc1(obs) # [B, H] or [B, T, H]
 
         if state is None or "hidden" not in state:
-            y, h_in = self.gru(x)            # hidden: [num_layers, bsz, h]
+            y, h_in = self.gru(x)            # hidden output: [T, B, H]
         else:
-            # state["hidden"] MUST be [B, H] coming from previous step
-            h_in = state["hidden"].unsqueeze(0)  # .transpose(0, 1).contiguous()
+            # input to GRU should be [B, T, H]
+            h_in = (
+                state["hidden"].transpose(0, 1).contiguous()
+                if state["hidden"].ndim == 3
+                else state["hidden"].contiguous()
+            )
 
-        y, h = self.gru(x, h_in)
-        logits = self.fc2(y.squeeze(1))  # [B_alive, A]
+        y, h = self.gru(
+            x,
+            h_in
+        )  # for eval h: [B, H], for train: [T, B, H]
+        logits = self.fc2(y)  # [B_alive, A]
 
-        next_hidden = h
+        # return to [B, T, H] for storing
+        next_hidden = cast(
+            RecurrentStateBatch,
+            Batch(
+                {
+                    "hidden": h.transpose(0, 1).detach()
+                    if h.ndim == 3
+                    else h.detach(),
+                }
+            )
+        )
 
-        return logits, Batch(hidden=next_hidden.squeeze(0).detach())
+        return logits, next_hidden
 
     @staticmethod
     def is_consecutive_and_ordered(arr):
@@ -187,46 +205,47 @@ class MaskedActor(Actor):
         if initial_shape > self.max_env:
             self.max_env = initial_shape
 
-        if state:
-            if obs.shape[0] != state.shape[0] and len(obs.obs.shape) != 1:
-                dim_to_align = state.shape[0]
-                idx = torch.zeros(dim_to_align, dtype=torch.bool)
-
-                try:  # quite hacky here hmmmm is there a better way to do this?
-                    idx[info['env_id']] = True
-                except IndexError:
-                    if set(self.previous_env_ids) != set(info['env_id']):
-                        odd_out = [b for b in self.previous_env_ids if b not in info['env_id']]
-                        idx = [b not in odd_out for b in self.previous_env_ids]
-
-                # Don't change in-place for back propagation
-                obs = deepcopy(obs)
-
-                # Preallocate zeros with matching dtypes
-                zero_obs = np.zeros((dim_to_align, obs_dim), dtype=obs.obs.dtype)
-                zero_mask = np.zeros((dim_to_align, out_dim), dtype=obs.mask.dtype)
-
-                # Fill only alive slots
-                zero_obs[idx] = obs.obs
-                zero_mask[idx] = obs.mask
-
-                obs.obs = zero_obs
-                obs.mask = zero_mask
-                obs.agent_id = np.array([obs.agent_id[-1]] * dim_to_align, dtype=object)
+        # if state:
+        #     if obs.shape[0] != state.shape[0] and len(obs.obs.shape) != 1:
+        #         dim_to_align = state.shape[0]
+        #         idx = torch.zeros(dim_to_align, dtype=torch.bool)
+        #
+        #         try:  # quite hacky here hmmmm is there a better way to do this?
+        #             idx[info['env_id']] = True
+        #         except IndexError:
+        #             if set(self.previous_env_ids) != set(info['env_id']):
+        #                 odd_out = [b for b in self.previous_env_ids if b not in info['env_id']]
+        #                 idx = [b not in odd_out for b in self.previous_env_ids]
+        #
+        #         # Don't change in-place for back propagation
+        #         obs = deepcopy(obs)
+        #
+        #         # Preallocate zeros with matching dtypes
+        #         zero_obs = np.zeros((dim_to_align, obs_dim), dtype=obs.obs.dtype)
+        #         zero_mask = np.zeros((dim_to_align, out_dim), dtype=obs.mask.dtype)
+        #
+        #         # Fill only alive slots
+        #         zero_obs[idx] = obs.obs
+        #         zero_mask[idx] = obs.mask
+        #
+        #         obs.obs = zero_obs
+        #         obs.mask = zero_mask
+        #         obs.agent_id = np.array([obs.agent_id[-1]] * dim_to_align, dtype=object)
 
         obs.obs = obs.obs.astype(np.float32)
         logits, h = self.preprocess(obs, state, info)
         # logits = self.last(logits)
-        if isinstance(info, dict) and "action_mask" in info:
-            mask = torch.as_tensor(info["action_mask"], device=logits.device)
-            logits = deepcopy(logits)
-            logits[mask == False] = -1e10
-        elif isinstance(obs, Batch) and "mask" in obs:
+        if isinstance(obs, Batch) and "mask" in obs:
             mask = torch.as_tensor(obs["mask"], device=logits.device)
             logits = logits.clone()
-            if logits.shape != mask.shape:  #maybe inference?
-                mask = mask.unsqueeze(0)
+            if mask.ndim == 2:
+                mask = mask.unsqueeze(-2)
+            elif mask.ndim == 3:
+                mask = mask.transpose(0, 1)
             logits[mask == False] = -1e10
+            if logits.ndim == 3:
+                logits = logits.squeeze(1)
+
 
         if hasattr(info, 'env_id') and initial_shape != logits.shape[0]:
             logits = logits[info['env_id']]
