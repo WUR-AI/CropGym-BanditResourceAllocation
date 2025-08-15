@@ -102,7 +102,7 @@ def make_ppo_policy(
         actor = MaskedActor(preprocess_net=actor_net, action_dim=act_dim).to(device)
         critic = DictObsCritic(preprocess_net=critic_net).to(device)
 
-    optim = Adam(list(actor.parameters()) + list(critic.parameters()), lr=lr)
+    optim = Adam(list(actor.parameters()) + list(critic.parameters()), lr=args.lr)
     # dist = torch.distributions.Categorical  # DISCRETE!
 
     dist = lambda logits: torch.distributions.Categorical(logits=logits)
