@@ -9,6 +9,7 @@ import yaml
 
 import functools
 import gymnasium as gym
+from gymnasium.utils.ezpickle import EzPickle
 
 import numpy as np
 import datetime
@@ -39,7 +40,7 @@ def make_parcel_env(*, training: bool = False, **kwargs):
     #     env = PCSERandomizer(env) # add arguments if your wrapper needs them
     return env
 
-class ParcelEnv(pcse_env.PCSEEnv):
+class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
     """
     This is a class that inherits PCSE.
     It will be instantiated multiple times for the MARL environment.
@@ -127,6 +128,34 @@ class ParcelEnv(pcse_env.PCSEEnv):
                  flatten_obs: bool = True,
                  **kwargs,
     ):
+        EzPickle.__init__(
+            self,
+            crop_features=crop_features,
+            weather_features=weather_features,
+            action_features=action_features,
+            misc_features=misc_features,
+            location = location,
+            year = year,
+            year_list = year_list,
+            timestep = timestep,
+            reward = reward,
+            action_multiplier = action_multiplier,
+            action_space = action_space,
+            costs_nitrogen = costs_nitrogen,
+            crop=crop,
+            name=name,
+            area=area,
+            model_config=model_config,
+            agro_config=agro_config,
+            type=type,
+            site_path=site_path,
+            soil_path=soil_path,
+            seed=seed,
+            training=training,
+            original=original,
+            flatten_obs=flatten_obs,
+            **kwargs,
+        )
         # instance metadata
         self.original = original
         self.training = training
