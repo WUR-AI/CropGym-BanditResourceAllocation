@@ -3,11 +3,13 @@ from functools import partial
 import datetime
 from typing import Sequence
 from argparse import Namespace
+import pickle
 
 from copy import deepcopy
 
+from pathlib import Path
+
 import torch
-torch.autograd.set_detect_anomaly(True)
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim import Adam
 
@@ -15,6 +17,7 @@ import numpy as np
 import gymnasium as gym
 import supersuit as ss
 
+from cropgymzoo import _DEFAULT_MODEL_DIR
 from cropgymzoo.agents.networks_tianshou import RecurrentGRU, MaskedActor, DictObsCritic, NetObs
 from cropgymzoo.agents.marl_algorithms_tianshou import IPPOPolicy, IPPOCollector
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
@@ -39,110 +42,24 @@ except ImportError:
     tianshou = None
 
 
-class HiddenStateHook(StepHook):
-    """
-    Let's try using this. Because of the stupid MARL RNN bug from the Tianshou collector.
-    """
-    def __init__(self, agents: list, buffer: ReplayBuffer, num_envs: int):
-        self.hidden_state_bank = Batch({
-            agent: Batch() for agent in agents
-        })
+def load_model(args: Namespace) -> pickle:
 
-        self.buffer = buffer
-        # global_env_id -> { agent_id -> last pending buffer index }
-        self._pending_idx_by_env_agent: dict[int, dict] = {i: {} for i in range(num_envs)}
-        # self.previous_hidden_state = Batch()
+    if not hasattr(args, 'model_dir'):
+        args.model_dir = 'GRU_PPO'
 
-    def __call__(
-            self,
-            action_batch,
-            rollout_batch,
-    ) -> None:
-        hidden_state = getattr(action_batch, "hidden_state", None)
-        # temp_hidden_state = deepcopy(hidden_state)
-        hidden_state.replace_empty_batches_by_none()
-        if isinstance(hidden_state, Batch) and len(hidden_state):
-            for agent, state in hidden_state.items():
-                if state is not None:
-                    self.hidden_state_bank[agent] = state
+    model_dir = Path(str(os.path.join(_DEFAULT_MODEL_DIR, args.model_dir)))
+    assert model_dir.is_dir(), f"The path {str(model_dir)} is not a valid directory!"
 
-        # check deaths
-        alives = getattr(rollout_batch.info, "Alive")
-        agent_ids = getattr(rollout_batch.obs, "agent_id")
-        for i, (agent_id, alive) in enumerate(zip(agent_ids, alives)):
-            if alive is False:
-                self.hidden_state_bank[agent_id] = Batch()
+    checkpoint = None
+    for entry in model_dir.iterdir():
+        checkpoint = torch.load(entry, weights_only=False) if str(entry).endswith(".pth") else None
+        if checkpoint is not None:
+            break
+    else:
+        print(f"Loaded {checkpoint}!")
 
-        action_batch.hidden_state = deepcopy(self.hidden_state_bank)
-        action_batch.hidden_state.policy_entry = deepcopy(self.hidden_state_bank)
-        rollout_batch.policy.hidden_state = deepcopy(self.hidden_state_bank)
+    return checkpoint
 
-        # """Pre-add: close previous pending transitions with the *current* obs (same agent)."""
-        # # Which agent acted in each ready env this step:
-        # agent_ids = getattr(rollout_batch.obs, "agent_id")
-        # done_R = getattr(rollout_batch, "done")
-        #
-        # for local_i, global_env_id in enumerate(ready_env_ids_R):
-        #     agent_id = agent_ids[local_i]
-        #     pendings = self._pending_idx_by_env_agent[int(global_env_id)]
-        #     prev_idx = pendings.pop(agent_id, None)
-        #     if prev_idx is not None:
-        #         # Set obs_next of the previous same-agent transition to the *current* obs
-        #         self.buffer.set_array_at_key(
-        #             rollout_batch.obs[local_i],
-        #             key="obs_next",
-        #             index=np.array([int(prev_idx)]),
-        #         )
-        #
-        # # If an env finished now, flush any leftovers with a terminal-like obs_next (shape-safe)
-        # for local_i, global_env_id in enumerate(ready_env_ids_R):
-        #     if bool(done_R[local_i]):
-        #         pendings = self._pending_idx_by_env_agent[int(global_env_id)]
-        #         if pendings:
-        #             terminal_obs_like = rollout_batch.obs_next[local_i]
-        #             for _, prev_idx in list(pendings.items()):
-        #                 self.buffer.set_array_at_key(
-        #                     terminal_obs_like,
-        #                     key="obs_next",
-        #                     index=np.array([int(prev_idx)]),
-        #                 )
-        #             self._pending_idx_by_env_agent[int(global_env_id)] = {}
-
-    def post_add(self, insertion_idx_R: np.ndarray, rollout_batch: Batch, *, ready_env_ids_R: np.ndarray) -> None:
-        """Post-add: register the just-added transitions as pending for when the agent acts next."""
-        agent_ids = getattr(rollout_batch.obs, "agent_id")
-        for local_i, global_env_id in enumerate(ready_env_ids_R):
-            agent_id = agent_ids[local_i]
-            self._pending_idx_by_env_agent[int(global_env_id)][agent_id] = int(insertion_idx_R[local_i])
-
-    def reset_env(self, env_done_global_idx_D: np.ndarray) -> None:
-        """Optional: call on resets to clear any stale pendings for those envs."""
-        for g in env_done_global_idx_D:
-            self._pending_idx_by_env_agent[int(g)] = {}
-
-
-    def hidden_state_stuff(self, action_batch, rollout_batch):
-        # check states
-        hidden_state = getattr(action_batch, "hidden_state", None)
-        # temp_hidden_state = deepcopy(hidden_state)
-        hidden_state.replace_empty_batches_by_none()
-        if isinstance(hidden_state, Batch) and len(hidden_state):
-            for agent, state in hidden_state.items():
-                if state is not None:
-                    self.hidden_state_bank[agent] = state
-
-        # check deaths
-        alives = getattr(rollout_batch.info, "Alive")
-        agent_ids = getattr(rollout_batch.obs, "agent_id")
-        for i, (agent_id, alive) in enumerate(zip(agent_ids, alives)):
-            if alive is False:
-                self.hidden_state_bank[agent_id] = Batch()
-
-        action_batch.hidden_state = deepcopy(self.hidden_state_bank)
-        action_batch.hidden_state.policy_entry = deepcopy(self.hidden_state_bank)
-        rollout_batch.policy.hidden_state = deepcopy(self.hidden_state_bank)
-
-        return action_batch, rollout_batch
 
 def marl_reward_calculator(
         rewards: np.ndarray  # with shape (num_episode, agent_num)
@@ -156,9 +73,9 @@ def marl_reward_calculator(
 def make_ppo_policy(
     obs_dim: int,
     act_dim: int,
-    lr: float = 3e-4,
     hidden: Sequence = [64],
     recurrent: bool = False,
+    args: Namespace = None,
 ) -> PPOPolicy:
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -196,11 +113,11 @@ def make_ppo_policy(
         critic=critic,
         optim=optim,
         dist_fn=dist,
-        discount_factor=0.99,
-        gae_lambda=0.95,
+        discount_factor=args.gamma,
+        gae_lambda=args.gae_lambda,
         max_grad_norm=0.5,
-        vf_coef=0.5,
-        ent_coef=0.0,
+        vf_coef=args.vf_coef,
+        ent_coef=args.ent_coef,
         eps_clip=0.2,
         value_clip=True,
         action_space=gym.spaces.Discrete(act_dim),
@@ -344,8 +261,8 @@ def train_gru_ppo(args: Namespace):
             a: make_ppo_policy(
                 obs_dim=obs_dim,
                 act_dim=act_dim,
-                lr=args.lr,
-                recurrent=args.recurrent)
+                recurrent=args.recurrent,
+                args=args,)
             for a in agents
         }
     else:

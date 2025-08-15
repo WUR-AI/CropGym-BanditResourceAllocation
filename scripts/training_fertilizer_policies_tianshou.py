@@ -41,6 +41,16 @@ if __name__ == "__main__":
     parser.add_argument("--not_independent", action="store_false",
                         help="not use independent learning (IPPO)", dest='independent')
     parser.add_argument("--debug", action='store_true', dest='debug')
+
+    # algorithm hyperparameter stuff
+    parser.add_argument("--gamma", type=float, default=0.99)
+    parser.add_argument("--gae_lambda", type=float, default=0.95)
+    parser.add_argument("--vf_coef", type=float, default=0.5)
+    parser.add_argument("--vf_coef", type=float, default=0.5)
+    parser.add_argument("--ent_coef", type=float, default=0.01)
+
+
+
     parser.set_defaults(
         parallel=False,
         recurrent=True,
