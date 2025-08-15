@@ -238,11 +238,15 @@ class MaskedActor(Actor):
         if isinstance(obs, Batch) and "mask" in obs:
             mask = torch.as_tensor(obs["mask"], device=logits.device)
             logits = logits.clone()
-            if mask.ndim == 2:
+            if mask.ndim == 1:
+                mask = mask.unsqueeze(0)
+            elif mask.ndim == 2:
                 mask = mask.unsqueeze(-2)
             elif mask.ndim == 3:
                 mask = mask.transpose(0, 1)
+
             logits[mask == False] = -1e10
+
             if logits.ndim == 3:
                 logits = logits.squeeze(1)
 
