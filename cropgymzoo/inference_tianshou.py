@@ -4,6 +4,7 @@ from typing import Any
 import torch
 
 import gymnasium as gym
+import pettingzoo
 
 from tianshou.env.venv_wrappers import BaseVectorEnv
 from tianshou.env import PettingZooEnv
