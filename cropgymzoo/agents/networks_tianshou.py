@@ -11,45 +11,6 @@ from tianshou.utils.net.discrete import Actor, Critic
 from torch import nn
 
 
-class GRUBackbone(nn.Module):
-    def __init__(self, obs_dim: int, hidden_dim: int | Sequence[int] = 128, activation = nn.Tanh):
-        super().__init__()
-        if isinstance(hidden_dim, int):
-            hidden_dims = [hidden_dim]
-        else:
-            hidden_dims = list(hidden_dim)
-            if len(hidden_dims) == 0:
-                raise ValueError("`hidden_dim` sequence must contain at least one element.")
-
-        layers = []
-        in_dim = obs_dim
-        for h in hidden_dims:
-            layers += [nn.Linear(in_dim, h), activation()]
-            in_dim = h
-        self.mlp = nn.Sequential(*layers)
-
-        # 3️⃣ GRU whose input_size **and** hidden_size = last MLP width
-        last_dim = hidden_dims[-1]
-        self.gru = nn.GRU(input_size=last_dim,
-                          hidden_size=last_dim,
-                          batch_first=True)
-
-        self._hidden_dim = last_dim  # handy for downstream code
-
-    def forward(self, obs: torch.Tensor,
-                state: torch.Tensor | None = None):
-        """
-        obs   : (batch, obs_dim)
-        state : (1, batch, hidden) for a single-layer GRU (or None)
-        """
-        x = self.mlp(obs)  # (batch, last_dim)
-        x = x.unsqueeze(1)  # add time dimension → (batch, 1, last_dim)
-
-        y, h = self.gru(x, state)  # y: (batch, 1, last_dim)
-        y = y.squeeze(1)  # remove the time dim  → (batch, last_dim)
-        return y, h
-
-
 class RecurrentGRU(NetBase[RecurrentStateBatch]):
     """Tianshou-compatible GRU network (same API as common.Recurrent)."""
 
