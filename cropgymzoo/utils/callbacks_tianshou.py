@@ -21,7 +21,6 @@ def yearly_eval_test_fn(
         epoch,
         raw_env: MultiFieldEnv,
         policy_mgr: MultiAgentPolicyManager,
-        test_collector: Collector,
         train_env: BaseVectorEnv,
         agents,
         logger,
@@ -31,12 +30,10 @@ def yearly_eval_test_fn(
     reset_options_list = [
         year for year in range(2010, 2011)
     ]
-
-    dfs = []
+    # get writer
     writer = logger.writer
 
-    test_collector.env.set_obs_rms(train_env.get_obs_rms())
-
+    # align normalizer
     obs_rms = train_env.get_obs_rms()
 
     info_dict = {}
@@ -130,16 +127,17 @@ def save_checkpoint_fn(
 ) -> None | str:
     # copy running statistics into the frozen eval envs *once per epoch*
     test_envs.set_obs_rms(train_envs.get_obs_rms())
-    torch.save(
-        {
-            "model": {
-                aid: p.state_dict()  # one file for every agent
-                for aid, p in policy_mgr.policies.items()
+    if epoch % 20 == 0:
+        torch.save(
+            {
+                "model": {
+                    aid: p.state_dict()  # one file for every agent
+                    for aid, p in policy_mgr.policies.items()
+                },
+                "obs_rms": train_envs.get_obs_rms(),
             },
-            "obs_rms": train_envs.get_obs_rms(),
-        },
-        os.path.join(args.logdir, run_name, "checkpoints", f"check_{epoch:04d}.pth")
-    )
+            os.path.join(args.logdir, run_name, "checkpoints", f"check_{epoch:04d}.pth")
+        )
 
 def save_best_fn(
         ma_policy: MultiAgentPolicyManager,

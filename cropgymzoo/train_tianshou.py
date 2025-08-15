@@ -225,6 +225,7 @@ def make_vec_env(
             for _ in range(num_envs)
         ]
         env = SubprocVectorEnv(env_fns, context='fork')
+        # env = ShmemVectorEnv(env_fns)
     else:
         env_fns = [partial(get_petting_zoo_env, independent, train) for _ in range(1)]
         env = DummyVectorEnv(env_fns)
@@ -270,9 +271,10 @@ def grab_spaces(seed):
 
     return dummy_env, agents, obs_dim, act_dim
 
-def create_logger(logdir):
+def create_logger(args):
+    logdir = args.logdir
     # Logger
-    run_name = f"PPO_GRU_{datetime.datetime.now():%Y%m%d_%H%M%S}"
+    run_name = f"PPO_GRU_{'parallel' if args.parallel else 'dummy'}_{datetime.datetime.now():%d_%H%M}"
     writer = SummaryWriter(os.path.join(logdir, run_name))
     logger = TensorboardLogger(writer)
     # make callbacks within this method
@@ -371,7 +373,7 @@ def train_gru_ppo(args: Namespace):
         env=test_envs,
     )
 
-    logger, run_name = create_logger(args.logdir)
+    logger, run_name = create_logger(args)
 
     result = OnpolicyTrainer(
         policy=marl_policy_manager,
@@ -383,10 +385,12 @@ def train_gru_ppo(args: Namespace):
                          if args.step_per_collect
                          else None,
         episode_per_collect=args.episode_per_collect
+                            if args.episode_per_collect > args.train_envs_num
+                            else args.train_envs_num
                             if not args.step_per_collect
                             else None,
         repeat_per_collect=args.repeat_per_collect,
-        episode_per_test=1,
+        episode_per_test=args.test_envs_num if args.parallel else 1,
         batch_size=args.batch_size or ((args.step_per_collect or 64) * len(train_envs)),
 
         # use lambdas for callbacks
@@ -394,12 +398,11 @@ def train_gru_ppo(args: Namespace):
             epoch,
             dummy_env,
             marl_policy_manager,
-            test_collector,
             train_collector.env,
             agents,
             logger,
             args
-        ) if not args.parallel else None,
+        ),
         save_best_fn=lambda ma_policy: save_best_fn(
             ma_policy,
             train_envs,

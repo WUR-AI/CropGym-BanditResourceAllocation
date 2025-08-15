@@ -133,6 +133,9 @@ class IPPOCollector(Collector):
         # Maps global_env_id -> { agent_id -> last transition index in buffer that still needs obs_next }
         if not hasattr(self, "_pending_idx_by_env_agent"):
             self._pending_idx_by_env_agent: dict[int, dict[Any, int]] = {i: {} for i in range(self.env_num)}
+        # Maps agent_id -> { global_env_id -> state_for_that_agent_in_that_env }
+        if not hasattr(self, "_hs_bank_by_agent_env"):
+            self._hs_bank_by_agent_env: dict[Any, dict[int, Any]] = {}
 
         # Step 0
         # get the first obs to be the current obs in the n_step case as
@@ -164,6 +167,11 @@ class IPPOCollector(Collector):
             #     )
             # restore the state: if the last state is None, it won't store
 
+            state_filtered_RH = self._build_filtered_state_for_forward(
+                ready_env_ids_R=ready_env_ids_R,
+                last_obs_RO=last_obs_RO,
+            )
+
             # Step 2
             # get the next action and related stats from the previous observation
             collect_action_computation_batch_R = self._compute_action_policy_hidden(
@@ -171,8 +179,15 @@ class IPPOCollector(Collector):
                 ready_env_ids_R=ready_env_ids_R,
                 last_obs_RO=last_obs_RO,
                 last_info_R=last_info_R,
-                last_hidden_state_RH=last_hidden_state_RH,
+                last_hidden_state_RH=state_filtered_RH  # last_hidden_state_RH,
             )
+
+            self._update_hs_bank_from_forward(
+                collect_action_computation_batch_R.hidden_state,
+                ready_env_ids_R,
+                last_obs_RO,
+            )
+
             TraceLogger.log(log, lambda: f"Action: {collect_action_computation_batch_R.act}")
 
             # Step 3
@@ -213,6 +228,34 @@ class IPPOCollector(Collector):
                 collect_action_computation_batch_R,
                 current_step_batch_R,
             )
+
+            # --- NEW
+            # Step 4a
+            # check if policy Batches are of size `num_env`; broadcast from cache if not
+            temp_current_step_batch_R = copy(current_step_batch_R)
+            temp_collect_action_computation_batch_R = copy(collect_action_computation_batch_R)
+            temp_agent_hs = {}
+            for _agent, _hs_agent in temp_current_step_batch_R['policy']['hidden_state'].items():
+                if not _hs_agent:
+                    continue
+                if len(_hs_agent.shape) == 3 and _hs_agent['hidden'].shape[0] < len(ready_env_ids_R):
+                    hidden_agent = torch.cat(
+                        [
+                            self._hs_bank_by_agent_env[_agent][i]['hidden']
+                            for i in ready_env_ids_R
+                        ],
+                        dim=0
+                    )
+                    temp_agent_hs[_agent] = hidden_agent
+
+            if temp_agent_hs:
+                for _agent, _hs_agent in temp_agent_hs.items():
+                    temp_current_step_batch_R['policy']['hidden_state'][_agent]['hidden'] = _hs_agent
+                    temp_collect_action_computation_batch_R['hidden_state'][_agent]['hidden'] = _hs_agent
+                    temp_collect_action_computation_batch_R['policy_entry']['hidden_state'][_agent]['hidden'] = _hs_agent
+                current_step_batch_R = copy(temp_current_step_batch_R)
+                collect_action_computation_batch_R = copy(temp_collect_action_computation_batch_R)
+
 
             # Step 5, collect statistics
             collect_stats.update_at_step_batch(current_step_batch_R)
@@ -337,6 +380,9 @@ class IPPOCollector(Collector):
                         )
                     # Clear all pendings for this env now that the episode ended
                     self._pending_idx_by_env_agent[int(global_env_id)] = {}
+                for g in env_done_global_idx_D:
+                    for a in list(self._hs_bank_by_agent_env.keys()):
+                        self._hs_bank_by_agent_env[a].pop(int(g), None)
 
                 # Step 9
                 # execute episode hooks for those envs which emitted 'done'
@@ -457,4 +503,70 @@ class IPPOCollector(Collector):
             self.reset_env(gym_reset_kwargs)  # todo still necessary?
             # --- NEW: clear pendings since we started fresh episodes
             self._pending_idx_by_env_agent = {i: {} for i in range(self.env_num)}
+            self._hs_bank_by_agent_env = {}
         return collect_stats
+
+
+    def _build_filtered_state_for_forward(
+            self,
+            ready_env_ids_R: np.ndarray,
+            last_obs_RO: Batch,
+    ) -> Batch:
+        """
+        Returns a Batch mapping agent_id -> state whose batch dim equals the number of
+        alive samples for that agent in THIS step, in the SAME order as last_obs_RO.
+        If any alive slot for an agent has no cached state yet, we pass None for that agent
+        so the policy will initialize it (safe & simple).
+        """
+        agent_ids_R = np.asarray([env_obs["agent_id"] for env_obs in last_obs_RO])
+        agent_ids_dict_R = {e: ag for e, ag in zip(ready_env_ids_R, agent_ids_R)}
+        result = Batch()
+
+        # make sure all agents seen so far have a dict in the bank
+        for a in np.unique(agent_ids_R):
+            self._hs_bank_by_agent_env.setdefault(a, {})
+
+        for a in np.unique(agent_ids_R):
+            # local positions in this step for this agent and alive
+            # local_idx = np.nonzero((agent_ids_R == a) & (alive_R == True))[0]
+            # local_idx = np.flatnonzero((agent_ids_dict_R.values() == a))
+            local_idx = np.asarray([k for k, v in agent_ids_dict_R.items() if v == a])
+            if len(local_idx) == 0:
+                continue
+
+            if self._hs_bank_by_agent_env[a]:
+                sliced_hs = {i: self._hs_bank_by_agent_env[a][i]['hidden'] for i in local_idx if i in self._hs_bank_by_agent_env[a]}
+                hs = torch.cat([sliced_hs[i] for i in local_idx], dim=0)
+
+                result[a] = Batch({'hidden': hs})
+
+        if not result:
+            result = None
+
+        return result
+
+    def _update_hs_bank_from_forward(
+            self,
+            hidden_state_out: Batch,
+            ready_env_ids_R: np.ndarray,
+            last_obs_RO: Batch,
+    ) -> None:
+        """
+        hidden_state_out is a Batch mapping agent_id -> batched state for alive samples.
+        We must map each row back to the correct global_env_id.
+        """
+        agent_ids_R = np.asarray([env_obs["agent_id"] for env_obs in last_obs_RO])
+
+        for a, batched_state in hidden_state_out.items():
+            # positions where we forwarded this agent
+            # local_idx = np.nonzero((agent_ids_R == a) & (alive_R == True))[0]
+            local_idx = np.flatnonzero((agent_ids_R == a))
+            if len(local_idx) == 0:
+                continue
+
+            # slice per-sample state from batched_state and put into bank
+            for j, li in enumerate(local_idx):
+                g = int(ready_env_ids_R[li])
+                self._hs_bank_by_agent_env.setdefault(a, {})
+                self._hs_bank_by_agent_env[a].setdefault(g, Batch())
+                self._hs_bank_by_agent_env[a][g]['hidden'] = batched_state['hidden'][j:j + 1, :, :]

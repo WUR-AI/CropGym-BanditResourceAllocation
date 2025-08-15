@@ -157,16 +157,11 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
         info = np.stack(info)
 
         # Process terminates
-        terminateds = self._get_terminateds(obs, step_results[2])
-
-        # safeguard for
-        if len(terminateds) != len(info):
-            env_ids = [i for env in info for idx, i in env.items() if idx == 'env_id']
-            terminateds = terminateds[env_ids]
+        terminateds = self._get_terminateds(obs, step_results[2], env_id)
 
         return obs, step_results[1], terminateds, step_results[-2], info
 
-    def _get_terminateds(self, obs, terminated_ids) -> np.array:
+    def _get_terminateds(self, obs, terminated_ids, env_id) -> np.array:
         if not self.subproc:
             terms = []
             envs = self.venv.workers
@@ -183,12 +178,12 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
             terminateds = np.array(terminateds, dtype=bool)
         else:
             agent_ids = [o['agent_id'] for o in obs]
-            for idx, term_signal in enumerate(terminated_ids):
-                self._terminateds[idx][agent_ids[idx]] = term_signal
+            for agent_id, idx, term_signal in zip(agent_ids, env_id, terminated_ids):
+                self._terminateds[idx][agent_id] = term_signal
 
             terms = [
                 all(self._terminateds[idx].values())
-                for idx in self._vec_ids
+                for idx in env_id
             ]
 
             terminateds = np.array(terms, dtype=bool)

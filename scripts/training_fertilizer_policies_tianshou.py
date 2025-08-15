@@ -20,8 +20,8 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=1e-4)
 
     # epoch * step_per_epoch = training steps
-    parser.add_argument("--epoch", type=int, default=300)
-    parser.add_argument("--step_per_epoch", type=int, default=10_000)
+    parser.add_argument("--epoch", type=int, default=5_000)
+    parser.add_argument("--step_per_epoch", type=int, default=1_000)
 
 
     parser.add_argument("--repeat_per_collect", type=int, default=2)
@@ -29,7 +29,7 @@ if __name__ == "__main__":
     parser.add_argument("--buffer_size", type=int, default=20_000)
     parser.add_argument("--train_envs_num", type=int, default=8)
     parser.add_argument("--test_envs_num", type=int, default=1)
-    parser.add_argument("--episode_per_collect", type=int, default=4)
+    parser.add_argument("--episode_per_collect", type=int, default=6)
     parser.add_argument("--step_per_collect", type=int, default=0)
     parser.add_argument("--batch_size", type=int, default=0)  # Not explicitly defining batch size
 
