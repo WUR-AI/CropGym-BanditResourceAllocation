@@ -29,7 +29,7 @@ def evaluate_policy(
             ag: None for ag in agents
         }
 
-        env.reset(year)
+        env.reset(options={'year': year})
 
         for agent in env.agent_iter():
             obs, rew, term, trunc, info = env.last()
