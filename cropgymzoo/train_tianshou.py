@@ -23,7 +23,14 @@ from cropgymzoo.agents.marl_algorithms_tianshou import IPPOPolicy, IPPOCollector
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
 from cropgymzoo.envs.wrappers_tianshou import MultiAgentVecNormObs
-from cropgymzoo.utils.callbacks_tianshou import yearly_eval_test_fn, save_checkpoint_fn, save_best_fn
+from cropgymzoo.utils.callbacks_tianshou import (
+    yearly_eval_test_fn,
+    marl_save_checkpoint_fn,
+    save_best_fn,
+    create_comet_experiment,
+    CometTianshouLogger,
+    MultiLogger
+)
 
 try:
     # ---- Tianshou imports ----
@@ -290,8 +297,24 @@ def train_gru_ppo(args: Namespace):
         env=test_envs,
     )
 
-    logger, run_name = create_logger(args)
+    # get tensorboard logger
+    tb_logger, run_name = create_logger(args)
 
+    # get comet logger
+    comet_experiment = create_comet_experiment(run_name)
+
+    comet_logger = CometTianshouLogger(
+        experiment=comet_experiment,
+        log_dir=args.logdir,
+    ) if comet_experiment is not None else None
+
+    # put both in the multi-logger item
+    logger = MultiLogger(
+        tb_logger,
+        comet_logger if comet_logger else None
+    )
+
+    # make trainer
     result = OnpolicyTrainer(
         policy=marl_policy_manager,
         train_collector=train_collector,
@@ -326,7 +349,7 @@ def train_gru_ppo(args: Namespace):
             run_name,
             args,
         ),
-        save_checkpoint_fn=lambda epoch, env_step, grad_step: save_checkpoint_fn(
+        save_checkpoint_fn=lambda epoch, env_step, grad_step: marl_save_checkpoint_fn(
             epoch,
             env_step,
             grad_step,
@@ -334,7 +357,8 @@ def train_gru_ppo(args: Namespace):
             train_envs,
             test_envs,
             marl_policy_manager,
-            args
+            args,
+            experiment=comet_experiment,
         ),
         logger=logger,
         reward_metric=marl_reward_calculator,
