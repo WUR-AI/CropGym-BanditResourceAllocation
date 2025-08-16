@@ -380,9 +380,11 @@ class IPPOCollector(Collector):
                         )
                     # Clear all pendings for this env now that the episode ended
                     self._pending_idx_by_env_agent[int(global_env_id)] = {}
-                for g in env_done_global_idx_D:
-                    for a in list(self._hs_bank_by_agent_env.keys()):
-                        self._hs_bank_by_agent_env[a].pop(int(g), None)
+
+                # Try not popping the bank
+                # for g in env_done_global_idx_D:
+                #     for a in list(self._hs_bank_by_agent_env.keys()):
+                #         self._hs_bank_by_agent_env[a].pop(int(g), None)
 
                 # Step 9
                 # execute episode hooks for those envs which emitted 'done'
