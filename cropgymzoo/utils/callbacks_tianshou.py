@@ -13,7 +13,6 @@ from comet_ml import Experiment
 from typing import Any
 
 import numpy as np
-import pandas as pd
 import torch
 
 from tianshou.data import Collector, Batch
@@ -24,7 +23,6 @@ from tianshou.utils.logger.base import BaseLogger
 from cropgymzoo import _SOURCE_PATH, _BASE_PATH
 from cropgymzoo.envs.wrappers_tianshou import MultiAgentVecNormObs
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
-from cropgymzoo.utils.eval_tianshou import evaluate_policy
 
 
 def yearly_eval_test_fn(
@@ -137,7 +135,7 @@ def marl_save_checkpoint_fn(
         test_envs: MultiAgentVecNormObs,
         policy_mgr: MultiAgentPolicyManager,
         args: argparse.Namespace,
-        log_every_epochs: int=1,
+        log_every_epochs: int=5,
         experiment: Experiment=None,
 ) -> None | str:
     # copy running statistics into the frozen eval envs *once per epoch*
@@ -212,7 +210,8 @@ def create_comet_experiment(
         workspace="cropgymzoo",
         log_code=True,
         auto_metric_logging=True,
-        auto_weight_logging=True,
+        auto_histogram_weight_logging=True,
+        auto_histogram_gradient_logging=True,
         auto_param_logging=True,
         auto_histogram_tensorboard_logging=True
     )

@@ -5,24 +5,7 @@ from typing import Sequence
 from argparse import Namespace
 import pickle
 
-from copy import deepcopy
-
-from pathlib import Path
-
-import torch
-from torch.utils.tensorboard import SummaryWriter
-from torch.optim import Adam
-
-import numpy as np
-import gymnasium as gym
-import supersuit as ss
-
-from cropgymzoo import _DEFAULT_MODEL_DIR
-from cropgymzoo.agents.networks_tianshou import RecurrentGRU, MaskedActor, DictObsCritic, NetObs
-from cropgymzoo.agents.marl_algorithms_tianshou import IPPOPolicy, IPPOCollector
-from cropgymzoo.envs.multi_field_env import MultiFieldEnv
-
-from cropgymzoo.envs.wrappers_tianshou import MultiAgentVecNormObs
+# for comet_ml
 from cropgymzoo.utils.callbacks_tianshou import (
     yearly_eval_test_fn,
     marl_save_checkpoint_fn,
@@ -31,6 +14,23 @@ from cropgymzoo.utils.callbacks_tianshou import (
     CometTianshouLogger,
     MultiLogger
 )
+
+from pathlib import Path
+
+import numpy as np
+import gymnasium as gym
+
+from cropgymzoo import _DEFAULT_MODEL_DIR
+from cropgymzoo.agents.networks_tianshou import RecurrentGRU, MaskedActor, DictObsCritic, NetObs
+from cropgymzoo.agents.marl_algorithms_tianshou import IPPOPolicy, IPPOCollector
+from cropgymzoo.envs.multi_field_env import MultiFieldEnv
+
+from cropgymzoo.envs.wrappers_tianshou import MultiAgentVecNormObs
+
+
+import torch
+from torch.utils.tensorboard import SummaryWriter
+from torch.optim import Adam
 
 try:
     # ---- Tianshou imports ----
