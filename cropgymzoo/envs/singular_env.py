@@ -110,7 +110,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                  year: int = None,
                  year_list: list = None,
                  timestep: int = 7,
-                 reward: str = 'PNY',
+                 reward: str = 'PNB',
                  action_multiplier: float = 1,
                  action_space: gym.spaces = gym.spaces.Discrete(9),
                  costs_nitrogen: int = 0,
@@ -816,19 +816,17 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         nue = -0.01 if not terminate else calculate_nue(
             n_input=self.reward_container.actions,
-            n_so=pcse_output[-1]['NamountSO'],
-            year=self.date.year,
-            nh4_depo=pcse_output[-1]['RNH4DEPOSTT'],
-            no3_depo=pcse_output[-1]['RNO3DEPOSTT'],
+            n_so=process_pcse.get_n_storage_organ(pcse_output),
+            nh4_depo=get_nh4_deposition_pcse(pcse_output),
+            no3_depo=get_no3_deposition_pcse(pcse_output),
         )
         self.infos['Nue'].append(nue)
 
         nsurp = -0.01 if not terminate else get_surplus_n(
-            n_input=self.reward_container.actions,
-            n_so=pcse_output[-1]['NamountSO'],
-            year=self.date.year,
-            nh4_depo=pcse_output[-1]['RNH4DEPOSTT'],
-            no3_depo=pcse_output[-1]['RNO3DEPOSTT']
+            n_input=self.reward_container.get_total_fertilization,
+            n_so=process_pcse.get_n_storage_organ(pcse_output),
+            nh4_depo=get_nh4_deposition_pcse(pcse_output),
+            no3_depo=get_no3_deposition_pcse(pcse_output),
         )
         self.infos['Nsurp'].append(nsurp)
 
