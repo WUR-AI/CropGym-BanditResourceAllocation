@@ -229,9 +229,6 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         # initialize variables pertaining to RL agent actions
         self._init_action_variables()
 
-        # initialize soil variables
-        self._init_soil_variables()
-
         # initialize reward function
         self._init_reward_function(costs_nitrogen, kwargs)
 
@@ -694,15 +691,18 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.crop_price = self._get_crop_price()
 
 
-    def _generate_realistic_n(self) -> tuple[list, list]:
+    def _generate_realistic_n(self, random: bool=True, len_soil: int | None = None) -> tuple[list, list]:
         """ method to overwrite a random N initial condition for every call of reset()
             Implemented based on discussions with Herman Berghuijs, for NL conditions
         """
 
         '''Comments for sanity check'''
         # Generate total inorganic N from seeded normal distribution and clip so that no outliers become negative
-        total_inorganic_n = self.rng.normal(self.mean_total_N, self.std_dev_total_N)
-        total_inorganic_n = np.clip(total_inorganic_n, 0, 100)
+        if random:
+            total_inorganic_n = self.rng.normal(self.mean_total_N, self.std_dev_total_N)
+            total_inorganic_n = np.clip(total_inorganic_n, 0, 100)
+        else:
+            total_inorganic_n = 40
 
         # Split total inorganic N into NO3 and NH4
         total_no3 = total_inorganic_n * self.percentage_NO3
@@ -715,19 +715,32 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         nh4_bottom = total_nh4 * self.bottom_70cm_fraction
 
         # Create lists of per layer N content
+        if len_soil is not None:
+            self.len_soil_layers = len_soil
         no3_distribution = np.zeros(self.len_soil_layers)
         nh4_distribution = np.zeros(self.len_soil_layers)
 
-        # Considering 1m soil profile
-        # Upper 30 cm distribution (first layers), multiply list of dirichlet with fraction of total in topsoil layers
-        no3_distribution[:self.len_top_layers] = self.rng.dirichlet(np.ones(self.len_top_layers), size=1) * no3_top
-        nh4_distribution[:self.len_top_layers] = self.rng.dirichlet(np.ones(self.len_top_layers), size=1) * nh4_top
 
-        # Lower 70 cm distribution (last layers), same for remaining bottom layers
-        no3_distribution[self.len_top_layers:] = self.rng.dirichlet(np.ones(self.len_soil_layers - self.len_top_layers),
-                                                                    size=1) * no3_bottom
-        nh4_distribution[self.len_top_layers:] = self.rng.dirichlet(np.ones(self.len_soil_layers - self.len_top_layers),
-                                                                    size=1) * nh4_bottom
+        if random:
+            # Considering 1m soil profile
+            # Upper 30 cm distribution (first layers), multiply list of dirichlet with fraction of total in topsoil layers
+            no3_distribution[:self.len_top_layers] = self.rng.dirichlet(np.ones(self.len_top_layers), size=1) * no3_top
+            nh4_distribution[:self.len_top_layers] = self.rng.dirichlet(np.ones(self.len_top_layers), size=1) * nh4_top
+
+            # Lower 70 cm distribution (last layers), same for remaining bottom layers
+            no3_distribution[self.len_top_layers:] = self.rng.dirichlet(np.ones(self.len_soil_layers - self.len_top_layers),
+                                                                        size=1) * no3_bottom
+            nh4_distribution[self.len_top_layers:] = self.rng.dirichlet(np.ones(self.len_soil_layers - self.len_top_layers),
+                                                                        size=1) * nh4_bottom
+        else:
+            no3_distribution[:self.len_top_layers] = [no3_top / self.len_top_layers] * self.len_top_layers
+            nh4_distribution[:self.len_top_layers] = [nh4_top / self.len_top_layers] * self.len_top_layers
+
+            # Lower 70 cm distribution (last layers), same for remaining bottom layers
+            no3_distribution[self.len_top_layers:] = ([no3_top / (self.len_soil_layers - self.len_top_layers)] *
+                                                      (self.len_soil_layers - self.len_top_layers))
+            nh4_distribution[self.len_top_layers:] = ([nh4_top / (self.len_soil_layers - self.len_top_layers)] *
+                                                      (self.len_soil_layers - self.len_top_layers))
 
         # Ensure no negative values in the distributions, might skew the distribution by a teeny bit
         list_nh4i = list(np.maximum(nh4_distribution, 0))
@@ -899,12 +912,21 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         nh4conc, no3conc = convert_year_to_n_concentration(self.year,
                                                          loc=self.location,)
 
+        # initialize soil variables
+        self._init_soil_variables(
+            len_soil=len(soil_parameters['SoilProfileDescription']['SoilLayers'])
+        )
+
+        nh4i, no3i = self._generate_realistic_n(
+            random=False,
+        )
+
         site_parameters = WOFOST81SiteDataProvider_SNOMIN(
             WAV=30,
             CO2=self.carbon_dioxide_level,
             # default init; need to change?
-            NH4I=len(soil_parameters['SoilProfileDescription']['SoilLayers'])*[0],
-            NO3I=len(soil_parameters['SoilProfileDescription']['SoilLayers'])*[0],
+            NH4I=nh4i,
+            NO3I=no3i,
             NH4ConcR=nh4conc,
             NO3ConcR=no3conc,
         )
@@ -977,7 +999,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         else:
             raise Exception('please choose valid reward function')
 
-    def _init_soil_variables(self):
+    def _init_soil_variables(self, len_soil: int = None):
         """ Get number of soil layers if using WOFOST snomin"""
         self.mean_total_N = None
         self.std_dev_total_N = None
@@ -988,7 +1010,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.len_soil_layers = None
         self.len_top_layers = None
 
-        self.len_soil_layers = self.get_len_soil_layers
+        self.len_soil_layers = self.get_len_soil_layers if len_soil is None else len_soil
         self._init_random_init_conditions_params()
 
     def _init_action_variables(self):
