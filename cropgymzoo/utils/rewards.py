@@ -327,9 +327,7 @@ class Rewards:
             nue = calculate_nue(n_input=n_fertilized, n_so=n_output, no3_depo=no3_depo, nh4_depo=nh4_depo)
 
             n_surplus_penalty =  obj.n_surplus_penalty(n_surplus)
-            print(n_surplus)
             nue_penalty = obj.nue_penalty(nue)
-            print(nue)
 
             budget_left_bonus = self.budget_beta * obj.budget_left_bonus(budget_left)
 
