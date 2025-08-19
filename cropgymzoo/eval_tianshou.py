@@ -11,7 +11,12 @@ from tianshou.env import PettingZooEnv
 from tianshou.data import Batch
 from tianshou.policy import MultiAgentPolicyManager
 
-from cropgymzoo.train_tianshou import make_vec_env, grab_spaces, make_ppo_policy, load_model
+from cropgymzoo.train_tianshou import (
+    make_ppo_policy,
+    load_model
+)
+from cropgymzoo.envs.multi_field_env import MultiFieldEnv
+from cropgymzoo.utils.plotters import plot_year, plot_results
 
 
 class BaseAgent(ABC):
@@ -57,6 +62,7 @@ class MultiRLAgent(BaseAgent):
             env: pettingzoo.AECEnv | BaseVectorEnv,
             saved_model: dict,
             seed: int = 107,
+            use_icm: bool = False,
             render: bool = False,
     ):
         super().__init__(env, render)
@@ -73,6 +79,8 @@ class MultiRLAgent(BaseAgent):
             a: make_ppo_policy(
                 obs_dim=obs_dim,
                 act_dim=act_dim,
+                recurrent=True,
+                use_icm=use_icm,
             ) for a in self.agents
         }
 
@@ -83,9 +91,31 @@ class MultiRLAgent(BaseAgent):
 
         # load models and rms
         for agent, policy in self.policy_manager.policies.items():
-            policy.load_state_dict(saved_model['model'][agent], strict=True)
+            policy.load_state_dict(saved_model['models'][agent], strict=True)
 
         self.obs_rms = saved_model["obs_rms"]
+
+    def get_action(
+            self,
+            agent: str,
+            obs: Batch = None,
+            next_states: Batch | dict = None,
+            info: Batch = None,
+    ) -> Batch:
+        out = self.policy_manager.policies[agent](
+            batch=Batch(
+                {
+                    'obs': {
+                        'obs': self.obs_rms.norm(obs['observation']),
+                        'mask': self.env._get_mask(agent),
+                    },
+                    'info': info,
+                }
+            ),
+            state=Batch(next_states[agent]),
+        )
+
+        return out
 
     def run(self, years: list) -> dict:
         info_dict = {}
@@ -106,17 +136,11 @@ class MultiRLAgent(BaseAgent):
                 processed_info['env_id'] = [0]
 
                 with torch.no_grad():
-                    out = self.policy_manager.policies[agent](
-                        batch=Batch(
-                            {
-                                'obs': {
-                                    'obs': self.obs_rms.norm(obs['observation']),
-                                    'mask': self.env._get_mask(agent),
-                                },
-                                'info': processed_info,
-                            }
-                        ),
-                        state=Batch(next_states[agent]),
+                    out = self.get_action(
+                        agent,
+                        obs=obs,
+                        next_states=next_states,
+                        info=processed_info,
                     )
 
                 action = out.act.item()
@@ -129,6 +153,9 @@ class MultiRLAgent(BaseAgent):
                     self.env.step(None)
                 else:
                     self.env.step(action)
+
+            if self.render:
+                self.env.render()
         return info_dict
 
 
@@ -136,17 +163,30 @@ def continue_training():
     ...
 
 
-def run_inference(model) -> None:
+def run_episodes(args) -> None:
 
-    env = make_vec_env(
-        False,
-        True,
-        1,
-        True,
-        False,
+    # make eval env
+    env = MultiFieldEnv(
+        warm_up=0,
+        training=False,
     )
 
-    dummy_env, agents, obs_dim, act_dim = grab_spaces(107)
+    model = load_model(args)
 
-    policies = {a: make_ppo_policy(obs_dim, act_dim, recurrent=True) for a in agents}
+    years_list = list(range(1990, 2020))
+
+    runner = MultiRLAgent(
+        env=env,
+        saved_model=model,
+        seed=args.seed,
+        render=True,
+        use_icm=args.use_icm,
+    )
+
+    results_dict = runner.run(years_list)
+
+    for year in years_list:
+        plot_results(
+            results_dict[year]
+        )
 

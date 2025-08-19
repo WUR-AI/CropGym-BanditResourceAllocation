@@ -87,7 +87,7 @@ def make_ppo_policy(
     obs_dim: int,
     act_dim: int,
     hidden: Sequence = [64],
-    recurrent: bool = False,
+    recurrent: bool = True,
     use_icm: bool = False,
     args: Namespace = None,
 ) -> PPOPolicy | ICMPolicy:
@@ -116,7 +116,10 @@ def make_ppo_policy(
         actor = MaskedActor(preprocess_net=actor_net, action_dim=act_dim).to(device)
         critic = DictObsCritic(preprocess_net=critic_net).to(device)
 
-    optim = Adam(list(actor.parameters()) + list(critic.parameters()), lr=args.lr)
+    optim = Adam(
+        list(actor.parameters()) + list(critic.parameters()),
+        lr=args.lr if args is not None else 1e-4,
+    )
     # dist = torch.distributions.Categorical  # DISCRETE!
 
     dist = lambda logits: torch.distributions.Categorical(logits=logits)
@@ -127,11 +130,11 @@ def make_ppo_policy(
         critic=critic,
         optim=optim,
         dist_fn=dist,
-        discount_factor=args.gamma,
-        gae_lambda=args.gae_lambda,
+        discount_factor=args.gamma if args is not None else 0.99,
+        gae_lambda=args.gae_lambda if args is not None else 0.95,
         max_grad_norm=0.5,
-        vf_coef=args.vf_coef,
-        ent_coef=args.ent_coef,
+        vf_coef=args.vf_coef if args is not None else 0.5,
+        ent_coef=args.ent_coef if args is not None else 0.01,
         eps_clip=0.2,
         value_clip=True,
         action_space=gym.spaces.Discrete(act_dim),
@@ -143,7 +146,6 @@ def make_ppo_policy(
     if not use_icm:
         return ppo_policy
 
-    print(f"Using ICM Policy!")
 
     feature_net = MLP(
         input_dim=obs_dim[0],
@@ -158,7 +160,10 @@ def make_ppo_policy(
         hidden_sizes=[128],
     )
 
-    icm_optim = torch.optim.Adam(icm.parameters(), lr=args.lr)
+    icm_optim = torch.optim.Adam(
+        icm.parameters(),
+        lr=args.lr if args is not None else 1e-4,
+    )
 
     icm_policy = ICMPolicy(
         policy=ppo_policy,
@@ -316,6 +321,8 @@ def train_gru_ppo(args: Namespace):
     else:
         shared = make_ppo_policy(obs_dim, act_dim, args.lr, recurrent=args.recurrent)
         policies = {a: shared for a in agents}
+
+    print(f"Using ICM Policy!") if args.use_icm else None
 
     marl_policy_manager = MultiAgentPolicyManager(
         policies=list(policies.values()),
