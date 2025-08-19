@@ -4,11 +4,39 @@ from copy import deepcopy
 
 import numpy as np
 import torch
-from tianshou.data import Batch
+import torch.nn.functional as F
+from tianshou.data import Batch, to_torch
 from tianshou.data.types import RecurrentStateBatch
 from tianshou.utils.net.common import NetBase, Recurrent, Net
-from tianshou.utils.net.discrete import Actor, Critic
+from tianshou.utils.net.discrete import Actor, Critic, IntrinsicCuriosityModule
 from torch import nn
+
+
+class IntrinsicCuriosityModuleMARL(IntrinsicCuriosityModule):
+    def forward(
+            self,
+            s1: np.ndarray | torch.Tensor | Batch,
+            act: np.ndarray | torch.Tensor | Batch,
+            s2: np.ndarray | torch.Tensor | Batch,
+            **kwargs: Any,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        # Convert for our very own cropgymzoo
+        if isinstance(s1, Batch):
+            s1 = s1.obs
+        if isinstance(s2, Batch):
+            s2 = s2.obs
+
+        r"""Mapping: s1, act, s2 -> mse_loss, act_hat."""
+        s1 = to_torch(s1, dtype=torch.float32, device=self.device)
+        s2 = to_torch(s2, dtype=torch.float32, device=self.device)
+        phi1, phi2 = self.feature_net(s1), self.feature_net(s2)
+        act = to_torch(act, dtype=torch.long, device=self.device)
+        phi2_hat = self.forward_model(
+            torch.cat([phi1, F.one_hot(act, num_classes=self.action_dim)], dim=1),
+        )
+        mse_loss = 0.5 * F.mse_loss(phi2_hat, phi2, reduction="none").sum(1)
+        act_hat = self.inverse_model(torch.cat([phi1, phi2], dim=1))
+        return mse_loss, act_hat
 
 
 class RecurrentGRU(NetBase[RecurrentStateBatch]):

@@ -48,13 +48,15 @@ if __name__ == "__main__":
     parser.add_argument("--vf_coef", type=float, default=0.5)
     parser.add_argument("--ent_coef", type=float, default=0.01)
 
-
+    # Use intrinsic curiosity module
+    parser.add_argument("--use_icm", action='store_true', dest='use_icm')
 
     parser.set_defaults(
         parallel=False,
         recurrent=True,
         independent=True,
         debug=False,
+        use_icm=False,
     )
     hyperparams = parser.parse_args()
 

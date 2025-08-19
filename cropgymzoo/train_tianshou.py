@@ -21,7 +21,13 @@ import numpy as np
 import gymnasium as gym
 
 from cropgymzoo import _DEFAULT_MODEL_DIR
-from cropgymzoo.agents.networks_tianshou import RecurrentGRU, MaskedActor, DictObsCritic, NetObs
+from cropgymzoo.agents.networks_tianshou import (
+    RecurrentGRU,
+    MaskedActor,
+    DictObsCritic,
+    NetObs,
+    IntrinsicCuriosityModuleMARL
+)
 from cropgymzoo.agents.marl_algorithms_tianshou import IPPOPolicy, IPPOCollector
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
@@ -37,12 +43,12 @@ try:
     from tianshou.data import Collector, VectorReplayBuffer, Batch, ReplayBuffer
     from tianshou.data.collector import EpisodeRolloutHookProtocol, StepHook
     from tianshou.env import PettingZooEnv, DummyVectorEnv, SubprocVectorEnv, VectorEnvNormObs, BaseVectorEnv, VectorEnvWrapper, ShmemVectorEnv
-    from tianshou.utils.net.common import NetBase, RecurrentStateBatch, Net
-    from tianshou.utils.net.discrete import Actor, Critic  # will wrap our GRU core
+    from tianshou.utils.net.common import NetBase, RecurrentStateBatch, Net, MLP
+    from tianshou.utils.net.discrete import Actor, Critic, IntrinsicCuriosityModule  # will wrap our GRU core
     from tianshou.utils.net.common import Recurrent
     from tianshou.utils.logger.tensorboard import TensorboardLogger
     from tianshou.utils import tqdm_config
-    from tianshou.policy import PPOPolicy, MultiAgentPolicyManager
+    from tianshou.policy import PPOPolicy, MultiAgentPolicyManager, ICMPolicy
     from tianshou.trainer import OnpolicyTrainer
     from tianshou.utils.statistics import RunningMeanStd
 except ImportError:
@@ -82,8 +88,9 @@ def make_ppo_policy(
     act_dim: int,
     hidden: Sequence = [64],
     recurrent: bool = False,
+    use_icm: bool = False,
     args: Namespace = None,
-) -> PPOPolicy:
+) -> PPOPolicy | ICMPolicy:
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     if not recurrent:
@@ -115,7 +122,7 @@ def make_ppo_policy(
     dist = lambda logits: torch.distributions.Categorical(logits=logits)
     # dist = torch.distributions.Categorical
 
-    return IPPOPolicy(
+    ppo_policy = IPPOPolicy(
         actor=actor,
         critic=critic,
         optim=optim,
@@ -132,6 +139,38 @@ def make_ppo_policy(
         advantage_normalization=True,
         reward_normalization=True,
     ).to(device)
+
+    if not use_icm:
+        return ppo_policy
+
+    print(f"Using ICM Policy!")
+
+    feature_net = MLP(
+        input_dim=obs_dim[0],
+        hidden_sizes=[128],
+        output_dim=64,
+    ).to(device)
+
+    icm = IntrinsicCuriosityModuleMARL(
+        feature_net=feature_net,
+        action_dim=act_dim,
+        feature_dim=64,
+        hidden_sizes=[128],
+    )
+
+    icm_optim = torch.optim.Adam(icm.parameters(), lr=args.lr)
+
+    icm_policy = ICMPolicy(
+        policy=ppo_policy,
+        model=icm,
+        optim=icm_optim,
+        lr_scale=1.0,
+        reward_scale=0.5,
+        forward_loss_weight=0.5,
+        action_space=gym.spaces.Discrete(act_dim),
+        observation_space=gym.spaces.Box(low=-np.inf, high=np.inf, shape=obs_dim),
+    )
+    return icm_policy
 
 def make_vec_env(
         parallel: bool = True,
@@ -269,7 +308,9 @@ def train_gru_ppo(args: Namespace):
                 obs_dim=obs_dim,
                 act_dim=act_dim,
                 recurrent=args.recurrent,
-                args=args,)
+                use_icm=args.use_icm,
+                args=args,
+            )
             for a in agents
         }
     else:
