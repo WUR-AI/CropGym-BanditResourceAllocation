@@ -59,7 +59,13 @@ def plot_results(
                           edgecolor="lightgrey",
                           boxstyle="round,pad=0.25")
             )
-            plot_function = axes[j].bar if variable in ['Action', 'RAIN'] else axes[j].plot
+            if variable in ['RAIN']:
+                plot_function = axes[j].bar
+            if variable in ['Action']:
+                infos[agent][variable] = [val if val != 0.0 else np.nan for val in infos[agent][variable]]
+                plot_function = axes[j].scatter
+            else:
+                plot_function = axes[j].plot
             plot_function(
                 infos[agent]['Date'],
                 np.array(infos[agent][variable]),
@@ -76,21 +82,22 @@ def plot_results(
         labels.extend(l)
 
     # keep only the first occurrence of each label
-    by_label = dict(zip(labels, handles))
+    by_label = {k: v for k, v in sorted(dict(zip(labels, handles)).items())}
 
     fig.legend(
         by_label.values(), by_label.keys(),
         loc="lower center",
-        bbox_to_anchor=(0.5, 0.05),  # y < 0 ⇒ place *below* the figure
+        bbox_to_anchor=(0.5, -0.005),  # y < 0 ⇒ place *below* the figure
         ncol=min(3, len(by_label)),  # wrap into rows if many entries
         frameon=False,
         # bbox_transform=fig.transFigure
     )
+
+    plt.tight_layout(rect=(0.0, 0.05, 1.0, 1.0))
 
     if save_path is not None:
         if not save_path.endswith(".png"):
             save_path += ".png"
         plt.savefig(save_path, dpi=300)
 
-    plt.tight_layout(rect=[0, 0.05, 1, 1])
     plt.show()

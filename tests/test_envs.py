@@ -113,15 +113,18 @@ class TestEnvPlotter(unittest.TestCase):
 
         self.env.reset(options={'year': np.random.choice(range(1951, 2024))})
 
+        infos = {}
         for agent in self.env.agent_iter():
+            _, _, _, _, info = self.env.last()
             action = self.env.sample_masked_action(agent)
             if self.env.terminations[agent]:
+                infos[agent] = info
                 self.env.step(None)
             else:
                 self.env.step(action)
 
         plot_results(
-            self.env.infos,
+            infos,
             save_path=os.path.join(_DEFAULT_PLOTDIR, 'test_episode.png'),
         )
 
@@ -163,11 +166,6 @@ class TestAgentOrder(unittest.TestCase):
             print(self.env._agent_selector.agent_order)
 
             self.assertTrue(self.is_in_canonical_order(self.env._agent_selector.agent_order, agent_order))
-
-
-
-
-
 
 
 if __name__ == '__main__':
