@@ -197,6 +197,7 @@ def save_best_fn(
 
 def create_comet_experiment(
         name: str,
+        args: argparse.Namespace,
 ):
     if not os.path.isdir(os.path.join(_BASE_PATH, 'comet')):
         print("Not using comet!")
@@ -218,6 +219,9 @@ def create_comet_experiment(
 
     comet_experiment.log_code(folder=_SOURCE_PATH)
     comet_experiment.set_name(name)
+
+    args_dict = vars(args)
+    comet_experiment.log_parameters(args_dict)
 
     print(f'Using comet! Logged to {name}')
 

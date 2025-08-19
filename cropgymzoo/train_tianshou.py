@@ -342,7 +342,7 @@ def train_gru_ppo(args: Namespace):
     tb_logger, run_name = create_logger(args)
 
     # get comet logger
-    comet_experiment = create_comet_experiment(run_name)
+    comet_experiment = create_comet_experiment(run_name, args)
 
     comet_logger = CometTianshouLogger(
         experiment=comet_experiment,
