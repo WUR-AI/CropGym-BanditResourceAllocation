@@ -78,6 +78,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
         self.training = training
         self.shared_obs = shared_obs
         self.dict_obs = dict_obs
+        self.year = self.years[0]
 
         self.has_reset = False
 
@@ -140,6 +141,8 @@ class MultiFieldEnv(AECEnv, EzPickle):
         options = options or {'year': 2000}
         if self.training:
             options = {'year': self.rng.choice(self.years)}
+        # set year
+        self.year = options['year']
 
         # TODO Pass global budget into options if using allocator.
         self.global_budget = self._get_global_max_budget() if not self.random_budget else self._get_global_random_budget()
@@ -602,9 +605,9 @@ class MultiFieldEnv(AECEnv, EzPickle):
         def format_val(val, width, prec=2):
             return f"{val:>{width}.{prec}f}" if isinstance(val, (int, float)) else f"{val:>{width}}"
 
-        header = f"Farm status – budget left: {self.global_budget_left} / {self.global_budget} kg N"
+        header = f"Farm status; sowing year {self.year} – budget left: {self.global_budget_left} / {self.global_budget} kg N"
         cols = ("Field", "Crop", "Date", "N applied", "Yield (t/ha)", "NUE", "Nsurp")
-        fmt_header = "{:15} {:12} {:10} {:>10} {:>15} {:>10} {:>10}"
+        fmt_header = "{:12} {:12} {:10} {:>10} {:>15} {:>10} {:>10}"
         lines = [header, fmt_header.format(*cols), "-" * 85]
 
         # build one row per parcel
@@ -629,7 +632,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
             ]
 
             line = (
-                f"{vals[0]:15} {vals[1]:12} {vals[2]:10} "
+                f"{vals[0]:12} {vals[1]:12} {vals[2]:10} "
                 f"{format_val(vals[3], 10)} "
                 f"{format_val(vals[4], 15)} "
                 f"{format_val(vals[5], 10)} "
@@ -642,38 +645,3 @@ class MultiFieldEnv(AECEnv, EzPickle):
         lines.append(f"\nCrop distribution → {summary}")
 
         return "\n".join(lines)
-
-
-class SkippingSelector:
-    '''
-    Here we don't use the agent_selector from PettingZoo.
-    This loads agents just sequenti
-    '''
-    def __init__(self, order: list[str]):
-        self.order = order[:]                 # fixed global order
-        self.alive = {a: True for a in self.order} # or a set(order)
-        self.idx = -1                         # points to last returned
-
-    def kill(self, agent: str):
-        self.alive[agent] = False
-
-    def reset(self):
-        self.alive = {a: True for a in self.order} # or a set(order)
-
-    def next(self) -> str:
-        n = len(self.order)
-        if not any(self.alive.values()):
-            raise StopIteration("All agents are dead.")
-        for _ in range(n):
-            self.idx = (self.idx + 1) % n
-            cand = self.order[self.idx]
-            if self.alive[cand]:
-                return cand
-        # shouldn't get here
-        raise RuntimeError("Alive list inconsistent with order.")
-
-    @property
-    def selected_agent(self):
-        return self.order[self.idx] if self.idx >= 0 else None
-
-
