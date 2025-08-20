@@ -827,8 +827,6 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         for feature in self.misc_features:
             self.infos[feature].append(self._misc_features_mapper(terminate)[feature])
 
-        self.infos['NAVAIL'].append(pcse_output[-1]['NAVAIL'])
-
         self.infos['Reward'].append(reward)
         self.infos['Action'].append(action)
         self.infos['Yield'].append(pcse_output[-1]['WSO'])
