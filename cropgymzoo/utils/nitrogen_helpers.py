@@ -218,7 +218,14 @@ def get_days_in_year(year):
     return 365 + calendar.isleap(year)
 
 
-def input_nue(n_input, year=None, start=None, end=None, n_seed=3.5, no3_depo=None, nh4_depo=None):
+def input_nue(n_input, year=None, start=None, end=None, no3_depo=None, nh4_depo=None, crop_name=None):
+    if crop_name in "winterwheat":
+        n_seed=3.5
+    elif crop_name in "potato":
+        n_seed=10.6
+    else:
+        n_seed=0.0
+
     if (start is None or end is None) and (no3_depo is None or nh4_depo is None):
         """ Use NL statistics """
         nh4, no3 = get_deposition_amount(year)
@@ -236,8 +243,25 @@ def input_nue(n_input, year=None, start=None, end=None, n_seed=3.5, no3_depo=Non
     return n_input + n_seed + n_depo
 
 
-def get_surplus_n(n_input, n_so, year=None, start=None, end=None, n_seed=3.5, no3_depo=None, nh4_depo=None):
-    n_i = input_nue(n_input, year=year, start=start, end=end, n_seed=n_seed, no3_depo=no3_depo, nh4_depo=nh4_depo)
+def get_surplus_n(
+        n_input,
+        n_so,
+        year=None,
+        start=None,
+        end=None,
+        no3_depo=None,
+        nh4_depo=None,
+        crop_name=None
+):
+    n_i = input_nue(
+        n_input,
+        year=year,
+        start=start,
+        end=end,
+        no3_depo=no3_depo,
+        nh4_depo=nh4_depo,
+        crop_name=crop_name
+    )
 
     return n_i - n_so
 

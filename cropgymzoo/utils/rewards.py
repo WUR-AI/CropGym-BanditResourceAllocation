@@ -136,8 +136,8 @@ class Rewards:
     def update_profit(self, output, amount, year, multiplier=1, country='NL'):
         self.profit += self.calculate_profit(output, amount, year, multiplier, with_year=self.with_year)
 
-    def calculate_nue_on_terminate(self, n_input, n_so, year, start=None, end=None, no3_depo=None, nh4_depo=None):
-        return calculate_nue(n_input, n_so, year=year, start=start, end=end, no3_depo=no3_depo, nh4_depo=nh4_depo)
+    def calculate_nue_on_terminate(self, n_input, n_so, year, start=None, end=None, no3_depo=None, nh4_depo=None, crop_name=None):
+        return calculate_nue(n_input, n_so, year=year, start=start, end=end, no3_depo=no3_depo, nh4_depo=nh4_depo, crop_name=crop_name)
 
     """
     Classes that determine the reward function
@@ -294,8 +294,17 @@ class Rewards:
             self.nue_beta = 10
             self.budget_beta = 1
 
-        def return_reward(self, output, amount, output_baseline=None, multiplier=1, obj=None,
-                          price_crop=None, price_fertilizer=None, budget_left=None):
+        def return_reward(
+                self,
+                output,
+                amount,
+                output_baseline=None,
+                multiplier=1,
+                obj=None,
+                price_crop=None,
+                price_fertilizer=None,
+                budget_left=None
+        ):
 
             obj.calculate_amount(amount)
 
@@ -317,14 +326,23 @@ class Rewards:
 
             return profit_now, growth
 
-        def return_final_reward(self, obj=None, n_fertilized=None, n_output=None, no3_depo=None, nh4_depo=None, budget_left=None):
+        def return_final_reward(
+                self,
+                obj=None,
+                n_fertilized=None,
+                n_output=None,
+                no3_depo=None,
+                nh4_depo=None,
+                budget_left=None,
+                crop_name=None,
+        ):
             # Maybe give negative reward if did not act at all; soil mining most likely
             # if obj.get_total_fertilization == 0:
             #     return -obj.cum_profit - 100
 
-            n_surplus = get_surplus_n(n_input=n_fertilized, n_so=n_output, no3_depo=no3_depo, nh4_depo=nh4_depo)
+            n_surplus = get_surplus_n(n_input=n_fertilized, n_so=n_output, no3_depo=no3_depo, nh4_depo=nh4_depo, crop_name=crop_name)
 
-            nue = calculate_nue(n_input=n_fertilized, n_so=n_output, no3_depo=no3_depo, nh4_depo=nh4_depo)
+            nue = calculate_nue(n_input=n_fertilized, n_so=n_output, no3_depo=no3_depo, nh4_depo=nh4_depo, crop_name=crop_name)
 
             n_surplus_penalty =  obj.n_surplus_penalty(n_surplus)
             nue_penalty = obj.nue_penalty(nue)
@@ -699,13 +717,13 @@ class Rewards:
             self.timestep = timestep
             self.costs_nitrogen = costs_nitrogen
 
-        def calculate_reward_nue(self, n_fertilized, n_output, year=None, start=None, end=None, no3_depo=None, nh4_depo=None):
+        def calculate_reward_nue(self, n_fertilized, n_output, year=None, start=None, end=None, no3_depo=None, nh4_depo=None, crop_name=None):
             if year is None or start is None or end is None:
-                nue = calculate_nue(n_fertilized, n_output, no3_depo=no3_depo, nh4_depo=nh4_depo)
-                n_surplus = get_surplus_n(n_fertilized, n_output, no3_depo=no3_depo, nh4_depo=nh4_depo)
+                nue = calculate_nue(n_fertilized, n_output, no3_depo=no3_depo, nh4_depo=nh4_depo, crop_name=crop_name)
+                n_surplus = get_surplus_n(n_fertilized, n_output, no3_depo=no3_depo, nh4_depo=nh4_depo, crop_name=crop_name)
             else:
-                nue = calculate_nue(n_fertilized, n_output, year=year, start=start, end=end)
-                n_surplus = get_surplus_n(n_fertilized, n_output, year=year, start=start, end=end)
+                nue = calculate_nue(n_fertilized, n_output, year=year, start=start, end=end, crop_name=crop_name)
+                n_surplus = get_surplus_n(n_fertilized, n_output, year=year, start=start, end=end, crop_name=crop_name)
             end_yield = super().dump_cumulative_positive_reward
 
             return self.formula_nue(n_surplus, nue, end_yield)
@@ -886,8 +904,25 @@ class ActionsContainer:
         return self.actions
 
 
-def calculate_nue(n_input, n_so, year=None, start=None, end=None, n_seed=3.5, no3_depo=None, nh4_depo=None):
-    n_in = input_nue(n_input, year=year, n_seed=n_seed, start=start, end=end, no3_depo=no3_depo, nh4_depo=nh4_depo)
+def calculate_nue(
+        n_input,
+        n_so,
+        year=None,
+        start=None,
+        end=None,
+        no3_depo=None,
+        nh4_depo=None,
+        crop_name=None
+):
+    n_in = input_nue(
+        n_input,
+        year=year,
+        start=start,
+        end=end,
+        no3_depo=no3_depo,
+        nh4_depo=nh4_depo,
+        crop_name=crop_name
+    )
     nue = n_so / n_in
     return nue
 

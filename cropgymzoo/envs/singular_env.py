@@ -265,7 +265,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self._update_action_variables(action)
 
         # transform and flatten observations
-        obs = self._observation(obs_pcse)
+        obs = self._observation(obs_pcse, terminated)
 
         # get pcse output
         pcse_output = self.model.get_output()
@@ -494,7 +494,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                 n_fertilized=self.reward_container.get_total_fertilization,
                 n_output=process_pcse.get_n_storage_organ(output),
                 no3_depo=get_no3_deposition_pcse(output),
-                nh4_depo=get_nh4_deposition_pcse(output),)
+                nh4_depo=get_nh4_deposition_pcse(output),
+                crop_name=self.crop)
             )
             return reward
 
@@ -507,6 +508,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                     no3_depo=get_no3_deposition_pcse(output),
                     nh4_depo=get_nh4_deposition_pcse(output),
                     budget_left=self.budget_left,
+                    crop_name=self.crop,
                 )
             )
             return reward
@@ -553,7 +555,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             return np.sum(pcse_output[feature])
         return pcse_output[feature]
 
-    def _observation(self, observation):
+    def _observation(self, observation, terminated = False):
         """
         Flatten the structured `observation` dict into a 1-D numpy array that
         matches `self.observation_space.shape`.
@@ -566,7 +568,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         crop_model = observation["crop_model"]
         act = self._action_features_mapper()
         weather = observation["weather"]
-        misc = self._misc_features_mapper()
+        misc = self._misc_features_mapper(terminated)
 
         # perform some transformations
         crop_values = [
@@ -578,7 +580,14 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         misc_values = [misc[m] for m in self.misc_features]
 
-        weather_matrix = np.vstack([weather[f][:self.timestep] for f in self.weather_features]).T
+        weather_matrix = np.vstack(
+            [
+                weather[f][:self.timestep]
+                if f not in "IRRAD"
+                else [w / 1_000_000 for w in weather[f][:self.timestep]]
+                for f in self.weather_features
+            ]
+        ).T
         weather_values = weather_matrix.ravel()
 
         if self.flatten_obs:
@@ -816,7 +825,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             self.infos[feature].append(self._action_features_mapper()[feature])
 
         for feature in self.misc_features:
-            self.infos[feature].append(self._misc_features_mapper()[feature])
+            self.infos[feature].append(self._misc_features_mapper(terminate)[feature])
 
         self.infos['NAVAIL'].append(pcse_output[-1]['NAVAIL'])
 
@@ -827,44 +836,49 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.infos['Alive'].append(True if not terminate else False)
         self.infos['ActionMask'].append(self.action_mask())
 
-        nue = -0.01 if not terminate else calculate_nue(
-            n_input=self.reward_container.actions,
-            n_so=process_pcse.get_n_storage_organ(pcse_output),
-            nh4_depo=get_nh4_deposition_pcse(pcse_output),
-            no3_depo=get_no3_deposition_pcse(pcse_output),
-        )
-        self.infos['Nue'].append(nue)
-
-        nsurp = -0.01 if not terminate else get_surplus_n(
-            n_input=self.reward_container.get_total_fertilization,
-            n_so=process_pcse.get_n_storage_organ(pcse_output),
-            nh4_depo=get_nh4_deposition_pcse(pcse_output),
-            no3_depo=get_no3_deposition_pcse(pcse_output),
-        )
-        self.infos['Nsurp'].append(nsurp)
-
         self.infos['Profit'].append(self.reward_container.cum_profit)
         not self.infos['CO2'] and self.infos['CO2'].append(self.carbon_dioxide_level)
 
     def _action_features_mapper(self):
-        return {
+        act_mapper = {
             'Naction': self.n_action,
             'Nsteps': self.n_steps,
             'StepsSinceLastAction': self.steps_since_last_action,
             'BudgetTotal': self.budget_n,
             'BudgetLeft': self.budget_left,
         }
+        return {k: act_mapper[k] for k in self.action_features if k in act_mapper}
 
-    def _misc_features_mapper(self):
-        sin_d, cos_d = self._encode_doy(self.date)
-        return {
-            'SinDay': sin_d,
-            'CosDay': cos_d,
-            'FertilizerPrice': self.fertilizer_price,
-            'CropPrice': self.crop_price,
-            'CropCode': self._get_crop_code(),
-            'CO2': self.carbon_dioxide_level,
+    def _misc_features_mapper(self, terminated = False):
+        pcse_output = self.model.get_output() if terminated else None
+        misc_process = {
+            'SinDay': lambda: self._encode_doy(self.date)[0],
+            'CosDay': lambda: self._encode_doy(self.date)[1],
+            'FertilizerPrice': lambda: self.fertilizer_price,
+            'CropPrice': lambda: self.crop_price,
+            'CropCode': lambda: self._get_crop_code(),
+            'CO2': lambda: self.carbon_dioxide_level,
+            'Nue': lambda: (
+                0.0 if not terminated else calculate_nue(
+                    n_input=self.reward_container.actions,
+                    n_so=process_pcse.get_n_storage_organ(pcse_output),
+                    nh4_depo=get_nh4_deposition_pcse(pcse_output),
+                    no3_depo=get_no3_deposition_pcse(pcse_output),
+                    crop_name=self.crop,
+                )
+            ),
+            'Nsurp': lambda: (
+                0.0 if not terminated else get_surplus_n(
+                    n_input=self.reward_container.get_total_fertilization,
+                    n_so=process_pcse.get_n_storage_organ(pcse_output),
+                    nh4_depo=get_nh4_deposition_pcse(pcse_output),
+                    no3_depo=get_no3_deposition_pcse(pcse_output),
+                    crop_name=self.crop,
+                )
+            )
         }
+
+        return {k: misc_process[k]() for k in self.misc_features if k in misc_process}
 
     '''
     Randomizers. NOTE: The weather randomizer is under utils/domain_randomizer.py
@@ -1030,13 +1044,13 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             self._env_baseline = ParcelEnv(
                 crop_features=self.crop_features,
                 weather_features=self.weather_features,
-                locations=self.locations,
-                years=self.years,
+                location=self.loc,
+                year=self.year,
                 timestep=self._timestep,
-                reward='NUE',
+                reward=self.reward_function,
                 training=self.training,
                 action_space=self.action_space,
-                crop='winterwheat',
+                crop=self.crop,
                 model_config=self._model_config,
                 agro_config=self.agro_config,
                 seed=self.seed,
