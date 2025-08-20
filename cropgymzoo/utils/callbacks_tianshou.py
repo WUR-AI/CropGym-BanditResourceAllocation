@@ -153,12 +153,16 @@ def marl_save_checkpoint_fn(
         )
 
     if experiment is not None and epoch % log_every_epochs == 0:
-        log_weights_and_grads_marl(experiment, policy_mgr, step=grad_step, log_grads=False)
+        log_weights_and_grads_marl(experiment, policy_mgr, step=grad_step, log_grads=False, args=args)
 
 
-def log_weights_and_grads_marl(experiment, model, step: int, log_grads: bool = True):
+def log_weights_and_grads_marl(experiment, model, step: int, log_grads: bool = True, args = None):
     for aid, policy in model.policies.items():
         modules = []
+        if hasattr(args, 'use_icm') and args.use_icm:
+            if hasattr(policy, "model") and getattr(policy, "model") is not None:
+                modules.append(("model", getattr(policy, "model")))
+            policy = policy.policy
         for attr in ("actor", "critic"):  # cover common layouts
             if hasattr(policy, attr) and getattr(policy, attr) is not None:
                 modules.append((attr, getattr(policy, attr)))
@@ -286,8 +290,6 @@ class CometTianshouLogger(BaseLogger):
         if namespaced:
             # log in one batch to keep steps aligned
             self.experiment.log_metrics(namespaced, step=step)
-
-
 
     def save_data(
         self,
