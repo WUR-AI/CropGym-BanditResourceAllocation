@@ -5,8 +5,22 @@ def get_lintul_default_crop_features():
 
 def get_wofost_default_crop_features():
     # See get_titles() for description of variables
-    return ["DVS", "TAGP", "LAI", "NuptakeTotal", "TRA", "NO3", "NH4", "WC", "WSO", "NLOSSCUM",
-            'RNO3DEPOSTT', 'RNH4DEPOSTT', 'NamountSO']
+    return [
+        "DVS",
+        "TAGP",
+        "LAI",
+        "NuptakeTotal",
+        'NAVAIL',
+        "TRA",
+        "NO3",
+        "NH4",
+        "SM",
+        "WSO",
+        "NLOSSCUM",
+        'RNO3DEPOSTT',
+        'RNH4DEPOSTT',
+        'NamountSO'
+    ]
 
 
 def get_wofost_minimal_crop_features(pcse_env):
@@ -54,15 +68,35 @@ def get_default_crop_features(pcse_env=1, vision=None):
 
 def get_default_weather_features():
     # See get_titles() for description of variables
-    return ["IRRAD", "TMIN", "TMAX", "RAIN"]
+    return [
+        "IRRAD",
+        "TMIN",
+        "TMAX",
+        "RAIN"
+    ]
 
 
 def get_default_action_features():
-    return ['Nsteps', 'Naction', 'StepsSinceLastAction', 'BudgetTotal', 'BudgetLeft']
+    return [
+        'Nsteps',
+        'Naction',
+        'StepsSinceLastAction',
+        'BudgetTotal',
+        'BudgetLeft'
+    ]
 
 
 def get_default_misc_features():
-    return ['SinDay', 'CosDay', 'FertilizerPrice', 'CropPrice', 'CropCode', "CO2"]
+    return [
+        'SinDay',
+        'CosDay',
+        'FertilizerPrice',
+        'CropPrice',
+        'CropCode',
+        "CO2",
+        'Nue',
+        'Nsurp',
+    ]
 
 
 def get_default_location():
@@ -86,7 +120,7 @@ def get_default_test_years():
 
 def get_default_action_space():
     import gymnasium as gym
-    action_space = gym.spaces.Discrete(3)
+    action_space = gym.spaces.Discrete(9)
     return action_space
 
 def get_default_plot_vars():
