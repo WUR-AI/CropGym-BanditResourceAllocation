@@ -128,6 +128,8 @@ class TestEnvPlotter(unittest.TestCase):
             save_path=os.path.join(_DEFAULT_PLOTDIR, 'test_episode.png'),
         )
 
+        self.env.render()
+
         self.assertTrue(True)
 
 class TestAgentOrder(unittest.TestCase):

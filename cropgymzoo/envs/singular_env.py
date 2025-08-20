@@ -177,7 +177,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.max_budget_n = self.CROP_SOIL_MAX[self.crop][self.soil_type]
         self.budget_n = self.max_budget_n
         self.budget_left = self.budget_n
-        self.area = area
+        self.area = float(area)
 
         # back to PCSE stuff
 

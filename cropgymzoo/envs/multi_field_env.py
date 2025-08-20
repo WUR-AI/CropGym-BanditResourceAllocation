@@ -606,9 +606,9 @@ class MultiFieldEnv(AECEnv, EzPickle):
             return f"{val:>{width}.{prec}f}" if isinstance(val, (int, float)) else f"{val:>{width}}"
 
         header = f"Farm status; sowing year {self.year} – budget left: {self.global_budget_left} / {self.global_budget} kg N"
-        cols = ("Field", "Crop", "Date", "N applied", "Yield (t/ha)", "NUE", "Nsurp")
-        fmt_header = "{:12} {:12} {:10} {:>10} {:>15} {:>10} {:>10}"
-        lines = [header, fmt_header.format(*cols), "-" * 85]
+        cols = ("Field (area[ha])", "Crop", "Date", "N applied", "Yield[t/ha]", "NUE", "Nsurp", "Profit")
+        fmt_header = "{:18} {:12} {:10} {:>10} {:>15} {:>7} {:>7} {:>10}"
+        lines = [header, fmt_header.format(*cols), "-" * 95]
 
         # build one row per parcel
         crop_counts = Counter()
@@ -622,21 +622,23 @@ class MultiFieldEnv(AECEnv, EzPickle):
             val_date = val_date.strftime("%m/%d/%Y")
 
             vals = [
-                field_id,
+                f"{field_id} ({env.unwrapped.area:.1f})",
                 crop,
                 val_date,
                 safe(env, "Naction"),
                 val_yield,
                 safe(env, "Nue"),
-                safe(env, "Nsurp")
+                safe(env, "Nsurp"),
+                safe(env, "Profit"),
             ]
 
             line = (
-                f"{vals[0]:12} {vals[1]:12} {vals[2]:10} "
+                f"{vals[0]:18} {vals[1]:12} {vals[2]:10} "
                 f"{format_val(vals[3], 10)} "
                 f"{format_val(vals[4], 15)} "
-                f"{format_val(vals[5], 10)} "
-                f"{format_val(vals[6], 10)}"
+                f"{format_val(vals[5], 7)} "
+                f"{format_val(vals[6], 7)} "
+                f"{format_val(vals[7], 10)} "
             )
             lines.append(line)
 
