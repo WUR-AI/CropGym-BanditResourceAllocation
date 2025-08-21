@@ -138,7 +138,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
         # get the options before reset
         # If training, ignore all options and override with only year.
         # Good idea? Check for resource allocation too.
-        options = options or {'year': 2000}
+        options = options or {'year': 2010}
         if self.training:
             options = {'year': self.rng.choice(self.years)}
         # set year

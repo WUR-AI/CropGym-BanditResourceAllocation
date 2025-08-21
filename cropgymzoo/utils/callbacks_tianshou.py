@@ -34,6 +34,8 @@ def yearly_eval_test_fn(
         logger,
         args
 ):
+    # shift to eval mode
+    policy_mgr.eval()
 
     reset_options_list = [
         year for year in range(2010, 2011)
@@ -125,6 +127,9 @@ def yearly_eval_test_fn(
                 writer.add_scalar("test/mean_reward_all_years", mean_reward, epoch)
 
     writer.flush()
+
+    # put back to train mode
+    policy_mgr.train()
 
 def marl_save_checkpoint_fn(
         epoch: int,

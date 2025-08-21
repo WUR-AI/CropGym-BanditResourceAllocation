@@ -89,7 +89,7 @@ class RecurrentGRU(NetBase[RecurrentStateBatch]):
 
         # 2. feed-forward + add time dim
         x = self.fc1(obs) # [B, H] or [B, T, H]
-
+        self.gru.flatten_parameters()
         if state is None or "hidden" not in state:
             y, h_in = self.gru(x)            # hidden output: [T, B, H]
         else:
@@ -104,7 +104,7 @@ class RecurrentGRU(NetBase[RecurrentStateBatch]):
             x,
             h_in
         )  # for eval h: [B, H], for train: [T, B, H]
-        logits = self.fc2(y)  # [B_alive, A]
+        logits = self.fc2(y[:,-1] if y.ndim == 3 else y)  # [B_alive, A]
 
         # return to [B, T, H] for storing
         next_hidden = cast(
@@ -182,70 +182,24 @@ class MaskedActor(Actor):
     def __init__(self, preprocess_net, action_dim, device='cpu'):
         super().__init__(preprocess_net=preprocess_net, action_shape=action_dim,
                          softmax_output=False, device=device)  # remember for logits
-        self.previous_env_ids = None
-        self.max_env = 1
 
     def forward(self, obs: torch.Tensor, state: torch.Tensor | None = None, info: dict | Batch = None):
 
-        obs_dim = self.preprocess.obs_dim[0]
-        out_dim = self.preprocess.output_dim
-
-        initial_shape = obs.shape[0]
-        if initial_shape > self.max_env:
-            self.max_env = initial_shape
-
-        # if state:
-        #     if obs.shape[0] != state.shape[0] and len(obs.obs.shape) != 1:
-        #         dim_to_align = state.shape[0]
-        #         idx = torch.zeros(dim_to_align, dtype=torch.bool)
-        #
-        #         try:  # quite hacky here hmmmm is there a better way to do this?
-        #             idx[info['env_id']] = True
-        #         except IndexError:
-        #             if set(self.previous_env_ids) != set(info['env_id']):
-        #                 odd_out = [b for b in self.previous_env_ids if b not in info['env_id']]
-        #                 idx = [b not in odd_out for b in self.previous_env_ids]
-        #
-        #         # Don't change in-place for back propagation
-        #         obs = deepcopy(obs)
-        #
-        #         # Preallocate zeros with matching dtypes
-        #         zero_obs = np.zeros((dim_to_align, obs_dim), dtype=obs.obs.dtype)
-        #         zero_mask = np.zeros((dim_to_align, out_dim), dtype=obs.mask.dtype)
-        #
-        #         # Fill only alive slots
-        #         zero_obs[idx] = obs.obs
-        #         zero_mask[idx] = obs.mask
-        #
-        #         obs.obs = zero_obs
-        #         obs.mask = zero_mask
-        #         obs.agent_id = np.array([obs.agent_id[-1]] * dim_to_align, dtype=object)
-
         obs.obs = obs.obs.astype(np.float32)
         logits, h = self.preprocess(obs, state, info)
-        # logits = self.last(logits)
+        logits = self.last(logits)
         if isinstance(obs, Batch) and "mask" in obs:
             mask = torch.as_tensor(obs["mask"], device=logits.device)
-            logits = logits.clone()
+            # logits = logits.clone()
+            mask = mask.expand_as(logits)
             if mask.ndim == 1:
                 mask = mask.unsqueeze(0)
-            elif mask.ndim == 2:
+            elif mask.ndim == 2 and mask.ndim != logits.ndim:
                 mask = mask.unsqueeze(-2)
             elif mask.ndim == 3:
                 mask = mask.transpose(0, 1)
 
             logits[mask == False] = -1e10
-
-            if logits.ndim == 3:
-                logits = logits.squeeze(1)
-
-
-        if hasattr(info, 'env_id') and initial_shape != logits.shape[0]:
-            logits = logits[info['env_id']]
-
-        # to save for later
-        if hasattr(info, "env_id"):
-            self.previous_env_ids = info['env_id']
 
         return logits, h
 
