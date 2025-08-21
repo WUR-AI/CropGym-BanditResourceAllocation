@@ -118,7 +118,7 @@ def make_ppo_policy(
 
     optim = Adam(
         list(actor.parameters()) + list(critic.parameters()),
-        lr=args.lr if args is not None else 1e-4,
+        lr=args.lr if args is not None else 1e-3,
     )
     # dist = torch.distributions.Categorical  # DISCRETE!
 
@@ -307,20 +307,17 @@ def train_gru_ppo(args: Namespace):
         test_envs.set_obs_rms(train_envs.get_obs_rms())
 
     # Build policies
-    if args.independent:
-        policies = {
-            a: make_ppo_policy(
-                obs_dim=obs_dim,
-                act_dim=act_dim,
-                recurrent=args.recurrent,
-                use_icm=args.use_icm,
-                args=args,
-            )
-            for a in agents
-        }
-    else:
-        shared = make_ppo_policy(obs_dim, act_dim, args.lr, recurrent=args.recurrent)
-        policies = {a: shared for a in agents}
+    # if args.independent:
+    policies = {
+        a: make_ppo_policy(
+            obs_dim=obs_dim,
+            act_dim=act_dim,
+            recurrent=args.recurrent,
+            use_icm=args.use_icm,
+            args=args,
+        )
+        for a in agents
+    }
 
     print(f"Using ICM Policy!") if args.use_icm else None
 
