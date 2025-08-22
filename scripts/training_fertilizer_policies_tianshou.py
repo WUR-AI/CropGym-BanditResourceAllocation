@@ -51,7 +51,12 @@ if __name__ == "__main__":
     # Use intrinsic curiosity module
     parser.add_argument("--use_icm", action='store_true', dest='use_icm')
 
+    # resume model
+    parser.add_argument("--resume", action="store_true", dest='resume')
+    parser.add_argument("--model_dir", type=str, default='GRU_PPO')
+
     parser.set_defaults(
+        resume=None,
         parallel=False,
         recurrent=True,
         independent=True,

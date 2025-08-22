@@ -55,12 +55,14 @@ except ImportError:
     tianshou = None
 
 
-def load_model(args: Namespace) -> pickle:
+def load_model(args: Namespace) -> dict:
 
     if not hasattr(args, 'model_dir'):
         args.model_dir = 'GRU_PPO'
 
     model_dir = Path(str(os.path.join(_DEFAULT_MODEL_DIR, args.model_dir)))
+
+    print('Loading model from {}'.format(model_dir))
     assert model_dir.is_dir(), f"The path {str(model_dir)} is not a valid directory!"
 
     checkpoint = None
@@ -215,8 +217,8 @@ def make_env(independent_learning=True, training=True): # type: ignore
     env = MultiFieldEnv(
         warm_up=0,
         shared_obs=False if independent_learning else True,
-        training=training,
-        random_budget=training,
+        training=False, # training,
+        random_budget=False,
     )
     return env
 
@@ -243,6 +245,7 @@ def create_logger(args):
     logdir = args.logdir
     # Logger
     run_name = f"PPO_GRU_{'parallel' if args.parallel else 'dummy'}_{datetime.datetime.now():%d_%H%M}"
+    run_name = (run_name + "_resume") if args.resume else run_name
     writer = SummaryWriter(os.path.join(logdir, run_name))
     logger = TensorboardLogger(writer)
     # make callbacks within this method
@@ -276,6 +279,16 @@ def train_gru_ppo(args: Namespace):
     :param hyperparams:
     :return:
     """
+
+    # resume model?
+    saved_model = None
+    if getattr(args, "resume", None) is not None:
+        saved_model = load_model(args)
+        # override args to match
+        args = saved_model['args']
+        args.resume = True
+
+        print("Resuming training from saved model!")
 
     print(f"\nTraining PPO with {'GRU' if args.recurrent else 'MLP'} Network")
     print(f"Using {'Dummy' if not args.parallel else 'SubProc'}VectorEnv\n")
@@ -325,6 +338,13 @@ def train_gru_ppo(args: Namespace):
         policies=list(policies.values()),
         env=PettingZooEnv(dummy_env),
     )
+
+    if args.resume is not None:
+        for agent, policy in marl_policy_manager.policies.items():
+            policy.load_state_dict(saved_model['models'][agent], strict=True)
+
+        train_envs.set_obs_rms(saved_model['obs_rms'])
+        test_envs.set_obs_rms(saved_model['obs_rms'])
 
     # Buffers / collectors
     train_collector = IPPOCollector(
@@ -408,10 +428,7 @@ def train_gru_ppo(args: Namespace):
         logger=logger,
         reward_metric=marl_reward_calculator,
     ).run()
-    print(f"Training done → best avg reward: {result['best_reward']:.3f}")
-
-
-
+    print(f"Training done → best avg reward: {result.best_reward:.3f}")
 
 '''
 NOTE FOR WHEN RESUMING MODEL
