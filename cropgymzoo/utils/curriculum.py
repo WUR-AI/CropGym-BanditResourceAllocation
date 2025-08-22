@@ -42,3 +42,82 @@ def make_default_stage_manager():
             {'budget': True, 'sowing': True, 'weather': True, 'co2': True, 'initial_n': False, 'parameters': False},
         ]
     )
+
+
+class CurriculumCallbackManager:
+    def __init__(
+        self,
+        *,
+        beta: float = 0.1,                 # EMA smoothing
+        start_stage: int = 0,
+        min_epochs_per_stage: int = 500,   # gate for stages >= 1
+        first_stage_reward: float = 2700, # based on year 2010 , #37_000,
+        require_ema_and_inst: bool = True  # "consistent": both EMA and instant > threshold
+    ):
+        self.beta = beta
+        self.stage = start_stage
+        self.ema: float | None = None
+        self.last_score: float | None = None
+        self.epochs_in_stage = 0
+
+        self.min_epochs_per_stage = int(min_epochs_per_stage)
+        self.first_stage_reward = float(first_stage_reward)
+        self.require_ema_and_inst = bool(require_ema_and_inst)
+
+    def update(self, score: float) -> float:
+        """Call once per epoch with your eval metric (avg reward).
+        Also increments epoch counter for the current stage.
+        """
+        self.last_score = float(score)
+        self.ema = score if self.ema is None else (1 - self.beta) * self.ema + self.beta * score
+        self.epochs_in_stage += 1
+        return self.ema
+
+    def _stage_zero_gate(self) -> bool:
+        """Stage 0 -> 1 advancement rule: reward > first_stage_reward (instant),
+        and optionally EMA > threshold too for consistency."""
+        if self.last_score is None or self.ema is None:
+            return False
+        if self.require_ema_and_inst:
+            return (self.last_score > self.first_stage_reward) and (self.ema > self.first_stage_reward)
+        else:
+            return self.last_score > self.first_stage_reward
+
+    def _epoch_gate(self) -> bool:
+        """Stages >=1 advancement rule: spend at least N epochs in the current stage."""
+        return self.epochs_in_stage >= self.min_epochs_per_stage
+
+    def should_advance(self) -> bool:
+        if self.stage == 0:
+            return self._stage_zero_gate()
+        # stages >= 1
+        return self._epoch_gate()
+
+    def advance(self) -> None:
+        if self.should_advance():
+            self.stage += 1
+            self._reset_stage_counters()
+            print(f"Curriculum learning stage advanced to {self.stage}")
+
+    def _reset_stage_counters(self):
+        # keep EMA to remain stable across stages, or reset if you prefer:
+        # self.ema = None
+        self.epochs_in_stage = 0
+
+    # (optional) handy introspection helpers
+    @property
+    def epochs_left(self) -> int:
+        if self.stage == 0:
+            return 0  # epoch count doesn't gate stage 0
+        return max(0, self.min_epochs_per_stage - self.epochs_in_stage)
+
+    def status(self) -> dict:
+        return {
+            "stage": self.stage,
+            "ema": self.ema,
+            "last_score": self.last_score,
+            "epochs_in_stage": self.epochs_in_stage,
+            "epochs_left": self.epochs_left,
+            "first_stage_reward": self.first_stage_reward,
+            "min_epochs_per_stage": self.min_epochs_per_stage,
+        }

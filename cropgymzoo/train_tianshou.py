@@ -12,7 +12,8 @@ from cropgymzoo.utils.callbacks_tianshou import (
     save_best_fn,
     create_comet_experiment,
     CometTianshouLogger,
-    MultiLogger
+    MultiLogger,
+    run_test_callback
 )
 
 from pathlib import Path
@@ -32,6 +33,7 @@ from cropgymzoo.agents.marl_algorithms_tianshou import IPPOPolicy, IPPOCollector
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
 from cropgymzoo.envs.wrappers_tianshou import MultiAgentVecNormObs
+from cropgymzoo.utils.curriculum import CurriculumCallbackManager
 
 
 import torch
@@ -380,6 +382,11 @@ def train_gru_ppo(args: Namespace):
         comet_logger if comet_logger else None
     )
 
+    curriculum_manager = None
+    if args.curriculum:
+        curriculum_manager = CurriculumCallbackManager()
+    print(f'Curriculum learning activated!')
+
     # make trainer
     result = OnpolicyTrainer(
         policy=marl_policy_manager,
@@ -400,13 +407,15 @@ def train_gru_ppo(args: Namespace):
         batch_size=args.batch_size or ((args.step_per_collect or 64) * len(train_envs)),
 
         # use lambdas for callbacks
-        test_fn=lambda epoch, _: yearly_eval_test_fn(
+        test_fn=lambda epoch, env_step: run_test_callback(
             epoch,
+            env_step,
             dummy_env,
             marl_policy_manager,
             train_collector.env,
             agents,
             logger,
+            curriculum_manager,
             args
         ),
         save_best_fn=lambda ma_policy: save_best_fn(

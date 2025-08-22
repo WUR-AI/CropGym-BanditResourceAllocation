@@ -24,6 +24,44 @@ from cropgymzoo import _SOURCE_PATH, _BASE_PATH
 from cropgymzoo.envs.wrappers_tianshou import MultiAgentVecNormObs
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
+def run_test_callback(
+        epoch,
+        env_step,
+        raw_env: MultiFieldEnv,
+        policy_mgr: MultiAgentPolicyManager,
+        train_env: BaseVectorEnv,
+        agents,
+        logger,
+        curriculum_manager,
+        args
+):
+
+    mean_reward = yearly_eval_test_fn(
+        epoch,
+        raw_env,
+        policy_mgr,
+        train_env,
+        agents,
+        logger,
+        args
+    )
+
+    if args.curriculum and curriculum_manager is not None:
+        # get writer
+        if hasattr(logger, 'writer'):
+            writer = logger.writer
+        elif hasattr(logger, 'loggers'):
+            writer = logger.loggers[0].writer
+
+        moving_avg = curriculum_manager.update(mean_reward)
+        if writer:
+            writer.add_scalar("curriculum/stage", curriculum_manager.stage, env_step)
+
+        if curriculum_manager.should_advance():
+            curriculum_manager.advance()
+            train_env.reset(options={"curriculum_stage": curriculum_manager.stage})
+
+        writer.flush()
 
 def yearly_eval_test_fn(
         epoch,
@@ -91,45 +129,47 @@ def yearly_eval_test_fn(
             else:
                 raw_env.step(action)
 
-        # log results to tensorboard
-        across_years_reward = {}
-        for year, agent_info in info_dict.items():
-            across_years_reward[year] = []
-            reward_year = []
-            for a_id, full_info in agent_info.items():
-                agent_reward = np.sum(full_info['Reward'])
-                agent_nue = full_info['Nue'][-1]
-                agent_nsurp = full_info['Nsurp'][-1]
-                agent_budget_left = full_info['BudgetLeft'][-1]
-                agent_yield = full_info['Yield'][-1]
-                agent_n_action = full_info['Naction'][-1]
+    # log results to tensorboard
+    across_years_reward = {}
+    for year, agent_info in info_dict.items():
+        across_years_reward[year] = []
+        reward_year = []
+        for a_id, full_info in agent_info.items():
+            agent_reward = np.sum(full_info['Reward'])
+            agent_nue = full_info['Nue'][-1]
+            agent_nsurp = full_info['Nsurp'][-1]
+            agent_budget_left = full_info['BudgetLeft'][-1]
+            agent_yield = full_info['Yield'][-1]
+            agent_n_action = full_info['Naction'][-1]
 
-                # put into year reward
-                reward_year.append(agent_reward)
-
-                if writer:
-                    writer.add_scalar(f"test/{year}/{a_id}/Reward", agent_reward, epoch)
-                    writer.add_scalar(f"test/{year}/{a_id}/NUE", agent_nue, epoch)
-                    writer.add_scalar(f"test/{year}/{a_id}/Nsurp", agent_nsurp, epoch)
-                    writer.add_scalar(f"test/{year}/{a_id}/BudgetLeft", agent_budget_left, epoch)
-                    writer.add_scalar(f"test/{year}/{a_id}/Yield", agent_yield, epoch)
-                    writer.add_scalar(f"test/{year}/{a_id}/Naction", agent_n_action, epoch)
-            else:
-                across_years_reward[year].append(np.sum(reward_year))
-                # Logging intermediate results
-                if writer:
-                    writer.add_scalar(f"test/{year}/total_reward", np.sum(reward_year), epoch)
-        else:
-            # Final aggregated logging
-            mean_reward = np.mean(list(across_years_reward.values()))
+            # put into year reward
+            reward_year.append(agent_reward)
 
             if writer:
-                writer.add_scalar("test/mean_reward_all_years", mean_reward, epoch)
+                writer.add_scalar(f"test/{year}/{a_id}/Reward", agent_reward, epoch)
+                writer.add_scalar(f"test/{year}/{a_id}/NUE", agent_nue, epoch)
+                writer.add_scalar(f"test/{year}/{a_id}/Nsurp", agent_nsurp, epoch)
+                writer.add_scalar(f"test/{year}/{a_id}/BudgetLeft", agent_budget_left, epoch)
+                writer.add_scalar(f"test/{year}/{a_id}/Yield", agent_yield, epoch)
+                writer.add_scalar(f"test/{year}/{a_id}/Naction", agent_n_action, epoch)
+        else:
+            across_years_reward[year].append(np.sum(reward_year))
+            # Logging intermediate results
+            if writer:
+                writer.add_scalar(f"test/{year}/total_reward", np.sum(reward_year), epoch)
+    else:
+        # Final aggregated logging
+        mean_reward = np.mean(list(across_years_reward.values()))
+
+        if writer:
+            writer.add_scalar("test/mean_reward_all_years", mean_reward, epoch)
 
     writer.flush()
 
     # put back to train mode
     policy_mgr.train()
+
+    return mean_reward
 
 def marl_save_checkpoint_fn(
         epoch: int,
@@ -140,7 +180,7 @@ def marl_save_checkpoint_fn(
         test_envs: MultiAgentVecNormObs,
         policy_mgr: MultiAgentPolicyManager,
         args: argparse.Namespace,
-        log_every_epochs: int=5,
+        log_every_epochs: int=20,
         experiment: Experiment=None,
 ) -> None | str:
     # copy running statistics into the frozen eval envs *once per epoch*
@@ -230,6 +270,12 @@ def create_comet_experiment(
 
     comet_experiment.log_code(folder=_SOURCE_PATH)
     comet_experiment.set_name(name)
+
+    if args.curriculum:
+        comet_experiment.add_tag('curriculum')
+
+    if args.resume:
+        comet_experiment.add_tag('resume')
 
     args_dict = vars(args)
     comet_experiment.log_parameters(args_dict)

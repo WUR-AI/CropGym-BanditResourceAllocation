@@ -119,6 +119,10 @@ class MultiFieldEnv(AECEnv, EzPickle):
             self.warm_up_infos = self._warm_up(warm_up)
 
     def reset(self, seed=None, options=None):
+        # Check curriculum; only to be called in callbacks.
+        if options is not None:
+            if options.get('curriculum_stage', None) is not None:
+                self.set_curriculum_stage(options.pop('curriculum_stage'))
         # reinitialize agents
         self.dead_step = {ag: False for ag in self.possible_agents}
         self.agents = self.possible_agents[:]
@@ -275,7 +279,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
         for agent in self.possible_agents:
             self.fields[agent].unwrapped.random_manager.set_stage(stage)
         self.stage = stage
-        if self.stage == 1:
+        if self.stage > 0:
             self.random_budget = True
 
     def observation_space(self, _agent):

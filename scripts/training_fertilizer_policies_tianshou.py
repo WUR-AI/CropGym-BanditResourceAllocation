@@ -1,6 +1,9 @@
 # tianshou_gru_marl.py
 
 import warnings
+
+from cropgymzoo.utils import curriculum
+
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 import os
@@ -47,6 +50,9 @@ if __name__ == "__main__":
     parser.add_argument("--gae_lambda", type=float, default=0.95)
     parser.add_argument("--vf_coef", type=float, default=0.5)
     parser.add_argument("--ent_coef", type=float, default=0.01)
+
+    # Use curriculum learning?
+    parser.add_argument("--curriculum", action='store_true', dest='curriculum')
 
     # Use intrinsic curiosity module
     parser.add_argument("--use_icm", action='store_true', dest='use_icm')
