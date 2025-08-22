@@ -91,7 +91,7 @@ class RecurrentGRU(NetBase[RecurrentStateBatch]):
         x = self.fc1(obs) # [B, H] or [B, T, H]
         self.gru.flatten_parameters()
         if state is None or "hidden" not in state:
-            y, h_in = self.gru(x)            # hidden output: [T, B, H]
+            y, h = self.gru(x)            # hidden output: [T, B, H]
         else:
             # input to GRU should be [B, T, H]
             h_in = (
@@ -100,10 +100,10 @@ class RecurrentGRU(NetBase[RecurrentStateBatch]):
                 else state["hidden"].contiguous()
             )
 
-        y, h = self.gru(
-            x,
-            h_in
-        )  # for eval h: [B, H], for train: [T, B, H]
+            y, h = self.gru(
+                x,
+                h_in
+            )  # for eval h: [B, H], for train: [T, B, H]
         logits = self.fc2(y[:,-1] if y.ndim == 3 else y)  # [B_alive, A]
 
         # return to [B, T, H] for storing
@@ -185,21 +185,31 @@ class MaskedActor(Actor):
 
     def forward(self, obs: torch.Tensor, state: torch.Tensor | None = None, info: dict | Batch = None):
 
+        # grab vector
         obs.obs = obs.obs.astype(np.float32)
-        logits, h = self.preprocess(obs, state, info)
-        logits = self.last(logits)
+
+        # preprocess obs (with GRU or anything else)
+        x, h = self.preprocess(obs, state, info)
+
+        # generate logits from mlp
+        logits = self.last(x)
+
+        # mask
         if isinstance(obs, Batch) and "mask" in obs:
-            mask = torch.as_tensor(obs["mask"], device=logits.device)
+            mask = torch.as_tensor(obs["mask"], device=logits.device).bool()
             # logits = logits.clone()
             mask = mask.expand_as(logits)
             if mask.ndim == 1:
                 mask = mask.unsqueeze(0)
             elif mask.ndim == 2 and mask.ndim != logits.ndim:
                 mask = mask.unsqueeze(-2)
-            elif mask.ndim == 3:
-                mask = mask.transpose(0, 1)
 
-            logits[mask == False] = -1e10
+            if mask.shape[0] == 1 and logits.shape[0] > 1:
+                mask = mask.expand(logits.shape[0], -1)  # broadcast along batch
+
+            # logits[mask == False] = -1e10
+            # Fill invalid actions with a large negative but finite number
+            logits = logits.masked_fill(~mask, -1e10)
 
         return logits, h
 
