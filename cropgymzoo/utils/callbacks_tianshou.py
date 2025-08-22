@@ -148,11 +148,12 @@ def marl_save_checkpoint_fn(
     if epoch % 20 == 0:
         torch.save(
             {
-                "model": {
+                "models": {
                     aid: p.state_dict()  # one file for every agent
                     for aid, p in policy_mgr.policies.items()
                 },
                 "obs_rms": train_envs.get_obs_rms(),
+                "args": args,
             },
             os.path.join(args.logdir, run_name, "checkpoints", f"check_{epoch:04d}.pth")
         )
@@ -200,6 +201,7 @@ def save_best_fn(
                 for aid, p in ma_policy.policies.items()
             },
             "obs_rms": train_envs.get_obs_rms(),
+            "args": args,
         },
         os.path.join(args.logdir, run_name, "best", "best.pth")
     )
