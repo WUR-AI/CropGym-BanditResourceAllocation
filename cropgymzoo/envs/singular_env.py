@@ -17,19 +17,42 @@ import datetime
 from pcse.input.sitedataproviders import WOFOST81SiteDataProvider_SNOMIN
 from pcse.input.yaml_cropdataprovider import YAMLCropDataProvider
 
-from cropgymzoo import _WOFOST_CONFIG, _AGRO_CALENDAR_CONFIG, _CROPS_PATH, _SOIL_PATH, _SITE_PATH, _SOILGRIDS_PATH, _CROPS_CONFIG
+from cropgymzoo import (
+    _WOFOST_CONFIG,
+    _AGRO_CALENDAR_CONFIG,
+    _CROPS_PATH,
+    _SOIL_PATH,
+    _SITE_PATH,
+    _SOILGRIDS_PATH,
+    _CROPS_CONFIG
+)
 
 import cropgymzoo.utils.process_pcse_output as process_pcse
-from cropgymzoo.utils.rewards import (Rewards, ActionsContainer, reward_functions_with_baseline,
-                                      reward_functions_end, calculate_nue)
-from cropgymzoo.utils.nitrogen_helpers import (get_surplus_n, get_nh4_deposition_pcse,
-                                               get_no3_deposition_pcse, convert_year_to_n_concentration, m2_to_ha,
-                                               is_leap, co2_levels)
+from cropgymzoo.utils.rewards import (
+    Rewards,
+    ActionsContainer,
+    reward_functions_with_baseline,
+    reward_functions_end,
+    calculate_nue
+)
+from cropgymzoo.utils.nitrogen_helpers import (
+    get_surplus_n,
+    get_nh4_deposition_pcse,
+    get_no3_deposition_pcse,
+    convert_year_to_n_concentration,
+    m2_to_ha,
+    is_leap,
+    co2_levels
+)
+from cropgymzoo.utils.curriculum import RandomiseStage
 import cropgymzoo.envs.pcse_env as pcse_env
-from cropgymzoo.utils.defaults import (get_wofost_default_crop_features,
-                                       get_default_weather_features,
-                                       get_default_action_features,
-                                       get_default_misc_features)
+from cropgymzoo.utils.defaults import (
+    get_wofost_default_crop_features,
+    get_default_weather_features,
+    get_default_action_features,
+    get_default_misc_features
+)
+from cropgymzoo.utils.curriculum import make_default_stage_manager
 
 import torch as th
 import torch.nn as nn
@@ -123,9 +146,9 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                  site_path: str = _SITE_PATH,
                  soil_path: str = _SOIL_PATH,
                  seed: int = 107,
-                 training: bool = False,
                  original: bool = True,
                  flatten_obs: bool = True,
+                 training: bool = False,
                  **kwargs,
     ):
         EzPickle.__init__(
@@ -215,13 +238,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.rng, self.seed = gym.utils.seeding.np_random(seed=seed)
 
         # Training stuff
-        self.random_weather = False
-        self.random_init = False
-        self.random_params = False
-        if self.training:
-            self.random_weather = True
-            self.random_init = True
-            self.random_params = True
+        self.random_manager = make_default_stage_manager()
 
         # prices of crops and fertilizers
         self._init_prices()
@@ -289,11 +306,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         # Only for invalid action masking
         # self.reset_non_zero_action_count()
 
-        # return the original agro management class in case of shifts during randos
+        # return the original agro management class shifts during randos
         self.agmt = deepcopy(self.original_agmt)
-
-        # Can change training mode on reset
-        self.check_if_training()
 
         # reset reward runners
         self.reward_container.reset()
@@ -377,16 +391,6 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
     '''
     Helper functions for various things
     '''
-
-    def check_if_training(self):
-        if self.training:
-            self.random_weather = True
-            self.random_init = True
-            self.random_params = True
-        elif not self.training:
-            self.random_weather = False
-            self.random_init = False
-            self.random_params = False
 
     @staticmethod
     def _safe_replace_year(d, year):
@@ -768,11 +772,11 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
     def _special_init_conditions(self):
         site_params = None
-        if self.random_init:
+        if self.training and self.random_manager.init_n:
             site_params = self._overwrite_initial_conditions()
             # for N deposition
             site_params = site_params | self._overwrite_nitrogen_rain_concentration()
-        elif not self.random_init:
+        else:
             site_params = self._overwrite_nitrogen_rain_concentration()
 
         site_params['CO2'] = self._get_carbon_dioxide_levels()
@@ -884,9 +888,14 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
     def _randomise_domain(self, options):
         if self.training:
-            self._shift_sowing_date()
-            self._perturb_parameters()
-            options['site_params']['CO2'] = self._perturb_carbon_dioxide(self._get_carbon_dioxide_levels())
+            if self.random_manager.sowing:
+                self._shift_sowing_date()
+            if self.random_manager.parameters:
+                self._perturb_parameters()
+            if self.random_manager.co2:
+                options['site_params']['CO2'] = self._perturb_carbon_dioxide(self._get_carbon_dioxide_levels())
+            if self.random_manager.weather:
+                options['weather'] = True
         return options
 
     def _perturb_parameters(self):
@@ -902,8 +911,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         return co2 * self.rng.normal(1.0, 0.1)
 
     def _shift_sowing_date(self):
-        # shift sowing date by normal randomiser with std of 10
-        shift = self.rng.normal(loc=0, scale=10)
+        # shift sowing date by normal randomiser with std of 5
+        shift = self.rng.normal(loc=0, scale=5)
         shifted_date = self.agmt.crop_start_date + datetime.timedelta(days=shift)
         # shift sowing date and also campaign date proportionally by the random sowing
         self.agro_management = self.agmt.update_attributes(crop_start_date=shifted_date,

@@ -230,10 +230,12 @@ def get_nasapower_provider(location):
     return pcse.input.NASAPowerWeatherDataProvider(*location)
 
 
-def get_openmeteo_provider(location, training=False):
+def get_openmeteo_provider(location, training=False, random_manager=None):
     from cropgymzoo.utils.domain_randomizer import NoisyOpenMeteo
-    return pcse.input.OpenMeteoWeatherDataProvider(*location)\
-        if not training else NoisyOpenMeteo(*location)
+    if training and random_manager is not None:
+        return NoisyOpenMeteo(*location) if random_manager.weather is True else pcse.input.OpenMeteoWeatherDataProvider(*location)
+    else:
+        return pcse.input.OpenMeteoWeatherDataProvider(*location)
 
 
 @functools.cache
@@ -432,7 +434,10 @@ class PCSEEnv(gym.Env):
         self._model_config = model_config
 
         # Get the weather data source
-        self._weather_data_provider = get_openmeteo_provider(self._location, self.training)
+        self._weather_data_provider = get_openmeteo_provider(
+            self._location,
+            self.training,
+        )
 
         # Create a PCSE engine / crop growth model
         self._model = self._init_pcse_model()
@@ -466,6 +471,13 @@ class PCSEEnv(gym.Env):
                                                                sitedata=self._site_params,
                                                                soildata=self._soil_params,
                                                                )
+
+        self._weather_data_provider = get_openmeteo_provider(
+            self._location,
+            self.training,
+            getattr(self, 'random_manager', None),  # assumed that it's initialised
+        )
+
         # Create a PCSE engine / crop growth model
         model = Engine(self._parameter_provider,
                        self._weather_data_provider,

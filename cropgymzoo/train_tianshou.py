@@ -223,7 +223,8 @@ def make_env(independent_learning=True, training=True): # type: ignore
     return env
 
 def get_dummy_env():
-    return MultiFieldEnv()
+    env = MultiFieldEnv()
+    return env
 
 def grab_spaces(seed):
     # Inspect one spawned env to grab spaces & agent list

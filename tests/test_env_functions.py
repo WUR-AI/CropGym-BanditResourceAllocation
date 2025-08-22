@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import pcse
 
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
+from cropgymzoo.utils.curriculum import RandomiseStage, make_default_stage_manager
 from cropgymzoo.utils.helper_for_unit_tests import run_aec_till_terminate
 from cropgymzoo.utils.domain_randomizer import NoisyOpenMeteo
 
@@ -383,6 +384,30 @@ class TestParameterPerturber(unittest.TestCase):
             _, _, terminated, _, _ = env.step(0)
 
         return env
+
+
+class TestCurriculumDataClass(unittest.TestCase):
+    def setUp(self):
+        self.manager = make_default_stage_manager()
+
+    def test_curriculum_data(self):
+        self.manager.set_stage(0)
+
+        print(self.manager.budget)
+
+        self.assertEqual(self.manager.budget, False)
+        self.assertEqual(self.manager.sowing, False)
+
+        self.manager.set_stage(1)
+
+        print(self.manager.budget)
+
+        self.assertEqual(self.manager.budget, True)
+        self.assertEqual(self.manager.sowing, False)
+
+        self.manager.set_stage(4)
+        print(self.manager.co2)
+        self.assertEqual(self.manager.co2, True)
 
 if __name__ == '__main__':
     unittest.main()

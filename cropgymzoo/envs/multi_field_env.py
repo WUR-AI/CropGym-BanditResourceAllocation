@@ -1,7 +1,5 @@
 import os
 import yaml
-import functools
-import copy
 import pickle
 
 from collections import Counter
@@ -10,9 +8,9 @@ import numpy as np
 
 import gymnasium as gym
 from gymnasium.utils.ezpickle import EzPickle
-from gymnasium.spaces import Discrete
 
-from pettingzoo import ParallelEnv, AECEnv
+from pettingzoo import AECEnv
+
 try:
     from pettingzoo.utils import AgentSelector
 except ImportError:
@@ -22,6 +20,7 @@ from cropgymzoo import _FIELDS_CONFIG, _CONFIG_PATH
 
 from cropgymzoo.envs.singular_env import ParcelEnv
 from cropgymzoo.utils.defaults import get_default_years
+from cropgymzoo.utils.curriculum import make_default_stage_manager
 
 
 def make_multi_env(
@@ -52,15 +51,18 @@ class MultiFieldEnv(AECEnv, EzPickle):
     It requires a ::global_budget:: and ::warm_up:: to initialize.
     """
 
-    def __init__(self,
-                 seed: int = 107,
-                 warm_up: int = 0,
-                 years: list = get_default_years(),
-                 training: bool = False,
-                 random_budget: bool = False,
-                 dict_obs: bool = True,
-                 shared_obs: bool = False,
-                 render: bool = False,):
+    def __init__(
+            self,
+            seed: int = 107,
+            warm_up: int = 0,
+            years: list = get_default_years(),
+            training: bool = False,
+            random_budget: bool = False,
+            dict_obs: bool = True,
+            shared_obs: bool = False,
+            render: bool = False,
+            stage: int = 0,
+    ):
         EzPickle.__init__(
             self,
             seed=seed,
@@ -103,6 +105,8 @@ class MultiFieldEnv(AECEnv, EzPickle):
         self._init_infos()
 
         self.random_budget = random_budget
+
+        self.stage = stage
 
         self.global_budget = self._get_global_max_budget() if not self.random_budget else self._get_global_random_budget()
         self.global_budget_left = self.global_budget
@@ -267,6 +271,13 @@ class MultiFieldEnv(AECEnv, EzPickle):
     Callable helper functions and property
     '''
 
+    def set_curriculum_stage(self, stage: int):
+        for agent in self.possible_agents:
+            self.fields[agent].unwrapped.random_manager.set_stage(stage)
+        self.stage = stage
+        if self.stage == 1:
+            self.random_budget = True
+
     def observation_space(self, _agent):
         return self.observation_spaces[_agent]
 
@@ -371,11 +382,16 @@ class MultiFieldEnv(AECEnv, EzPickle):
         This is where we initialize the sub-environments where each agent will work.
         :return: a dict called "fields", filled with different CropGym envs
         """
-        self.fields = {}
+        self.fields: dict[str, ParcelEnv] = {}
         # create each gymnasium cropgym env
         for n in self.agents:
-            env = gym.make(n, seed=self.seed, training=self.training)  # set same seed for each parcel. Change?
-            self.fields[n] : dict[ParcelEnv] = env
+            env = gym.make(
+                n,
+                seed=self.seed,  # set same seed for each parcel. Change?
+                training=self.training,
+                random_manager=make_default_stage_manager()
+            )
+            self.fields[n] : ParcelEnv = env
         print("Parcels initialized!")
 
     def _init_infos(self):
