@@ -35,11 +35,11 @@ class RandomiseStage:
 def make_default_stage_manager():
     return RandomiseStage(
         stages=[
-            {'budget': False, 'sowing': False, 'weather': False, 'co2': False, 'initial_n': False, 'parameters': False},
-            {'budget': True, 'sowing': False, 'weather': False, 'co2': False, 'initial_n': False, 'parameters': False},
-            {'budget': True, 'sowing': True, 'weather': False, 'co2': False, 'initial_n': False, 'parameters': False},
-            {'budget': True, 'sowing': True, 'weather': True, 'co2': False, 'initial_n': False, 'parameters': False},
-            {'budget': True, 'sowing': True, 'weather': True, 'co2': True, 'initial_n': False, 'parameters': False},
+            {'sowing': False, 'weather': False, 'budget': False, 'co2': False, 'initial_n': False, 'parameters': False},
+            {'sowing': True, 'weather': False, 'budget': False, 'co2': False, 'initial_n': False, 'parameters': False},
+            {'sowing': True, 'weather': True, 'budget': False, 'co2': False, 'initial_n': False, 'parameters': False},
+            {'sowing': True, 'weather': True, 'budget': True, 'co2': False, 'initial_n': False, 'parameters': False},
+            {'sowing': True, 'weather': True, 'budget': True, 'co2': True, 'initial_n': False, 'parameters': False},
         ]
     )
 
@@ -51,7 +51,7 @@ class CurriculumCallbackManager:
         beta: float = 0.1,                 # EMA smoothing
         start_stage: int = 0,
         min_epochs_per_stage: int = 500,   # gate for stages >= 1
-        first_stage_reward: float = 2700, # based on year 2010 , #37_000,
+        first_stage_reward: float = 2800, # based on year 2010 , #37_000,
         require_ema_and_inst: bool = True  # "consistent": both EMA and instant > threshold
     ):
         self.beta = beta

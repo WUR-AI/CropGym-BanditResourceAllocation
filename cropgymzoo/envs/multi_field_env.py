@@ -279,8 +279,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
         for agent in self.possible_agents:
             self.fields[agent].unwrapped.random_manager.set_stage(stage)
         self.stage = stage
-        if self.stage > 0:
-            self.random_budget = True
+        self.random_budget = self.fields[self.possible_agents[-1]].unwrapped.random_manager.budget
 
     def observation_space(self, _agent):
         return self.observation_spaces[_agent]
