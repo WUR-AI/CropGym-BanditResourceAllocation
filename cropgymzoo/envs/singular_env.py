@@ -273,6 +273,9 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         """
         Computes customized reward and populates info
         """
+
+        # make sure SM is above a certain level
+
         self.n_steps += 1
 
         # advance one step of the PCSEEngine wrapper and apply action(s)
@@ -772,7 +775,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
     def _special_init_conditions(self):
         site_params = None
-        if self.training and self.random_manager.init_n:
+        if self.training and self.random_manager.initial_n:
             site_params = self._overwrite_initial_conditions()
             # for N deposition
             site_params = site_params | self._overwrite_nitrogen_rain_concentration()
