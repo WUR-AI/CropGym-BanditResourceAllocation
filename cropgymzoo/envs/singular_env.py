@@ -149,6 +149,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                  original: bool = True,
                  flatten_obs: bool = True,
                  training: bool = False,
+                 keep_soil_moisture: bool = True,
                  **kwargs,
     ):
         EzPickle.__init__(
@@ -177,6 +178,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             training=training,
             original=original,
             flatten_obs=flatten_obs,
+            keep_soil_moisture=keep_soil_moisture,
             **kwargs,
         )
         # instance metadata
@@ -185,6 +187,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.flatten_obs = flatten_obs
         self.name = name
         self.soil_type = type
+        self.keep_soil_moisture = keep_soil_moisture
 
         # pcse variables
         self.crop = crop
@@ -275,6 +278,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         """
 
         # make sure SM is above a certain level
+        if self.keep_soil_moisture:
+            self._do_auto_irrigation()
 
         self.n_steps += 1
 
@@ -540,6 +545,11 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         site_parameters = {'NH4ConcR': nh4concr, 'NO3ConcR': no3concr, }
         return site_parameters
 
+    def _do_auto_irrigation(self):
+        sum_moisture = np.sum(self.model.get_output()[-1]["SM"])
+        if sum_moisture < 2.5:
+            self.model._flag_irrigate = True
+
     @staticmethod
     def _crop_model_sum_last(pcse, var, normalise=1.0):
         return np.sum(pcse[var][-1]) / normalise
@@ -653,7 +663,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             'Reward': [], 'Action': [], 'Yield': [], 'NAVAIL': [],
             'BudgetTotal': [], 'BudgetLeft': [], 'CropName': [],
             'Nue': [], 'Nsurp': [], 'Profit': [], "CO2": [],
-            'Alive': [], 'ActionMask': []
+            'Alive': [], 'ActionMask': [], 'RFTRA': [], 'WC': []
         }
 
     def _init_random_init_conditions_params(self):
@@ -840,6 +850,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.infos['CropName'].append(self.crop)
         self.infos['Alive'].append(True if not terminate else False)
         self.infos['ActionMask'].append(self.action_mask())
+        self.infos['RFTRA'].append(pcse_output[-1]['RFTRA'])
+        self.infos['WC'].append(np.sum(pcse_output[-1]['WC']))
 
         self.infos['Profit'].append(self.reward_container.cum_profit)
         not self.infos['CO2'] and self.infos['CO2'].append(self.carbon_dioxide_level)

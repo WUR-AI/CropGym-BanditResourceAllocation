@@ -261,6 +261,7 @@ class Engine(pcse.engine.Engine):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._flag_terminated = False
+        self._flag_irrigate = False
 
     def _run(self, action):
         """Make one time step of the simulation.
@@ -295,6 +296,12 @@ class Engine(pcse.engine.Engine):
                               N_amount=action,
                               N_recovery=0.7
                               )
+        if self._flag_irrigate:
+            self._send_signal(signal=pcse.signals.irrigate,
+                              amount=20,
+                              efficiency=0.7,
+                              )
+            self._flag_irrigate = False
 
         # Rate calculation
         self.calc_rates(self.day, self.drv)

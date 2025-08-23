@@ -124,4 +124,4 @@ def get_default_action_space():
     return action_space
 
 def get_default_plot_vars():
-    return ["DVS", "RAIN", "NAVAIL", "Yield", "Action", "Profit"]
+    return ["DVS", "RAIN", "SM", "RFTRA", "NAVAIL", "Yield", "Action", "Profit"]
