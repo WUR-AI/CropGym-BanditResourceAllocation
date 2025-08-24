@@ -90,7 +90,7 @@ def marl_reward_calculator(
 def make_ppo_policy(
     obs_dim: int,
     act_dim: int,
-    hidden: Sequence = [64],
+    hidden: Sequence = [64, 64],
     recurrent: bool = True,
     use_icm: bool = False,
     args: Namespace = None,
@@ -105,13 +105,15 @@ def make_ppo_policy(
         critic = Critic(preprocess_net=critic_net, device=device)
     else:
         actor_net = RecurrentGRU(
-            layer_num=1,
+            layer_num=len(hidden),
+            hidden_layer_size=hidden[0],
             state_shape=obs_dim,
             action_shape=act_dim,
             device=device,
         )  # GRUBackbone(obs_dim, hidden_dim=[128, 128])
         critic_net = RecurrentGRU(
-            layer_num=1,
+            layer_num=len(hidden),
+            hidden_layer_size=hidden[0],
             state_shape=obs_dim,
             action_shape=act_dim,
             device=device,
@@ -328,6 +330,7 @@ def train_gru_ppo(args: Namespace):
         a: make_ppo_policy(
             obs_dim=obs_dim,
             act_dim=act_dim,
+            hidden=args.hidden_layers,
             recurrent=args.recurrent,
             use_icm=args.use_icm,
             args=args,

@@ -50,6 +50,8 @@ if __name__ == "__main__":
     parser.add_argument("--gae_lambda", type=float, default=0.95)
     parser.add_argument("--vf_coef", type=float, default=0.5)
     parser.add_argument("--ent_coef", type=float, default=0.01)
+    parser.add_argument("--hidden_layers", type=int, nargs="*",
+                        help="Input space separated layer sizes", default=[64, 64])
 
     # Use curriculum learning?
     parser.add_argument("--curriculum", action='store_true', dest='curriculum')
