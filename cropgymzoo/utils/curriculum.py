@@ -14,6 +14,9 @@ class RandomiseStage:
             raise IndexError(f"stage {i} out of range")
         self.stage = i
 
+    def get_max_stage(self) -> int:
+        return len(self.stages) - 1
+
     def __getattr__(self, name: str):
         """Look up keys in the current stage dict."""
         if name in self.stages[self.stage]:
@@ -34,14 +37,17 @@ class RandomiseStage:
 
 def make_default_stage_manager():
     return RandomiseStage(
-        stages=[
-            {'sowing': False, 'weather': False, 'budget': False, 'co2': False, 'initial_n': False, 'parameters': False},
-            {'sowing': True, 'weather': False, 'budget': False, 'co2': False, 'initial_n': False, 'parameters': False},
-            {'sowing': True, 'weather': True, 'budget': False, 'co2': False, 'initial_n': False, 'parameters': False},
-            {'sowing': True, 'weather': True, 'budget': True, 'co2': False, 'initial_n': False, 'parameters': False},
-            {'sowing': True, 'weather': True, 'budget': True, 'co2': True, 'initial_n': False, 'parameters': False},
-        ]
+        stages=make_default_stages()
     )
+
+def make_default_stages():
+    return [
+        {'sowing': False, 'weather': False, 'budget': False, 'co2': False, 'initial_n': False, 'parameters': False},
+        {'sowing': True, 'weather': False, 'budget': False, 'co2': False, 'initial_n': False, 'parameters': False},
+        {'sowing': True, 'weather': True, 'budget': False, 'co2': False, 'initial_n': False, 'parameters': False},
+        {'sowing': True, 'weather': True, 'budget': True, 'co2': False, 'initial_n': False, 'parameters': False},
+        {'sowing': True, 'weather': True, 'budget': True, 'co2': True, 'initial_n': False, 'parameters': False},
+    ]
 
 
 class CurriculumCallbackManager:
@@ -52,7 +58,8 @@ class CurriculumCallbackManager:
         start_stage: int = 0,
         min_epochs_per_stage: int = 500,   # gate for stages >= 1
         first_stage_reward: float = 2800, # based on year 2010 , #37_000,
-        require_ema_and_inst: bool = True  # "consistent": both EMA and instant > threshold
+        require_ema_and_inst: bool = True,  # "consistent": both EMA and instant > threshold
+        max_stage: bool = 4,
     ):
         self.beta = beta
         self.stage = start_stage
@@ -63,6 +70,7 @@ class CurriculumCallbackManager:
         self.min_epochs_per_stage = int(min_epochs_per_stage)
         self.first_stage_reward = float(first_stage_reward)
         self.require_ema_and_inst = bool(require_ema_and_inst)
+        self.max_stage = max_stage
 
     def update(self, score: float) -> float:
         """Call once per epoch with your eval metric (avg reward).
@@ -88,6 +96,8 @@ class CurriculumCallbackManager:
         return self.epochs_in_stage >= self.min_epochs_per_stage
 
     def should_advance(self) -> bool:
+        if self.stage >= self.max_stage:
+            return False
         if self.stage == 0:
             return self._stage_zero_gate()
         # stages >= 1

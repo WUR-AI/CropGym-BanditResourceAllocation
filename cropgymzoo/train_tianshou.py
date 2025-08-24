@@ -384,7 +384,10 @@ def train_gru_ppo(args: Namespace):
 
     curriculum_manager = None
     if args.curriculum:
-        curriculum_manager = CurriculumCallbackManager()
+        curriculum_manager = CurriculumCallbackManager(
+            # sample from sub-env attribute... Quite dirty this way.
+            max_stage=dummy_env.get_field_env_with_idx(0).unwrapped.random_manager.get_max_stage()
+        )
     print(f'Curriculum learning activated!')
 
     # make trainer
