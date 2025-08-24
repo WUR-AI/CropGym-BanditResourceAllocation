@@ -62,7 +62,6 @@ class MultiRLAgent(BaseAgent):
             env: pettingzoo.AECEnv | BaseVectorEnv,
             saved_model: dict,
             seed: int = 107,
-            use_icm: bool = False,
             render: bool = False,
     ):
         super().__init__(env, render)
@@ -72,6 +71,8 @@ class MultiRLAgent(BaseAgent):
 
         # dummy_env, agents, obs_dim, act_dim = grab_spaces(seed)
 
+        args = saved_model['args']
+
         obs_dim = self.env.sample_observation_space_agent().shape
         act_dim = self.env.action_spaces[self.agents[0]].n
 
@@ -79,8 +80,9 @@ class MultiRLAgent(BaseAgent):
             a: make_ppo_policy(
                 obs_dim=obs_dim,
                 act_dim=act_dim,
+                hidden=args.hidden_layers,
                 recurrent=True,
-                use_icm=use_icm,
+                use_icm=args.use_icm,
             ) for a in self.agents
         }
 
