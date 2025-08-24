@@ -1,7 +1,5 @@
 from typing import Sequence, Any, cast
 
-from copy import deepcopy
-
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -246,3 +244,15 @@ class NetObs(Net):
             obs = obs.obs
 
         return super().forward(obs, state, info)
+
+
+class UCBNetwork(nn.Module):
+    def __init__(self, dim, hidden_size=100):
+        super().__init__()
+        self.fc1 = nn.Linear(dim, hidden_size)
+        self.activate = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_size, 1)
+    def forward(self, x):
+        return self.fc2(self.activate(self.fc1(x)))
+
+
