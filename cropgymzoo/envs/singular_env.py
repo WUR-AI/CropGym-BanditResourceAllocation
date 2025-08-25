@@ -149,7 +149,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                  original: bool = True,
                  flatten_obs: bool = True,
                  training: bool = False,
-                 keep_soil_moisture: bool = True,
+                 keep_soil_moisture: bool = False,
                  **kwargs,
     ):
         EzPickle.__init__(

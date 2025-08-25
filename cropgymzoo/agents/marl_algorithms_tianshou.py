@@ -272,21 +272,7 @@ class IPPOPolicy(PPOPolicy):
                         self._actor_critic.parameters(),
                         max_norm=self.max_grad_norm,
                     )
-
-                with torch.no_grad():
-                    dist_now = self(minibatch).dist
-                    logp_now = dist_now.log_prob(minibatch.act).float()
-                    pre_update_lp_diff = (logp_now - minibatch.logp_old).abs().mean().item()
-                    print(f"pre_update_lp_diff {pre_update_lp_diff}")
-
                 self.optim.step()
-
-                with torch.no_grad():
-                    dist_after = self(minibatch).dist
-                    logp_after = dist_after.log_prob(minibatch.act).float()
-                    post_update_lp_diff = (logp_after - minibatch.logp_old).abs().mean().item()
-                    print(f"post_update_lp_diff {post_update_lp_diff}")
-
                 clip_losses.append(clip_loss.item())
                 vf_losses.append(vf_loss.item())
                 ent_losses.append(ent_loss.item())
