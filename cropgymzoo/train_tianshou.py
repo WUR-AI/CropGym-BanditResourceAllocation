@@ -29,7 +29,7 @@ from cropgymzoo.agents.networks_tianshou import (
     ConstraintCritic,
     ObsMLP
 )
-from cropgymzoo.agents.marl_algorithms_tianshou import IPPOPolicy, IPPOCollector
+from cropgymzoo.agents.marl_algorithms_tianshou import IPPOPolicy, IPPOCollector, LagrangianIPPOPolicy
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
 from cropgymzoo.envs.wrappers_tianshou import MultiAgentVecNormObs
@@ -105,8 +105,9 @@ def make_ppo_policy(
         device=device,
     )
 
-    obs_constraint_dim = args.obs_constraint_dim
-    obs_constraint_idx = args.constraint_indices
+    if args.lagrangian_ppo:
+        obs_constraint_dim = args.obs_constraint_dim
+        obs_constraint_idx = args.constraint_indices
 
     if mlp_critics:
         constraint_net = ObsMLP(
@@ -114,7 +115,7 @@ def make_ppo_policy(
             hidden_sizes=hidden,
             activation=torch.nn.Tanh,
             device=device,
-        )
+        ) if args.lagrangian_ppo else None
         critic_net = ObsMLP(
             input_dim=obs_dim[0],
             hidden_sizes=hidden,
@@ -128,7 +129,7 @@ def make_ppo_policy(
             state_shape=obs_constraint_dim,
             action_shape=act_dim,
             device=device,
-        )
+        ) if args.lagrangian_ppo else None
         critic_net = RecurrentGRU(
             layer_num=len(hidden),
             hidden_layer_size=hidden[0],
@@ -143,21 +144,30 @@ def make_ppo_policy(
     constraint_critic = ConstraintCritic(
         preprocess_net=constraint_net,
         constraint_indices=obs_constraint_idx,
-    )
+    ) if args.lagrangian_ppo else None
 
     optim = Adam(
         list(actor.parameters()) + list(critic.parameters()) + list(constraint_critic.parameters()),
         lr=args.lr if args is not None else 1e-3,
+        ) if args.lagrangian_ppo else (
+        Adam(
+            list(actor.parameters()) + list(critic.parameters()),
+            lr=args.lr if args is not None else 1e-3,
         )
+    )
     # dist = torch.distributions.Categorical  # DISCRETE!
 
     dist = lambda logits: torch.distributions.Categorical(logits=logits)
     # dist = torch.distributions.Categorical
 
-    ppo_policy = IPPOPolicy(
+    policy_fn = IPPOPolicy if not args.lagrangian_ppo else LagrangianIPPOPolicy
+
+    lagrangian_kwarg = {'constraint_critic': constraint_critic}
+
+    ppo_policy = policy_fn(
         actor=actor,
         critic=critic,
-        constraint_critic=constraint_critic,
+        **lagrangian_kwarg if args.lagrangian_ppo else None,
         optim=optim,
         dist_fn=dist,
         discount_factor=args.gamma if args is not None else 0.99,
@@ -366,6 +376,7 @@ def train_gru_ppo(args: Namespace):
         for a in agents
     }
 
+    print(f"Using {'LagrangianIPPO' if args.lagrangian_ppo else 'IPPO'} policy!")
     print(f"Using ICM Policy!") if args.use_icm else None
 
     marl_policy_manager = MultiAgentPolicyManager(

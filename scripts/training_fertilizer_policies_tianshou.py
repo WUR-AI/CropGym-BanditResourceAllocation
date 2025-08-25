@@ -63,6 +63,9 @@ if __name__ == "__main__":
     parser.add_argument("--resume", action="store_true", dest='resume')
     parser.add_argument("--model_dir", type=str, default='GRU_PPO')
 
+    # use lagrangian
+    parser.add_argument("--lagrangian_ppo", action="store_true", dest='lagrangian_ppo')
+
     parser.set_defaults(
         resume=None,
         parallel=False,
@@ -70,6 +73,7 @@ if __name__ == "__main__":
         independent=True,
         debug=False,
         use_icm=False,
+        lagrangian_ppo=False,
     )
     hyperparams = parser.parse_args()
 

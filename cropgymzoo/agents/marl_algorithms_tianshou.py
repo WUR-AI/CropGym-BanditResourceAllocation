@@ -23,6 +23,7 @@ from tianshou.data.collector import (
     MalformedBufferError,
 )
 from tianshou.utils.determinism import TraceLogger
+from tianshou.utils.net.common import ActorCritic
 from tianshou.utils.statistics import RunningMeanStd
 
 from dataclasses import dataclass
@@ -48,24 +49,9 @@ class ActorCriticConstraint(nn.Module):
 class IPPOPolicy(PPOPolicy):
     def __init__(
             self,
-            constraint_critic: torch.nn.Module = None,
-            constraint_loss_coefficient: float = 0.5,
-            initial_lagrangian_multiplier: float = 0.001,
-            lagrangian_learning_rate: float = 0.0005,
-            lagrangian_upper_bound: float = 3.0,
             **kwargs
     ):
         super().__init__(**kwargs)
-        self.constraint_critic = constraint_critic
-        self.const_rms = RunningMeanStd()
-        self.cf_coef = constraint_loss_coefficient
-        self.lagrange = Lagrange(
-            cost_limit=0.0,
-            lagrangian_multiplier_init=initial_lagrangian_multiplier,
-            lagrangian_multiplier_lr = lagrangian_learning_rate,
-            lagrangian_upper_bound = lagrangian_upper_bound,
-        )
-        self._actor_critic = ActorCriticConstraint(self.actor, self.critic, self.constraint_critic)
 
     def process_fn(self, batch, buffer, indices):
         # build per-step done that includes agent deaths
@@ -92,11 +78,34 @@ class IPPOPolicy(PPOPolicy):
         batch: LogpOldProtocol
         return batch
 
+class LagrangianIPPOPolicy(IPPOPolicy):
+    def __init__(
+            self,
+            constraint_critic: torch.nn.Module = None,
+            constraint_loss_coefficient: float = 0.5,
+            initial_lagrangian_multiplier: float = 0.001,
+            lagrangian_learning_rate: float = 0.0005,
+            lagrangian_upper_bound: float = 3.0,
+            **kwargs,
+    ):
+        super().__init__(**kwargs)
+
+        self.constraint_critic = constraint_critic
+        self.const_rms = RunningMeanStd()
+        self.cf_coef = constraint_loss_coefficient
+        self.lagrange = Lagrange(
+            cost_limit=0.0,
+            lagrangian_multiplier_init=initial_lagrangian_multiplier,
+            lagrangian_multiplier_lr = lagrangian_learning_rate,
+            lagrangian_upper_bound = lagrangian_upper_bound,
+        )
+        self._actor_critic = ActorCriticConstraint(self.actor, self.critic, self.constraint_critic)
+
     def _compute_returns(
-        self,
-        batch: RolloutBatchProtocol,
-        buffer: ReplayBuffer,
-        indices: np.ndarray,
+            self,
+            batch: RolloutBatchProtocol,
+            buffer: ReplayBuffer,
+            indices: np.ndarray,
     ) -> BatchWithAdvantagesProtocol:
         """
         Adding the constraint critic calculation here
@@ -191,12 +200,12 @@ class IPPOPolicy(PPOPolicy):
         return returns, advantage
 
     def learn(  # type: ignore
-        self,
-        batch: RolloutBatchProtocol,
-        batch_size: int | None,
-        repeat: int,
-        *args: Any,
-        **kwargs: Any,
+            self,
+            batch: RolloutBatchProtocol,
+            batch_size: int | None,
+            repeat: int,
+            *args: Any,
+            **kwargs: Any,
     ) -> TPPOTrainingStats:
         losses, clip_losses, vf_losses, ent_losses, cf_losses = [], [], [], [], []
         gradient_steps = 0
