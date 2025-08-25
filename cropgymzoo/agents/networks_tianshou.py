@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 from tianshou.data import Batch, to_torch
 from tianshou.data.types import RecurrentStateBatch
-from tianshou.utils.net.common import NetBase, Recurrent, Net
+from tianshou.utils.net.common import NetBase, Recurrent, MLP
 from tianshou.utils.net.discrete import Actor, Critic, IntrinsicCuriosityModule
 from torch import nn
 
@@ -236,17 +236,16 @@ class ConstraintCritic(Critic):
         return self.last(logits)
 
 
-class NetObs(Net):
+class ObsMLP(MLP):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.obs_dim = (kwargs.get("state_shape", None),)
 
     def forward(
         self,
-        obs: np.ndarray | torch.Tensor,
-        state: Any = None,
+        obs: Batch,
+        state: RecurrentStateBatch | None = None,
         info: dict[str, Any] | None = None,
-    ) -> tuple[torch.Tensor, Any]:
+    ) -> (torch.Tensor, None):
         """Mapping: obs -> flatten (inside MLP)-> logits.
 
         :param obs:
@@ -256,7 +255,9 @@ class NetObs(Net):
         if isinstance(obs, Batch):
             obs = obs.obs
 
-        return super().forward(obs, state, info)
+        x = super().forward(obs)
+
+        return x, state
 
 
 class UCBNetwork(nn.Module):

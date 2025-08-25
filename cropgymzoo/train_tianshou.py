@@ -26,6 +26,7 @@ from cropgymzoo.agents.networks_tianshou import (
     MaskedActor,
     IntrinsicCuriosityModuleMARL,
     ConstraintCritic,
+    ObsMLP
 )
 from cropgymzoo.agents.marl_algorithms_tianshou import IPPOPolicy, IPPOCollector
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
@@ -86,12 +87,13 @@ def marl_reward_calculator(
     return np.array(avg)
 
 def make_ppo_policy(
-    obs_dim: int,
+    obs_dim: int | tuple[int],
     act_dim: int,
     hidden: Sequence = [64, 64],
     recurrent: bool = True,
     use_icm: bool = False,
     args: Namespace = None,
+    mlp_critics = True,
 ) -> PPOPolicy | ICMPolicy:
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -101,23 +103,40 @@ def make_ppo_policy(
         state_shape=obs_dim,
         action_shape=act_dim,
         device=device,
-    )  # GRUBackbone(obs_dim, hidden_dim=[128, 128])
-    critic_net = RecurrentGRU(
-        layer_num=len(hidden),
-        hidden_layer_size=hidden[0],
-        state_shape=obs_dim,
-        action_shape=act_dim,
-        device=device,
-    )  # GRUBackbone(obs_dim, hidden_dim=[128, 128])
+    )
+
     obs_constraint_dim = args.obs_constraint_dim
     obs_constraint_idx = args.constraint_indices
-    constraint_net = RecurrentGRU(
-        layer_num=len(hidden),
-        hidden_layer_size=hidden[0],
-        state_shape=obs_constraint_dim,
-        action_shape=act_dim,
-        device=device,
-    )
+
+    if mlp_critics:
+        constraint_net = ObsMLP(
+            input_dim=obs_constraint_dim,
+            hidden_sizes=hidden,
+            activation=torch.nn.Tanh,
+            device=device,
+        )
+        critic_net = ObsMLP(
+            input_dim=obs_dim[0],
+            hidden_sizes=hidden,
+            activation=torch.nn.Tanh,
+            device=device,
+        )
+    else:
+        constraint_net = RecurrentGRU(
+            layer_num=len(hidden),
+            hidden_layer_size=hidden[0],
+            state_shape=obs_constraint_dim,
+            action_shape=act_dim,
+            device=device,
+        )
+        critic_net = RecurrentGRU(
+            layer_num=len(hidden),
+            hidden_layer_size=hidden[0],
+            state_shape=obs_dim,
+            action_shape=act_dim,
+            device=device,
+        )
+
 
     actor = MaskedActor(preprocess_net=actor_net, action_dim=act_dim).to(device)
     critic = Critic(preprocess_net=critic_net).to(device)
@@ -129,7 +148,7 @@ def make_ppo_policy(
     optim = Adam(
         list(actor.parameters()) + list(critic.parameters()),
         lr=args.lr if args is not None else 1e-3,
-    )
+        )
     # dist = torch.distributions.Categorical  # DISCRETE!
 
     dist = lambda logits: torch.distributions.Categorical(logits=logits)
