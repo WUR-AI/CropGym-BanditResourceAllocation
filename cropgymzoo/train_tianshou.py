@@ -162,12 +162,12 @@ def make_ppo_policy(
 
     policy_fn = IPPOPolicy if not args.lagrangian_ppo else LagrangianIPPOPolicy
 
-    lagrangian_kwarg = {'constraint_critic': constraint_critic}
+    lagrangian_kwarg = {'constraint_critic': constraint_critic} if args.lagrangian_ppo else {}
 
     ppo_policy = policy_fn(
         actor=actor,
         critic=critic,
-        **lagrangian_kwarg if args.lagrangian_ppo else None,
+        **lagrangian_kwarg,
         optim=optim,
         dist_fn=dist,
         discount_factor=args.gamma if args is not None else 0.99,
