@@ -439,6 +439,40 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.steps_since_last_action = 0
         self.budget_left = self.budget_n
 
+    # For constraints
+
+    def _get_frequency_constraint(self) -> float:
+        return max(self.non_zero_action_count - 3, 0)
+
+    def _get_dvs_constraint(self) -> float:
+        return 0 if 0.01 < self.model.get_output()[-1]['DVS'] <= 1 else 1
+
+    def _get_budget_constraint(self) -> float:
+        return max(self.budget_left, 0)
+
+    def _get_nue_constraint(self) -> float:
+        return 0 if self.infos['Nue'][-1] == 0.0 or 0.5 <= self.infos['Nue'][-1] <= 0.9 else 1
+
+    def _get_nsurp_constraint(self) -> float:
+        return 0 if 0.0 <= self.infos['Nue'][-1] <= 40 else 1
+
+    def _calculate_constraints(self):
+        """
+        Function to calculate constraints
+        1. Action constraint
+        2. Development stage constraint
+        3. Budget constraint (if not using masked actions)
+        4. Nue and Nsurp constraints (legacy)
+        """
+
+        frequency_constraint = self._get_frequency_constraint()
+        dvs_constraint = self._get_dvs_constraint()
+        budget_constraint = self._get_budget_constraint()
+        nue_constraint = self._get_nue_constraint()
+        nsurp_constraint = self._get_nsurp_constraint()
+
+        return frequency_constraint + dvs_constraint + budget_constraint + nue_constraint + nsurp_constraint
+
 
     def _process_output(self, action, output, terminated):
         if isinstance(action, np.ndarray):
@@ -663,7 +697,10 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             'Reward': [], 'Action': [], 'Yield': [], 'NAVAIL': [],
             'BudgetTotal': [], 'BudgetLeft': [], 'CropName': [],
             'Nue': [], 'Nsurp': [], 'Profit': [], "CO2": [],
-            'Alive': [], 'ActionMask': [], 'RFTRA': [], 'WC': []
+            'Alive': [], 'ActionMask': [], 'RFTRA': [], 'WC': [],
+            'TotalConstraint': [], 'FrequencyConstraint': [],
+            'DVSConstraint': [], 'BudegetConstraint': [],
+            'NueConstraint': [], 'NsurpConstraint': [],
         }
 
     def _init_random_init_conditions_params(self):
@@ -856,6 +893,13 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.infos['Profit'].append(self.reward_container.cum_profit)
         not self.infos['CO2'] and self.infos['CO2'].append(self.carbon_dioxide_level)
 
+        self.infos['TotalConstraint'].append(self._calculate_constraints())
+        self.infos['FrequencyConstraint'].append(self._get_frequency_constraint())
+        self.infos['DVSConstraint'].append(self._get_dvs_constraint())
+        self.infos['BudgetConstraint'].append(self._get_budget_constraint())
+        self.infos['NueConstraint'].append(self._get_nue_constraint())
+        self.infos['NsurpConstraint'].append(self._get_nsurp_constraint())
+
     def _action_features_mapper(self):
         act_mapper = {
             'Naction': self.n_action,
@@ -971,8 +1015,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
     def _init_reward_function(self, costs_nitrogen, kwargs):
 
         self.rewards_obj: Rewards = Rewards(kwargs.get('reward_var'), self.timestep, costs_nitrogen)
-        self.reward_container: ActionsContainer | Rewards.__class__ = ActionsContainer()
-        self.reward_class: Rewards.__class__ = None
+        self.reward_container: ActionsContainer | Rewards.ContainerEND | Rewards.ContainerANE = ActionsContainer()
+        self.reward_class: Rewards = None
 
         if self.reward_function == 'ANE':
             self.reward_class = self.rewards_obj.DEF(self.timestep, costs_nitrogen)
