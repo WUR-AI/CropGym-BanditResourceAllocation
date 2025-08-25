@@ -199,6 +199,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.location = location
         self.year_list = year_list
 
+        self.feature_index_map = self._build_index_map()
+
         # field specific stuff
         self.max_budget_n = self.CROP_SOIL_MAX[self.crop][self.soil_type]
         self.budget_n = self.max_budget_n
@@ -396,9 +398,41 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         obs = super()._get_observation(output_pcse)
         return self._observation(obs)
 
+    @staticmethod
+    def obs_constraint_features():
+        return ['DVS', 'NonZeroActionCount', 'Nue', 'Nsurp']
+
     '''
     Helper functions for various things
     '''
+
+    def _build_index_map(self) -> dict[str, int]:
+        """Create a mapping from feature keyword to its index in the obs vector."""
+        index_map = {}
+        offset = 0
+
+        # crop features
+        for f in self.crop_features:
+            index_map[f] = offset
+            offset += 1
+
+        # action features
+        for f in self.action_features:
+            index_map[f] = offset
+            offset += 1
+
+        # misc features
+        for f in self.misc_features:
+            index_map[f] = offset
+            offset += 1
+
+        # weather features across timesteps
+        for i, f in enumerate(self.weather_features):
+            for t in range(self.timestep):
+                index_map[f"{f}_{t}"] = offset + i * self.timestep + t
+        # offset += len(self.weather_features) * self.timestep   # not needed unless chaining more
+
+        return index_map
 
     @staticmethod
     def _safe_replace_year(d, year):
@@ -907,6 +941,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             'StepsSinceLastAction': self.steps_since_last_action,
             'BudgetTotal': self.budget_n,
             'BudgetLeft': self.budget_left,
+            'NonZeroActionCount': self.non_zero_action_count,
         }
         return {k: act_mapper[k] for k in self.action_features if k in act_mapper}
 
