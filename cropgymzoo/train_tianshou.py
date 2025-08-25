@@ -1,6 +1,7 @@
 import os
 from functools import partial
 import datetime
+import itertools
 from typing import Sequence
 from argparse import Namespace
 import pickle
@@ -145,7 +146,7 @@ def make_ppo_policy(
     )
 
     optim = Adam(
-        list(actor.parameters()) + list(critic.parameters()),
+        list(actor.parameters()) + list(critic.parameters()) + list(constraint_critic.parameters()),
         lr=args.lr if args is not None else 1e-3,
         )
     # dist = torch.distributions.Categorical  # DISCRETE!

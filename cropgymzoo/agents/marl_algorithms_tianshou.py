@@ -28,6 +28,23 @@ from tianshou.utils.statistics import RunningMeanStd
 from dataclasses import dataclass
 
 
+class ActorCriticConstraint(nn.Module):
+    """An actor-critic network for parsing parameters.
+
+    Using ``actor_critic.parameters()`` instead of set.union or list+list to avoid
+    issue #449.
+
+    :param nn.Module actor: the actor network.
+    :param nn.Module critic: the critic network.
+    """
+
+    def __init__(self, actor: nn.Module, critic: nn.Module, constraint_critic: nn.Module) -> None:
+        super().__init__()
+        self.actor = actor
+        self.critic = critic
+        self.constraint_critic = constraint_critic
+
+
 class IPPOPolicy(PPOPolicy):
     def __init__(
             self,
@@ -48,6 +65,7 @@ class IPPOPolicy(PPOPolicy):
             lagrangian_multiplier_lr = lagrangian_learning_rate,
             lagrangian_upper_bound = lagrangian_upper_bound,
         )
+        self._actor_critic = ActorCriticConstraint(self.actor, self.critic, self.constraint_critic)
 
     def process_fn(self, batch, buffer, indices):
         # build per-step done that includes agent deaths
@@ -212,7 +230,7 @@ class IPPOPolicy(PPOPolicy):
                     constraint_advantages = (constraint_advantages - const_mean) / (const_std + self._eps)
 
                 # start lagrangian constraint
-                combined_advantages = advantages - lagrangian_multiplier + constraint_advantages
+                combined_advantages = advantages - lagrangian_multiplier * constraint_advantages
 
                 ratios = (dist.log_prob(minibatch.act) - minibatch.logp_old).exp().float()
                 ratios = ratios.reshape(ratios.size(0), -1).transpose(0, 1)
@@ -246,7 +264,7 @@ class IPPOPolicy(PPOPolicy):
 
                 # calculate regularization and overall loss
                 ent_loss = dist.entropy().mean()
-                loss = clip_loss + self.vf_coef * vf_loss - self.cf_coef * cf_loss - self.ent_coef * ent_loss
+                loss = clip_loss + self.vf_coef * vf_loss + self.cf_coef * cf_loss - self.ent_coef * ent_loss
                 self.optim.zero_grad()
                 loss.backward()
                 if self.max_grad_norm:  # clip large gradient
@@ -254,7 +272,21 @@ class IPPOPolicy(PPOPolicy):
                         self._actor_critic.parameters(),
                         max_norm=self.max_grad_norm,
                     )
+
+                with torch.no_grad():
+                    dist_now = self(minibatch).dist
+                    logp_now = dist_now.log_prob(minibatch.act).float()
+                    pre_update_lp_diff = (logp_now - minibatch.logp_old).abs().mean().item()
+                    print(f"pre_update_lp_diff {pre_update_lp_diff}")
+
                 self.optim.step()
+
+                with torch.no_grad():
+                    dist_after = self(minibatch).dist
+                    logp_after = dist_after.log_prob(minibatch.act).float()
+                    post_update_lp_diff = (logp_after - minibatch.logp_old).abs().mean().item()
+                    print(f"post_update_lp_diff {post_update_lp_diff}")
+
                 clip_losses.append(clip_loss.item())
                 vf_losses.append(vf_loss.item())
                 ent_losses.append(ent_loss.item())
