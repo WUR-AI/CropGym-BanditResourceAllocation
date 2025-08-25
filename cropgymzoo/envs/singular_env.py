@@ -199,8 +199,6 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.location = location
         self.year_list = year_list
 
-        self.feature_index_map = self._build_index_map()
-
         # field specific stuff
         self.max_budget_n = self.CROP_SOIL_MAX[self.crop][self.soil_type]
         self.budget_n = self.max_budget_n
@@ -230,6 +228,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         # safeguard for randomisation
         self.original_agmt = getattr(self, "agmt")
+
+        self.feature_index_map = self._build_index_map()
 
         # possibly deprecated
         # self.costs_nitrogen = costs_nitrogen
@@ -428,8 +428,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         # weather features across timesteps
         for i, f in enumerate(self.weather_features):
-            for t in range(self.timestep):
-                index_map[f"{f}_{t}"] = offset + i * self.timestep + t
+            for t in range(self._timestep):
+                index_map[f"{f}_{t}"] = offset + i * self._timestep + t
         # offset += len(self.weather_features) * self.timestep   # not needed unless chaining more
 
         return index_map
@@ -437,7 +437,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
     def get_idx_features(self, feature_list: list[str]) -> list[int]:
         out = []
         for f in feature_list:
-            if f in self.feature_index_map:
+            if f not in self.feature_index_map:
                 raise KeyError(f"Feature '{f}' not in feature_index_map")
             out.append(self.feature_index_map[f])
         return out
@@ -742,7 +742,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             'Nue': [], 'Nsurp': [], 'Profit': [], "CO2": [],
             'Alive': [], 'ActionMask': [], 'RFTRA': [], 'WC': [],
             'TotalConstraint': [], 'FrequencyConstraint': [],
-            'DVSConstraint': [], 'BudegetConstraint': [],
+            'DVSConstraint': [], 'BudgetConstraint': [],
             'NueConstraint': [], 'NsurpConstraint': [],
         }
 
