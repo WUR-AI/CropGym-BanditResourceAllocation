@@ -82,6 +82,7 @@ class MultiRLAgent(BaseAgent):
                 act_dim=act_dim,
                 hidden=args.hidden_layers,
                 use_icm=args.use_icm,
+                args=args
             ) for a in self.agents
         }
 
