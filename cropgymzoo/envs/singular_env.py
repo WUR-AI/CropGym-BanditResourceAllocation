@@ -744,6 +744,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             'TotalConstraint': [], 'FrequencyConstraint': [],
             'DVSConstraint': [], 'BudgetConstraint': [],
             'NueConstraint': [], 'NsurpConstraint': [],
+            'TotalEpisodicConstraint': [],
         }
 
     def _init_random_init_conditions_params(self):
@@ -942,6 +943,10 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.infos['BudgetConstraint'].append(self._get_budget_constraint())
         self.infos['NueConstraint'].append(self._get_nue_constraint())
         self.infos['NsurpConstraint'].append(self._get_nsurp_constraint())
+
+        self.infos['TotalEpisodicConstraint'].append(
+            0 if not terminate else np.sum(self.infos['TotalConstraint'])
+        )
 
     def _action_features_mapper(self):
         act_mapper = {
