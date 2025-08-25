@@ -434,6 +434,15 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         return index_map
 
+    def get_idx_features(self, feature_list: list[str]) -> list[int]:
+        out = []
+        for f in feature_list:
+            if f in self.feature_index_map:
+                raise KeyError(f"Feature '{f}' not in feature_index_map")
+            out.append(self.feature_index_map[f])
+        return out
+
+
     @staticmethod
     def _safe_replace_year(d, year):
         try:
