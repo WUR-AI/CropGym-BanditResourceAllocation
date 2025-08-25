@@ -212,18 +212,6 @@ class MaskedActor(Actor):
         return logits, h
 
 
-class DictObsCritic(Critic):
-    def __init__(self, preprocess_net, device='cpu', key_order = None):
-        super().__init__(preprocess_net=preprocess_net)
-        self.device = device
-        self.key_order = key_order
-
-    def forward(self, obs: np.ndarray | torch.Tensor, **kwargs: Any) -> torch.Tensor:
-
-        logits, _ = self.preprocess(obs, state=kwargs.get("state", None))
-        return self.last(logits)
-
-
 class ConstraintCritic(Critic):
     def __init__(self, preprocess_net, constraint_indices, device='cpu'):
         super().__init__(

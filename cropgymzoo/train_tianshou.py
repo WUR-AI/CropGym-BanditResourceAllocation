@@ -24,8 +24,6 @@ from cropgymzoo import _DEFAULT_MODEL_DIR
 from cropgymzoo.agents.networks_tianshou import (
     RecurrentGRU,
     MaskedActor,
-    DictObsCritic,
-    NetObs,
     IntrinsicCuriosityModuleMARL,
     ConstraintCritic,
 )
@@ -122,7 +120,7 @@ def make_ppo_policy(
     )
 
     actor = MaskedActor(preprocess_net=actor_net, action_dim=act_dim).to(device)
-    critic = DictObsCritic(preprocess_net=critic_net).to(device)
+    critic = Critic(preprocess_net=critic_net).to(device)
     constraint_critic = ConstraintCritic(
         preprocess_net=constraint_net,
         constraint_indices=obs_constraint_idx,
