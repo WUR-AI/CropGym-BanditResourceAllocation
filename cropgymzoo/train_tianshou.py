@@ -7,7 +7,6 @@ import pickle
 
 # for comet_ml
 from cropgymzoo.utils.callbacks_tianshou import (
-    yearly_eval_test_fn,
     marl_save_checkpoint_fn,
     save_best_fn,
     create_comet_experiment,
@@ -27,7 +26,8 @@ from cropgymzoo.agents.networks_tianshou import (
     MaskedActor,
     DictObsCritic,
     NetObs,
-    IntrinsicCuriosityModuleMARL
+    IntrinsicCuriosityModuleMARL,
+    ConstraintCritic,
 )
 from cropgymzoo.agents.marl_algorithms_tianshou import IPPOPolicy, IPPOCollector
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
@@ -97,30 +97,36 @@ def make_ppo_policy(
 ) -> PPOPolicy | ICMPolicy:
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    if not recurrent:
-        actor_net = NetObs(state_shape=obs_dim, action_shape=act_dim, hidden_sizes=hidden).to(device)
-        critic_net = NetObs(state_shape=obs_dim, action_shape=act_dim, hidden_sizes=hidden).to(device)
+    actor_net = RecurrentGRU(
+        layer_num=len(hidden),
+        hidden_layer_size=hidden[0],
+        state_shape=obs_dim,
+        action_shape=act_dim,
+        device=device,
+    )  # GRUBackbone(obs_dim, hidden_dim=[128, 128])
+    critic_net = RecurrentGRU(
+        layer_num=len(hidden),
+        hidden_layer_size=hidden[0],
+        state_shape=obs_dim,
+        action_shape=act_dim,
+        device=device,
+    )  # GRUBackbone(obs_dim, hidden_dim=[128, 128])
+    obs_constraint_dim = args.obs_constraint_dim
+    obs_constraint_idx = args.constraint_indices
+    constraint_net = RecurrentGRU(
+        layer_num=len(hidden),
+        hidden_layer_size=hidden[0],
+        state_shape=obs_constraint_dim,
+        action_shape=act_dim,
+        device=device,
+    )
 
-        actor = MaskedActor(preprocess_net=actor_net, action_dim=act_dim).to(device)
-        critic = Critic(preprocess_net=critic_net, device=device)
-    else:
-        actor_net = RecurrentGRU(
-            layer_num=len(hidden),
-            hidden_layer_size=hidden[0],
-            state_shape=obs_dim,
-            action_shape=act_dim,
-            device=device,
-        )  # GRUBackbone(obs_dim, hidden_dim=[128, 128])
-        critic_net = RecurrentGRU(
-            layer_num=len(hidden),
-            hidden_layer_size=hidden[0],
-            state_shape=obs_dim,
-            action_shape=act_dim,
-            device=device,
-        )  # GRUBackbone(obs_dim, hidden_dim=[128, 128])
-
-        actor = MaskedActor(preprocess_net=actor_net, action_dim=act_dim).to(device)
-        critic = DictObsCritic(preprocess_net=critic_net).to(device)
+    actor = MaskedActor(preprocess_net=actor_net, action_dim=act_dim).to(device)
+    critic = DictObsCritic(preprocess_net=critic_net).to(device)
+    constraint_critic = ConstraintCritic(
+        preprocess_net=constraint_net,
+        constraint_indices=obs_constraint_idx,
+    )
 
     optim = Adam(
         list(actor.parameters()) + list(critic.parameters()),
@@ -134,6 +140,7 @@ def make_ppo_policy(
     ppo_policy = IPPOPolicy(
         actor=actor,
         critic=critic,
+        constraint_critic=constraint_critic,
         optim=optim,
         dist_fn=dist,
         discount_factor=args.gamma if args is not None else 0.99,
@@ -323,6 +330,11 @@ def train_gru_ppo(args: Namespace):
     if normalize:
         train_envs.reset(options={'year': np.random.choice(range(1951, 2024))})
         test_envs.set_obs_rms(train_envs.get_obs_rms())
+
+    # For constraint critic
+    obs_features = dummy_env.get_field_env_with_idx(0).unwrapped.obs_constraint_features()
+    args.obs_constraint_dim = len(obs_features)
+    args.constraint_indices = dummy_env.get_field_env_with_idx(0).unwrapped.get_idx_features(obs_features)
 
     # Build policies
     # if args.independent:

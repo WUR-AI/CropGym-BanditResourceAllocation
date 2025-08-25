@@ -223,6 +223,31 @@ class DictObsCritic(Critic):
         logits, _ = self.preprocess(obs, state=kwargs.get("state", None))
         return self.last(logits)
 
+
+class ConstraintCritic(Critic):
+    def __init__(self, preprocess_net, constraint_indices, device='cpu'):
+        super().__init__(
+            preprocess_net=preprocess_net,
+        )
+        self.constraint_indices = torch.as_tensor(constraint_indices, device=device)
+
+    def forward(self, obs: np.ndarray | torch.Tensor, **kwargs: Any) -> torch.Tensor:
+
+        if isinstance(obs, Batch):
+            obs = obs.obs
+
+        # add checks?
+        if obs.ndim == 1:
+            obs = obs[self.constraint_indices]
+        elif obs.ndim == 2:
+            obs = obs[:, self.constraint_indices]
+        elif obs.ndim == 3:
+            obs = obs[:, :, self.constraint_indices]
+
+        logits, _ = self.preprocess(obs, state=kwargs.get("state", None))
+        return self.last(logits)
+
+
 class NetObs(Net):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
