@@ -80,9 +80,7 @@ class MultiRLAgent(BaseAgent):
             a: make_ppo_policy(
                 obs_dim=obs_dim,
                 act_dim=act_dim,
-                obs_constraint_dim=args.obs_constraint_dim,
                 hidden=args.hidden_layers,
-                recurrent=True,
                 use_icm=args.use_icm,
             ) for a in self.agents
         }

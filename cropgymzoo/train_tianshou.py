@@ -90,7 +90,6 @@ def make_ppo_policy(
     obs_dim: int | tuple[int],
     act_dim: int,
     hidden: Sequence = [64, 64],
-    recurrent: bool = True,
     use_icm: bool = False,
     args: Namespace = None,
     mlp_critics = True,
@@ -360,7 +359,6 @@ def train_gru_ppo(args: Namespace):
             obs_dim=obs_dim,
             act_dim=act_dim,
             hidden=args.hidden_layers,
-            recurrent=args.recurrent,
             use_icm=args.use_icm,
             args=args,
         )
