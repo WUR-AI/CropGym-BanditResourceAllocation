@@ -39,6 +39,25 @@ def make_multi_env(
 
 
 class MultiFieldEnv(AECEnv, EzPickle):
+
+    fertilization_schedule = {
+        "winterwheat": {
+            165: {"clay": 100, "sand": 80, "silt": 80, "peat": 40},
+            190: {"clay": 60, "sand": 40, "silt": 70, "peat": 40},
+            225: {"clay": 60, "sand": 40, "silt": 60, "peat": 40},
+        },
+        "potato": {
+            5: {"clay": 130, "sand": 130, "silt": 100, "peat": 130},
+            15: {"clay": 55, "sand": 30, "silt": 55, "peat": 55},
+            35: {"clay": 40, "sand": 40, "silt": 40, "peat": 40},
+        },
+        "sugarbeet": {
+            5: {"clay": 40, "sand": 40, "silt": 40, "peat": 40},
+            40: {"clay": 60, "sand": 50, "silt": 40, "peat": 50},
+            75: {"clay": 30, "sand": 30, "silt": 20, "peat": 30},
+        },
+    }
+
     metadata = {
         "name": "CropGymZooEnv",
         "is_parallelizable": True,
@@ -55,6 +74,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
             self,
             seed: int = 107,
             warm_up: int = 0,
+            use_rl_warm_up_actions: bool = True,
             years: list = get_default_years(),
             training: bool = False,
             random_budget: bool = False,
@@ -332,6 +352,12 @@ class MultiFieldEnv(AECEnv, EzPickle):
 
     def get_per_field_crop_code(self):
         return {a: self.fields[a].unwrapped.crop_code for a in self.possible_agents}
+    
+    def get_per_field_crop_name(self):
+        return {a: self.fields[a].unwrapped.crop for a in self.possible_agents}
+
+    def get_per_field_soil_type(self):
+        return {a: self.fields[a].unwrapped.soil_type for a in self.possible_agents}
 
     def get_per_field_crop_price(self):
         return {a: self.fields[a].unwrapped.crop_price for a in self.possible_agents}
@@ -455,11 +481,16 @@ class MultiFieldEnv(AECEnv, EzPickle):
             shared_obs[feature] = [env.unwrapped.get_latest_info(feature) for env in self.fields.values()]
         return shared_obs
 
+    @staticmethod
+    def _is_at_date(dap: int, day: int):
+        return day - 3 <= dap <= day + 3
+
     def _warm_up(self, warm_up_counter):
         print("Checking if warm up was done...")
         if os.path.isfile(os.path.join(_CONFIG_PATH, 'warm_up_infos.pkl')):
             with open(os.path.join(_CONFIG_PATH, 'warm_up_infos.pkl'), 'rb') as f:
                 warm_up_infos = pickle.load(f)
+            print("Loaded warm up info!")
             return warm_up_infos
         print("No file found...")
         warm_up_infos = {}
@@ -468,19 +499,39 @@ class MultiFieldEnv(AECEnv, EzPickle):
         for i, _ in enumerate(range(warm_up_counter)):
             print('Start warm up iteration {}'.format(i))
             options['year'] = np.random.choice(self.years)
-            _, infos = self.reset(seed=self.seed, options=options)
-            terminateds = {agent: False for agent in self.agents}
-            while not all(terminateds.values()):
-                actions = self._get_each_agent_actions()
-                _, _, terminateds, _, infos = self.step(actions=actions)
-            warm_up_infos[i] = infos
-            print(self.__str__())
+            self.reset(seed=self.seed, options=options)
+            for agent in self.agent_iter():
+                _, _, _, _, infos = self.last()
+                action = self._get_each_agent_actions()
+                if self.terminations[agent]:
+                    warm_up_infos[i] = infos
+                    self.step(None)
+                else:
+                    self.step(action)
+            print(self)
         print('Finished warm up...')
         print('Attempting to save pickle...')
         with open(os.path.join(_CONFIG_PATH, 'warm_up_infos.pkl'), 'wb') as f:
             pickle.dump(warm_up_infos, file=f)
         print('Successfully saved!')
         return warm_up_infos
+
+    def farmers_practice(self, agent_name, infos):
+        """Simple farmer rule-based fertilization schedule based on crop + soil."""
+        crop = self.get_per_field_crop_name()[agent_name]
+        soil = self.get_per_field_soil_type()[agent_name]
+
+        # derive days after planting (DAP) from infos
+        dap_plant = infos["DaysAfterPlanting"][-1]  # assume infos contains this
+        fert = 0.0
+
+        # check if today matches any scheduled DAP for this crop
+        for day, soil_map in self.fertilization_schedule.get(crop, {}).items():
+            if self._is_at_date(dap_plant, day):
+                fert = soil_map.get(soil, 0.0)  # default 0 if soil not found
+                break  # stop after first match
+
+        return fert / 10  # align with action space
 
     def _get_each_agent_actions(self) -> dict[str, int]:
         """Rule-based fertiliser policy for warm-up episodes."""

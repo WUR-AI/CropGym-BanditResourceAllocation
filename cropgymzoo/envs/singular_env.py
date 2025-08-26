@@ -204,6 +204,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.budget_n = self.max_budget_n
         self.budget_left = self.budget_n
         self.area = float(area)
+        self.day_of_planting: datetime.date | None = None
 
         # back to PCSE stuff
 
@@ -341,6 +342,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         if self.reward_function in reward_functions_with_baseline() and self.original is True:
             self.baseline_env.reset(seed=seed, options=options)
         obs = super().reset(seed=seed, options=options)
+
+        self.day_of_planting = self.agmt.crop_start_date
 
         # get infos
         self._init_infos()
@@ -744,7 +747,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             'TotalConstraint': [], 'FrequencyConstraint': [],
             'DVSConstraint': [], 'BudgetConstraint': [],
             'NueConstraint': [], 'NsurpConstraint': [],
-            'TotalEpisodicConstraint': [],
+            'TotalEpisodicConstraint': [], 'DaysAfterPlanting': [],
         }
 
     def _init_random_init_conditions_params(self):
@@ -947,6 +950,10 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.infos['TotalEpisodicConstraint'].append(
             0 if not terminate else np.sum(self.infos['TotalConstraint'])
         )
+        self.infos['DaysAfterPlanting'].append(self._calculate_dap())
+
+    def _calculate_dap(self):
+        return int((self.infos['Date'][-1] - self.day_of_planting).days)
 
     def _action_features_mapper(self):
         act_mapper = {
