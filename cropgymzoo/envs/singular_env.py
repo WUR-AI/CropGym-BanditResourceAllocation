@@ -494,7 +494,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         return 0 if 0.01 < self.model.get_output()[-1]['DVS'] <= 1 else 1
 
     def _get_budget_constraint(self) -> float:
-        return max(self.budget_left, 0)
+        return abs(min(self.budget_left, 0))
 
     def _get_nue_constraint(self) -> float:
         return 0 if self.infos['Nue'][-1] == 0.0 or 0.5 <= self.infos['Nue'][-1] <= 0.9 else 1
