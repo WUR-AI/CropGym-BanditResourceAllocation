@@ -494,13 +494,23 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         return 0 if 0.01 < self.model.get_output()[-1]['DVS'] <= 1 else 1
 
     def _get_budget_constraint(self) -> float:
-        return abs(min(self.budget_left, 0))
+        # sort of quadratic penalty to encourage lower use of budget
+        return (1 - self.budget_left / self.budget_n) ** 2
 
     def _get_nue_constraint(self) -> float:
-        return 0 if self.infos['Nue'][-1] == 0.0 or 0.5 <= self.infos['Nue'][-1] <= 0.9 else 1
+        return (
+            0
+            if self.infos['Nue'][-1] == 0.0
+               or 0.5 <= self.infos['Nue'][-1] <= 0.9
+            else 1
+        )
 
     def _get_nsurp_constraint(self) -> float:
-        return 0 if 0.0 <= self.infos['Nue'][-1] <= 40 else 1
+        return (
+            0
+            if 0.0 <= self.infos['Nue'][-1] <= 40
+            else 1
+        )
 
     def _calculate_constraints(self):
         """
