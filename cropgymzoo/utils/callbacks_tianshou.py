@@ -180,7 +180,7 @@ def marl_save_checkpoint_fn(
         test_envs: MultiAgentVecNormObs,
         policy_mgr: MultiAgentPolicyManager,
         args: argparse.Namespace,
-        log_every_epochs: int=20,
+        log_every_epochs: int=10,
         experiment: Experiment=None,
 ) -> None | str:
     # copy running statistics into the frozen eval envs *once per epoch*

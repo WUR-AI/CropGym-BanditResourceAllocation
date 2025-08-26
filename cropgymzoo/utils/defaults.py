@@ -80,6 +80,7 @@ def get_default_action_features():
     return [
         'Nsteps',
         'Naction',
+        'NonZeroActionCount',
         'StepsSinceLastAction',
         'BudgetTotal',
         'BudgetLeft'

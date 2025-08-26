@@ -1,4 +1,4 @@
-from typing import Any, cast
+from typing import Any, cast, Sequence, Self
 from copy import copy
 import time
 
@@ -8,8 +8,10 @@ import torch
 import torch.nn as nn
 import numpy as np
 
-from tianshou.data import to_torch_as, to_numpy, ReplayBuffer, Batch
+from tianshou.data import to_torch_as, to_numpy, ReplayBuffer, Batch, SequenceSummaryStats
+from tianshou.data.types import BatchWithAdvantagesProtocol
 from tianshou.policy import BasePolicy
+from tianshou.policy.base import _gae_return
 from tianshou.policy.modelfree.ppo import PPOPolicy, TPPOTrainingStats, PPOTrainingStats
 from tianshou.data.types import LogpOldProtocol, RolloutBatchProtocol
 from tianshou.data.collector import (
@@ -18,13 +20,39 @@ from tianshou.data.collector import (
     _nullable_slice,
     CollectStepBatchProtocol,
     EpisodeBatchProtocol,
-    MalformedBufferError
+    MalformedBufferError,
 )
 from tianshou.utils.determinism import TraceLogger
+from tianshou.utils.net.common import ActorCritic
+from tianshou.utils.statistics import RunningMeanStd
+
+from dataclasses import dataclass
+
+
+class ActorCriticConstraint(nn.Module):
+    """An actor-critic network for parsing parameters.
+
+    Using ``actor_critic.parameters()`` instead of set.union or list+list to avoid
+    issue #449.
+
+    :param nn.Module actor: the actor network.
+    :param nn.Module critic: the critic network.
+    """
+
+    def __init__(self, actor: nn.Module, critic: nn.Module, constraint_critic: nn.Module) -> None:
+        super().__init__()
+        self.actor = actor
+        self.critic = critic
+        self.constraint_critic = constraint_critic
+
 
 class IPPOPolicy(PPOPolicy):
-    def __init__(self, **kwargs):
+    def __init__(
+            self,
+            **kwargs
+    ):
         super().__init__(**kwargs)
+
     def process_fn(self, batch, buffer, indices):
         # build per-step done that includes agent deaths
         if "Alive" in batch.info:
@@ -49,6 +77,227 @@ class IPPOPolicy(PPOPolicy):
             batch.logp_old = torch.cat(logp_old, dim=0).flatten()
         batch: LogpOldProtocol
         return batch
+
+class LagrangianIPPOPolicy(IPPOPolicy):
+    def __init__(
+            self,
+            constraint_critic: torch.nn.Module = None,
+            constraint_loss_coefficient: float = 0.5,
+            initial_lagrangian_multiplier: float = 0.001,
+            lagrangian_learning_rate: float = 0.0005,
+            lagrangian_upper_bound: float = 3.0,
+            **kwargs,
+    ):
+        super().__init__(**kwargs)
+
+        self.constraint_critic = constraint_critic
+        self.const_rms = RunningMeanStd()
+        self.cf_coef = constraint_loss_coefficient
+        self.lagrange = Lagrange(
+            cost_limit=0.0,
+            lagrangian_multiplier_init=initial_lagrangian_multiplier,
+            lagrangian_multiplier_lr = lagrangian_learning_rate,
+            lagrangian_upper_bound = lagrangian_upper_bound,
+        )
+        self._actor_critic = ActorCriticConstraint(self.actor, self.critic, self.constraint_critic)
+
+    def _compute_returns(
+            self,
+            batch: RolloutBatchProtocol,
+            buffer: ReplayBuffer,
+            indices: np.ndarray,
+    ) -> BatchWithAdvantagesProtocol:
+        """
+        Adding the constraint critic calculation here
+        """
+        v_s, v_s_ = [], []
+        c_s, c_s_ = [], []
+        with torch.no_grad():
+            for minibatch in batch.split(self.max_batchsize, shuffle=False, merge_last=True):
+                v_s.append(self.critic(minibatch.obs))
+                v_s_.append(self.critic(minibatch.obs_next))
+                c_s.append(self.constraint_critic(minibatch.obs))
+                c_s_.append(self.constraint_critic(minibatch.obs_next))
+        batch.v_s = torch.cat(v_s, dim=0).flatten()  # old value
+        batch.c_s = torch.cat(c_s, dim=0).flatten()
+
+        v_s = batch.v_s.cpu().numpy()
+        v_s_ = torch.cat(v_s_, dim=0).flatten().cpu().numpy()
+
+        c_s = batch.c_s.cpu().numpy()
+        c_s_ = torch.cat(c_s_, dim=0).flatten().cpu().numpy()
+        # when normalizing values, we do not minus self.ret_rms.mean to be numerically
+        # consistent with OPENAI baselines' value normalization pipeline. Empirical
+        # study also shows that "minus mean" will harm performances a tiny little bit
+        # due to unknown reasons (on Mujoco envs, not confident, though).
+        # TODO: see todo in PGPolicy.process_fn
+        if self.rew_norm:  # unnormalize v_s & v_s_
+            v_s = v_s * np.sqrt(self.ret_rms.var + self._eps)
+            v_s_ = v_s_ * np.sqrt(self.ret_rms.var + self._eps)
+
+            c_s = c_s * np.sqrt(self.const_rms.var + self._eps)
+            c_s_ = c_s_ * np.sqrt(self.const_rms.var + self._eps)
+        unnormalized_returns, advantages = self.compute_episodic_return(
+            batch,
+            buffer,
+            indices,
+            v_s_,
+            v_s,
+            gamma=self.gamma,
+            gae_lambda=self.gae_lambda,
+        )
+        const_returns, constraint_advantages = self.compute_episodic_cost(
+            batch,
+            buffer,
+            indices,
+            c_s_,
+            c_s,
+            gamma=self.gamma,
+            gae_lambda=self.gae_lambda,
+        )
+
+        if self.rew_norm:
+            batch.returns = unnormalized_returns / np.sqrt(self.ret_rms.var + self._eps)
+            self.ret_rms.update(unnormalized_returns)
+
+            batch.const_returns = const_returns / np.sqrt(self.const_rms.var + self._eps)
+            self.const_rms.update(const_returns)
+        else:
+            batch.returns = unnormalized_returns
+            batch.const_returns = const_returns
+        batch.returns = to_torch_as(batch.returns, batch.v_s)
+        batch.adv = to_torch_as(advantages, batch.v_s)
+
+        batch.const_returns = to_torch_as(batch.const_returns, batch.c_s)
+        batch.const_adv = to_torch_as(constraint_advantages, batch.c_s)
+        return cast(BatchWithAdvantagesProtocol, batch)
+
+    @staticmethod
+    def compute_episodic_cost(
+            batch: RolloutBatchProtocol,
+            buffer: ReplayBuffer,
+            indices: np.ndarray,
+            v_s_: np.ndarray | torch.Tensor | None = None,
+            v_s: np.ndarray | torch.Tensor | None = None,
+            gamma: float = 0.99,
+            gae_lambda: float = 0.95,
+    ) -> tuple[np.ndarray, np.ndarray]:
+
+        cost = batch.info['TotalConstraint']
+        if v_s_ is None:
+            assert np.isclose(gae_lambda, 1.0)
+            v_s_ = np.zeros_like(cost)
+        else:
+            v_s_ = to_numpy(v_s_.flatten())
+            v_s_ = v_s_ * BasePolicy.value_mask(buffer, indices)
+        v_s = np.roll(v_s_, 1) if v_s is None else to_numpy(v_s.flatten())
+
+        end_flag = np.logical_or(batch.terminated, batch.truncated)
+        end_flag[np.isin(indices, buffer.unfinished_index())] = True
+        advantage = _gae_return(v_s, v_s_, cost, end_flag, gamma, gae_lambda)
+        returns = advantage + v_s
+        # normalization varies from each policy, so we don't do it here
+        return returns, advantage
+
+    def learn(  # type: ignore
+            self,
+            batch: RolloutBatchProtocol,
+            batch_size: int | None,
+            repeat: int,
+            *args: Any,
+            **kwargs: Any,
+    ) -> TPPOTrainingStats:
+        losses, clip_losses, vf_losses, ent_losses, cf_losses = [], [], [], [], []
+        gradient_steps = 0
+        split_batch_size = batch_size or -1
+
+        # lagrangian stuff
+        final_constraint_values = [
+            float(tc)
+            for tc, d in zip(batch.info["TotalConstraint"], batch.done)
+            if d and tc is not None
+        ]
+        mean_ep_constraint_values = float(np.mean(final_constraint_values)) if final_constraint_values else 0.0
+        lagrangian_multiplier = float(self.lagrange.lagrangian_multiplier)
+
+        for step in range(repeat):
+            if self.recompute_adv and step > 0:
+                batch = self._compute_returns(batch, self._buffer, self._indices)
+            for minibatch in batch.split(split_batch_size, merge_last=True):
+                gradient_steps += 1
+                # calculate loss for actor
+                advantages = minibatch.adv
+
+                constraint_advantages = minibatch.const_adv
+
+                dist = self(minibatch).dist
+                if self.norm_adv:
+                    mean, std = advantages.mean(), advantages.std()
+                    advantages = (advantages - mean) / (std + self._eps)  # per-batch norm
+
+                    const_mean, const_std = constraint_advantages.mean(), constraint_advantages.std()
+                    constraint_advantages = (constraint_advantages - const_mean) / (const_std + self._eps)
+
+                # start lagrangian constraint
+                combined_advantages = advantages - lagrangian_multiplier * constraint_advantages
+
+                ratios = (dist.log_prob(minibatch.act) - minibatch.logp_old).exp().float()
+                ratios = ratios.reshape(ratios.size(0), -1).transpose(0, 1)
+
+                surr1 = ratios * combined_advantages
+                surr2 = ratios.clamp(1.0 - self.eps_clip, 1.0 + self.eps_clip) * combined_advantages
+                if self.dual_clip:
+                    clip1 = torch.min(surr1, surr2)
+                    clip2 = torch.max(clip1, self.dual_clip * combined_advantages)
+                    clip_loss = -torch.where(combined_advantages < 0, clip2, clip1).mean()
+                else:
+                    clip_loss = -torch.min(surr1, surr2).mean()
+
+                # calculate loss for critic
+                value = self.critic(minibatch.obs).flatten()
+                constraint_value = self.constraint_critic(minibatch.obs).flatten()
+
+                if self.value_clip:
+                    v_clip = minibatch.v_s + (value - minibatch.v_s).clamp(
+                        -self.eps_clip,
+                        self.eps_clip,
+                    )
+                    vf1 = (minibatch.returns - value).pow(2)
+                    vf2 = (minibatch.returns - v_clip).pow(2)
+                    vf_loss = torch.max(vf1, vf2).mean()
+                else:
+                    vf_loss = (minibatch.returns - value).pow(2).mean()
+
+                # calculate constraint returns
+                cf_loss = (minibatch.const_returns - constraint_value).pow(2).mean()
+
+                # calculate regularization and overall loss
+                ent_loss = dist.entropy().mean()
+                loss = clip_loss + self.vf_coef * vf_loss + self.cf_coef * cf_loss - self.ent_coef * ent_loss
+                self.optim.zero_grad()
+                loss.backward()
+                if self.max_grad_norm:  # clip large gradient
+                    nn.utils.clip_grad_norm_(
+                        self._actor_critic.parameters(),
+                        max_norm=self.max_grad_norm,
+                    )
+                self.optim.step()
+                clip_losses.append(clip_loss.item())
+                vf_losses.append(vf_loss.item())
+                ent_losses.append(ent_loss.item())
+                cf_losses.append(cf_loss.item())
+                losses.append(loss.item())
+
+        self.lagrange.update_lagrange_multiplier(mean_ep_constraint_values)
+
+        return IPPOTrainingStats.from_sequence(  # type: ignore[return-value]
+            losses=losses,
+            clip_losses=clip_losses,
+            vf_losses=vf_losses,
+            cf_losses=cf_losses,
+            ent_losses=ent_losses,
+            gradient_steps=gradient_steps,
+        )
 
 log = logging.getLogger(__name__)
 
@@ -572,3 +821,114 @@ class IPPOCollector(Collector):
                 self._hs_bank_by_agent_env.setdefault(a, {})
                 self._hs_bank_by_agent_env[a].setdefault(g, Batch())
                 self._hs_bank_by_agent_env[a][g]['hidden'] = batched_state['hidden'][j:j + 1, :, :]
+
+
+# Lagrange class taken from https://github.com/PKU-Alignment/safety-gymnasium,
+# paper Safety Gymnasium: A Unified Safe Reinforcement Learning Benchmark
+class Lagrange:
+    """Lagrange multiplier for constrained optimization.
+
+    Args:
+        cost_limit: the cost limit
+        lagrangian_multiplier_init: the initial value of the lagrangian multiplier
+        lagrangian_multiplier_lr: the learning rate of the lagrangian multiplier
+        lagrangian_upper_bound: the upper bound of the lagrangian multiplier
+
+    Attributes:
+        cost_limit: the cost limit
+        lagrangian_multiplier_lr: the learning rate of the lagrangian multiplier
+        lagrangian_upper_bound: the upper bound of the lagrangian multiplier
+        _lagrangian_multiplier: the lagrangian multiplier
+        lambda_range_projection: the projection function of the lagrangian multiplier
+        lambda_optimizer: the optimizer of the lagrangian multiplier
+    """
+
+    # pylint: disable-next=too-many-arguments
+    def __init__(
+            self,
+            cost_limit: float,
+            lagrangian_multiplier_init: float,
+            lagrangian_multiplier_lr: float,
+            lagrangian_upper_bound: float | None = None,
+    ) -> None:
+        """Initialize an instance of :class:`Lagrange`."""
+        self.cost_limit: float = cost_limit
+        self.lagrangian_multiplier_lr: float = lagrangian_multiplier_lr
+        self.lagrangian_upper_bound: float | None = lagrangian_upper_bound
+
+        init_value = max(lagrangian_multiplier_init, 0.0)
+        self._lagrangian_multiplier: nn.Parameter = nn.Parameter(
+            torch.as_tensor(init_value),
+            requires_grad=True,
+        )
+        self.lambda_range_projection: torch.nn.ReLU = torch.nn.ReLU()
+        # fetch optimizer from PyTorch optimizer package
+        self.lambda_optimizer: torch.optim.Optimizer = torch.optim.Adam(
+            [
+                self._lagrangian_multiplier,
+            ],
+            lr=lagrangian_multiplier_lr,
+        )
+
+    @property
+    def lagrangian_multiplier(self) -> torch.Tensor:
+        """The lagrangian multiplier.
+
+        Returns:
+            the lagrangian multiplier
+        """
+        return self.lambda_range_projection(self._lagrangian_multiplier).detach().item()
+
+    def compute_lambda_loss(self, mean_ep_cost: float) -> torch.Tensor:
+        """Compute the loss of the lagrangian multiplier.
+
+        Args:
+            mean_ep_cost: the mean episode cost
+
+        Returns:
+            the loss of the lagrangian multiplier
+        """
+        return -self._lagrangian_multiplier * (mean_ep_cost - self.cost_limit)
+
+    def update_lagrange_multiplier(self, Jc: float) -> None:
+        """Update the lagrangian multiplier.
+
+        Args:
+            Jc: the mean episode cost
+
+        Returns:
+            the loss of the lagrangian multiplier
+        """
+        self.lambda_optimizer.zero_grad()
+        lambda_loss = self.compute_lambda_loss(Jc)
+        lambda_loss.backward()
+        self.lambda_optimizer.step()
+        self._lagrangian_multiplier.data.clamp_(
+            0.0,
+            self.lagrangian_upper_bound,
+        )  # enforce: lambda in [0, inf]
+
+
+@dataclass(kw_only=True)
+class IPPOTrainingStats(PPOTrainingStats):
+    cf_loss: SequenceSummaryStats
+
+    @classmethod
+    def from_sequence(
+        cls,
+        *,
+        losses: Sequence[float],
+        clip_losses: Sequence[float],
+        vf_losses: Sequence[float],
+        cf_losses: Sequence[float],
+        ent_losses: Sequence[float],
+        gradient_steps: int = 0,
+    ) -> Self:
+        return cls(
+            loss=SequenceSummaryStats.from_sequence(losses),
+            clip_loss=SequenceSummaryStats.from_sequence(clip_losses),
+            vf_loss=SequenceSummaryStats.from_sequence(vf_losses),
+            cf_loss=SequenceSummaryStats.from_sequence(cf_losses),
+            ent_loss=SequenceSummaryStats.from_sequence(ent_losses),
+            gradient_steps=gradient_steps,
+        )

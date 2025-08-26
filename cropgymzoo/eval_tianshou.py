@@ -81,10 +81,11 @@ class MultiRLAgent(BaseAgent):
                 obs_dim=obs_dim,
                 act_dim=act_dim,
                 hidden=args.hidden_layers,
-                recurrent=True,
                 use_icm=args.use_icm,
+                args=args
             ) for a in self.agents
         }
+        print(f"Using {'LagrangianIPPO' if args.lagrangian_ppo else 'IPPO'} policy!")
 
         self.policy_manager = MultiAgentPolicyManager(
             policies=list(policies.values()),
