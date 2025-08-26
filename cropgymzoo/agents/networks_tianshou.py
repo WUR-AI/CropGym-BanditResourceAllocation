@@ -87,7 +87,7 @@ class RecurrentGRU(NetBase[RecurrentStateBatch]):
 
         # 2. feed-forward + add time dim
         x = self.fc1(obs) # [B, H] or [B, T, H]
-        self.gru.flatten_parameters()
+
         if state is None or "hidden" not in state:
             y, h = self.gru(x)            # hidden output: [T, B, H]
         else:
