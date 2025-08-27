@@ -118,30 +118,6 @@ class RecurrentGRU(NetBase[RecurrentStateBatch]):
 
         return logits, next_hidden
 
-    @staticmethod
-    def is_consecutive_and_ordered(arr):
-        arr = np.asarray(arr)  # ensure it's a NumPy array
-        expected = np.arange(arr[0], arr[0] + len(arr))
-        return np.array_equal(arr, expected)
-
-    @staticmethod
-    def to_batch_mask(raw_mask, B, idx=None, device=None):
-        """Return a bool mask of length B.
-        If raw_mask length == B -> pass through.
-        If raw_mask length == idx.sum() -> scatter into B using idx (alive mask)."""
-        if raw_mask is None:
-            return torch.zeros(B, dtype=torch.bool, device=device)
-        m = torch.as_tensor(raw_mask, device=device, dtype=torch.bool).flatten()
-        if m.numel() == B:
-            return m
-        if idx is not None:
-            idx = torch.as_tensor(idx, device=device, dtype=torch.bool).flatten()
-            if m.numel() == int(idx.sum().item()):
-                full = torch.zeros(B, dtype=torch.bool, device=device)
-                full[idx] = m
-                return full
-        raise ValueError(f"Mask length {m.numel()} doesn’t match B={B} (and no valid idx).")
-
 
 class RecurrentLSTM(Recurrent):
     def __init__(
