@@ -243,67 +243,6 @@ class AllocationBandit(gym.Env):
         }
 
 
-    # ────────────────────────────────────────────────────────────────
-    # toy concave reward that prefers balanced splits
-    # ────────────────────────────────────────────────────────────────
-    def _dummy_yield(self, kg_vec):
-        return kg_vec.mean() - 0.1 * np.var(kg_vec)
-
-    def _allocate_random_budgets(self) -> dict[str, float]:
-        """
-        Return a dict {agent_id: kg_budget} that d sums to self.global_budget
-        and d never exceeds each field’s legal ceiling.
-        Requires:
-            • self.fields        : dict[str, ParcelEnv]
-            • self.global_budget : float   (kg for this season)
-            • self.crop_caps     : dict[str, float]  # e.g. {'wheat':240,…}
-        """
-        rng = np.random.default_rng()  # or use self.np_random
-        agents = list(self.fields.keys())
-        n = len(agents)
-        q = 10 # kg/ha
-
-        # ----------------------------------------------------------------
-        # 1) find per-field ceiling  m_j  from either the parcel or a lookup
-        # ----------------------------------------------------------------
-        cap_q = np.empty(n, dtype=int)
-        for k, ag in enumerate(agents):
-            env = self.farm.fields[ag]
-            # priority 1: an attribute on the parcel env
-            # TODO check this logic
-            if hasattr(env, "max_allowed_kg"):
-                caps = env.max_allowed_kg
-            else:  # fallback from crop type
-                caps = self._get_crop_caps[env.unwrapped.crop]  # e.g. 240, 150 …
-            cap_q[k] = int(np.floor(caps / q))
-
-        # ---- 2) global budget in quanta -------------------------------
-        Q_total = int(np.round(self.global_budget / q))
-        if Q_total > cap_q.sum():
-            raise ValueError("Budget exceeds joint crop ceilings")
-
-        alloc_q = np.zeros(n, dtype=int)
-        remaining_q = Q_total
-        remaining_idx = np.arange(n)
-
-        # ---- 3) iterative multinomial with clipping -------------------
-        while remaining_q > 0 and remaining_idx.size:
-            probs = rng.dirichlet(np.ones(remaining_idx.size))
-            # sample how many quanta each remaining field *would* get
-            proposal_q = rng.multinomial(remaining_q, probs)
-            room_q = cap_q[remaining_idx] - alloc_q[remaining_idx]
-            applied_q = np.minimum(proposal_q, room_q)  # clip
-            alloc_q[remaining_idx] += applied_q
-            remaining_q -= applied_q.sum()
-            # keep only fields that can still accept quanta
-            remaining_idx = remaining_idx[(room_q - applied_q) > 0]
-
-        if remaining_q > 0:
-            raise RuntimeError("Could not allocate all quanta; all fields full")
-
-        return {ag: float(alloc_q[k] * q) for k, ag in enumerate(agents)}
-
-
 
 # ---------------------------------------------------------------------
 # Minimal CUCB-style loop (works for any n_fields)
