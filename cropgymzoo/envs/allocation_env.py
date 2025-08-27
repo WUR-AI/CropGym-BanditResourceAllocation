@@ -78,7 +78,6 @@ class AllocationBandit(gym.Env):
         # save action this episode
         self.infos['AllocationAction'] = self.super_arms[action]
 
-        # TODO make method in MultiFieldEnv
         self.farm.allocate_bandit_budgets(self.infos['AllocationAction'])
 
         # runs one episode of the MARL agent
