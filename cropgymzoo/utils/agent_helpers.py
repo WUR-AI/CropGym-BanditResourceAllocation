@@ -1,59 +1,27 @@
 import itertools
 import numpy as np
 
-# ---------------------------------------------------------------------
-# helper: all integer n-tuples whose entries sum to Q
-# ---------------------------------------------------------------------
-# def make_super_arms(n_fields: int, Q: int):
-#     """
-#     Return list of integer vectors (length = n_fields, each >=0) summing to Q.
-#     Uses the "stars and bars" bijection with combinations_with_replacement.
-#     """
-#     # choose Q stars’ positions among (Q+n_fields-1) slots
-#     bars = itertools.combinations(range(Q + n_fields - 1), n_fields - 1)
-#     super_arms = []
-#     for cutpoints in bars:
-#         # prepend −1, append last slot, take diffs → bucket sizes
-#         splits = (-1,) + cutpoints + (Q + n_fields - 1,)
-#         alloc = np.diff(splits) - 1               # vector length n_fields
-#         super_arms.append(alloc.astype(np.int32))
-#     return super_arms
 
-
-def make_super_arms(quanta: dict[str, int]) -> list[np.ndarray]:
+def _make_base_arms(self, cap: float = 0.5) -> dict[str, np.ndarray]:
     """
-    Q : dict {field_id: Q_i} where Q_i is the *maximum possible* reduction
-        expressed in quanta (i.e. ceil_kg / δ, same δ for all fields).
-    Returns a list of reduction vectors r  of length = n_fields.
-    Order of fields is the key order in Q; store that order for later.
+    Per-farm allowed reductions in kg/ha: [0, delta, 2*delta, ..., floor(cap*budget/delta)*delta].
     """
-    fields   = list(quanta.keys())                # keep the order!
-    ranges   = [range(quanta[f] + 1) for f in fields]
-    super_arms = [np.array(combo, dtype=np.int16)
-                  for combo in itertools.product(*ranges)]
-    return super_arms
+    max_budgets = {a: self.farm.get_per_parcel_max_budget(a) for a in self.farm.possible_agents}
+    base = {}
+    for agent, max_budget in max_budgets.items():
+        half_budget = max(0.0, float(max_budget) * cap)
+        q = int(np.floor(half_budget / float(self.bins)))
+        base[agent] = (np.arange(q + 1, dtype=np.float32) * float(self.bins))
+    return base
 
 
-def make_super_arms_limited(max_q: list, Q: int):
+def _make_super_arms(self, base_arms: dict[str, np.ndarray]) -> np.ndarray:
     """
-    max_q : 1-D int array of length n_fields holding per-field maxima (in quanta)
-    Q     : total quanta to distribute
-    Returns all allocation vectors a with sum == Q and a[j] ≤ max_q[j].
+    Cartesian product over the per-farm base arms, returned as an array of shape (num_arms, N).
+    Each row is an N-length reduction vector, e.g., [10, 40, 20, 30, 40, 0] for N=6.
     """
-    n = len(max_q)
-    super_arms = []
-
-    # recursive back-tracking over fields
-    def backtrack(idx, remaining, prefix):
-        if idx == n:                      # all fields decided
-            if remaining == 0:
-                super_arms.append(np.array(prefix, dtype=np.int32))
-            return
-        max_here = min(max_q[idx], remaining)
-        for a in range(max_here + 1):
-            backtrack(idx + 1, remaining - a, prefix + [a])
-
-    backtrack(0, Q, [])
+    grids = [base_arms[a] for a in self.farm.possible_agents]  # fixed order → stable indexing
+    super_arms = np.array(list(itertools.product(*grids)), dtype=np.float32)
     return super_arms
 
 

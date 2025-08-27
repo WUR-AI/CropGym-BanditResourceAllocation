@@ -1,11 +1,16 @@
+import argparse
+import itertools
+
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 
-from cropgymzoo.utils.agent_helpers import make_super_arms
+from cropgymzoo.utils.agent_helpers import _make_super_arms, _make_base_arms
 
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 from cropgymzoo.utils.defaults import get_default_years
+from cropgymzoo.train_tianshou import load_model, make_ppo_policy
+from cropgymzoo.eval_tianshou import MultiRLAgent
 
 
 # ---------------------------------------------------------------------
@@ -14,13 +19,6 @@ from cropgymzoo.utils.defaults import get_default_years
 class AllocationBandit(gym.Env):
     """
     A one-Step combinatorial multi-armed bandit environment for resource allocation.
-
-    One-step combinatorial bandit: split X = Q·δ kg over `n_fields` parcels.
-    X :: the total available budget; could be randomized
-    Q :: The quanta, or levels of actions availble for each field.
-    δ :: The delta, or granularity of actions.
-    Action  = index into self.super_arms (pre-enumerated allocations).
-    Reward  = user-supplied function f(kg_vector)  (default is toy example).
     """
     metadata = {"render_modes": []}
 
@@ -29,16 +27,16 @@ class AllocationBandit(gym.Env):
         delta_kg: float = 10.0,
         warm_up_eps: int = 10,
         reward_fn=None,
-        random_allocation=True,
         years: list = get_default_years(),
         seed: int = 107,
-        action_type: str = 'discrete',
+        action_type: str = 'multi_discrete',
+        args: argparse.Namespace = None,
     ):
         super().__init__()
 
         self.warm_up_eps = warm_up_eps
 
-        assert action_type in ['discrete', 'multidiscrete']
+        assert action_type in ['discrete', 'multi_discrete']
         self.action_type = action_type
 
         self.rng, self.seed = gym.utils.seeding.np_random(seed=seed)
@@ -47,19 +45,14 @@ class AllocationBandit(gym.Env):
         self.year = None
 
         # The MARL env
-        self._init_envs()
+        self._init_envs(args)
 
         # set up per parcel budgets
         self._init_meta_info()
 
         # init spaces
         self.bins = float(delta_kg)
-        self.Q = self._get_farm_quantas()
         self._init_spaces()
-
-        self.reward_fn = reward_fn or self._dummy_yield
-
-        self.random_allocation = random_allocation
 
         self._construct_info()
 
@@ -72,36 +65,39 @@ class AllocationBandit(gym.Env):
 
         assert 'year' in options, "If testing, make sure to pass 'year' in the options dictionary!"
 
-        # TODO reset farm in step...
+        options['seed'] = seed
+
         self.farm.reset(seed=seed, options=options)
 
         return self._get_context(), self._construct_info(options)
 
     def step(self, action):
+        # check if action is valid
         assert self.action_space.contains(action), "invalid action"
 
-        context, infos = self.farm.reset(seed=self.seed, options=self.infos.get('current_year', self._get_default_reset_options()['year']))
+        # save action this episode
+        self.infos['AllocationAction'] = self.super_arms[action]
 
-        self.infos['alloc_quanta'] = self.super_arms[action]
+        # TODO make method in MultiFieldEnv
+        self.farm.allocate_bandit_budgets(self.infos['AllocationAction'])
 
-        terminateds = {agent: False for agent in self.farm.unwrapped.agents}
-        while not all(terminateds.values()):
-            _, rewards, terminateds, _, infos = self.farm.step({
-                self.farm.action_space.sample()  # get from learning agent
-                for agent in self.farm.unwrapped.agents
-            })
+        # runs one episode of the MARL agent
+        infos_agents = self.env_agent.run([self.infos['year']])
+
+        self.infos['AgentInfos'] = infos_agents
         reward = self._get_reward()
+
         return np.zeros(1, dtype=np.float32), reward, True, False, self.infos
 
 
     def _get_reward(self):
         # convert budget left as profit
-        budget_lefts = np.array([self.farm.infos[agent]['BudgetLeft'][-1] for agent in self.parcel_meta_infos.keys()])
-        fertilizer_prices = np.array([self.farm.infos[agent]['FertilizerPrice'][-1] for agent in self.parcel_meta_infos.keys()])
+        budget_lefts = np.array([self.farm.infos['AgentInfos'][agent]['BudgetLeft'][-1] for agent in self.parcel_meta_infos.keys()])
+        fertilizer_prices = np.array([self.farm.infos['AgentInfos'][agent]['FertilizerPrice'][-1] for agent in self.parcel_meta_infos.keys()])
         budget_left_profit = budget_lefts @ fertilizer_prices
 
         # add with actual profit
-        profit = np.array([np.sum(self.farm.infos[agent]['Profit']) for agent in self.parcel_meta_infos.keys()])
+        profit = np.array([np.sum(self.farm.infos['AgentInfos'][agent]['Profit']) for agent in self.parcel_meta_infos.keys()])
         reward = profit + budget_left_profit
 
         return reward
@@ -110,8 +106,7 @@ class AllocationBandit(gym.Env):
     @staticmethod
     def _get_context_keys():
         return [
-            "InitialNO3",
-            "InitialNH4",
+            "InitialN",
             "CropPrice",
             "CropCode",
             "FertilizerPrice",
@@ -127,7 +122,7 @@ class AllocationBandit(gym.Env):
             "HistoricalPrecipitation",
             "HistoricalTemperatureMin",
             "HistoricalTemperatureMax",
-            "HistoricalIrrad",
+            "HistoricalIrradiation",
         ]
 
     '''
@@ -135,8 +130,8 @@ class AllocationBandit(gym.Env):
     '''
 
     def _construct_info(self, options=None):
-        if options is not None and 'year' in options:
-            self.infos = {'current_year': options['year']}
+        if options is not None:
+            self.infos = {'options': options, 'seed': options.get('seed', 0)}
         else:
             self.infos = {}
 
@@ -149,8 +144,7 @@ class AllocationBandit(gym.Env):
 
     def _get_context(self):
         return {
-            "InitialNO3": list(self.farm.get_initial_no3().values()),
-            "InitialNH4": list(self.farm.get_initial_nh4().values()),
+            "InitialN": list(self.farm.get_initial_n().values()),
             "CropPrice": list(self.farm.get_per_field_crop_price().values()),
             "CropCode": list(self.farm.get_per_field_crop_code().values()),
             "FertilizerPrice": list(self.farm.get_per_field_fertilizer_price().values()),  # sample from year
@@ -189,37 +183,50 @@ class AllocationBandit(gym.Env):
             for agent in self.parcel_meta_infos.keys()
         ]
 
-    def _get_farm_quantas(self):
-        # return {agent: int(self.farm.get_per_parcel_budget(agent)//self.bins) for agent in self.farm.possible_agents}
-        return {agent: int(200//self.bins) for agent in self.parcel_meta_infos.keys()}
-
     '''
     Init helpers
     '''
 
-    def _init_envs(self):
+    def _init_envs(self, args):
         self.farm = MultiFieldEnv(
             warm_up=self.warm_up_eps,
             years=self.years,
         )
 
+        if args is not None and hasattr(args, 'use_model'):
+            saved_model = load_model(args)
+            self.env_agent = MultiRLAgent(
+                env = self.farm,
+                saved_model=saved_model,
+                render=False,
+            )
+            self.farm = self.env_agent.env
+
     def _init_spaces(self):
         # Set up action space based on farm
-        self.super_arms = make_super_arms(self.Q)
+        self.base_arms = _make_base_arms(self)
+        self.super_arms = _make_super_arms(self, self.base_arms)
+        self.super_arm_to_idx = {
+            tuple(a): i for i, a in enumerate(self.super_arms)
+        }
+
+        # Action space
         if self.action_type == 'discrete':
-            self.super_arm_to_idx = {
-                tuple(a): i for i, a in enumerate(self.super_arms)
-            }
-
             self.action_space = spaces.Discrete(len(self.super_arms))
+        if self.action_type == 'multi_discrete':
+            self.action_space = spaces.MultiDiscrete([len(self.base_arms[a]) for a in self.farm.possible_agents])
 
-        elif self.action_type == 'continuous':
-            self.action_space = spaces.MultiDiscrete([self._get_farm_quantas()[f] for f in self.parcel_meta_infos.keys()])
-
-        # OK long comprehension
+        # Observation space
         self.observation_space = spaces.Dict(
-            {feature: [spaces.Box(-np.inf, np.inf, shape=(1,), dtype=np.float32) for _ in range(self.n_fields)]
-             for feature in self._get_context_keys()}
+            {
+                feature: spaces.Box(
+                    -np.inf,
+                    np.inf,
+                    shape=(self.n_fields,),
+                    dtype=np.float32
+                )
+                for feature in self._get_context_keys()
+            }
         )
 
     def _init_meta_info(self):
@@ -228,7 +235,9 @@ class AllocationBandit(gym.Env):
         self.parcel_meta_infos = {
             agent: {'max_budget': self.farm.fields[agent].unwrapped.max_budget_n,
                     'crop': self.farm.fields[agent].unwrapped.crop,
-                    'crop_code': self.farm.fields[agent].unwrapped.crop_code,
+                    'crop_code': self.farm.fields[agent].unwrapped.CROP_CODE_MAP[
+                        self.farm.fields[agent].unwrapped.crop
+                    ],
                     'soil_type': self.farm.fields[agent].unwrapped.soil_type,
                     'area': self.farm.fields[agent].unwrapped.area, }
             for agent in self.farm.possible_agents
@@ -300,6 +309,7 @@ class AllocationBandit(gym.Env):
 # ---------------------------------------------------------------------
 # Minimal CUCB-style loop (works for any n_fields)
 # ---------------------------------------------------------------------
+
 if __name__ == "__main__":
     env = AllocationBandit(n_fields=8, total_kg=200, delta_kg=10)
     Q, n = env.Q, env.n_fields

@@ -61,7 +61,6 @@ class MultiRLAgent(BaseAgent):
             self,
             env: pettingzoo.AECEnv | BaseVectorEnv,
             saved_model: dict,
-            seed: int = 107,
             render: bool = False,
     ):
         super().__init__(env, render)

@@ -2,7 +2,7 @@ import os
 import yaml
 import pickle
 
-from collections import Counter
+from collections import Counter, defaultdict
 
 import numpy as np
 
@@ -172,14 +172,11 @@ class MultiFieldEnv(AECEnv, EzPickle):
         # set year
         self.year = options['year']
 
-        # TODO Pass global budget into options if using allocator.
-        self.global_budget = self._get_global_max_budget() if not self.random_budget else self._get_global_random_budget()
-        # allocation must be a dict
-        if 'allocation' in options:
-            for _agent, budget in options['allocation'].items():
-                self.set_per_parcel_budget(_agent, budget)
-            self.set_global_budget(self._get_global_budget())
-
+        self.global_budget = (
+            self._get_global_max_budget()
+            if not self.random_budget
+            else self._get_global_random_budget()
+        )
         self.global_budget_left = self.global_budget
 
         # reset each field and get obs and infos again
@@ -295,6 +292,16 @@ class MultiFieldEnv(AECEnv, EzPickle):
     Callable helper functions and property
     '''
 
+    def allocate_bandit_budgets(self, allocations):
+        assert len(allocations) == len(self.fields)
+
+        for agent, reduction in zip(self.possible_agents, allocations):
+            agent_max = self.get_per_parcel_max_budget(agent)
+            allocation = agent_max - reduction
+            self.set_per_parcel_budget(agent, allocation)
+
+        print(f'Allocated budget reductions of {allocations}')
+
     def set_curriculum_stage(self, stage: int):
         for agent in self.possible_agents:
             self.fields[agent].unwrapped.random_manager.set_stage(stage)
@@ -351,7 +358,11 @@ class MultiFieldEnv(AECEnv, EzPickle):
         return np.sum([self.get_per_parcel_budget_left(a) for a in self.possible_agents])
 
     def get_per_field_crop_code(self):
-        return {a: self.fields[a].unwrapped.crop_code for a in self.possible_agents}
+        return {
+            a: self.fields[a].unwrapped.CROP_CODE_MAP[
+                self.fields[a].unwrapped.crop
+            ] for a in self.possible_agents
+        }
     
     def get_per_field_crop_name(self):
         return {a: self.fields[a].unwrapped.crop for a in self.possible_agents}
@@ -370,6 +381,9 @@ class MultiFieldEnv(AECEnv, EzPickle):
 
     def get_initial_nh4(self):
         return {a: self.fields[a].unwrapped.infos['NH4'][0] for a in self.possible_agents}
+
+    def get_initial_n(self):
+        return {a: self.fields[a].unwrapped.infos['NAVAIL'][0] for a in self.possible_agents}
 
     def _get_global_random_budget(self):
         # get dict of default max budget
@@ -493,7 +507,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
             print("Loaded warm up info!")
             return warm_up_infos
         print("No file found...")
-        warm_up_infos = {}
+        warm_up_infos = defaultdict(dict)
         options = {}
         print('Starting warm up...')
         for i, _ in enumerate(range(warm_up_counter)):
@@ -502,9 +516,10 @@ class MultiFieldEnv(AECEnv, EzPickle):
             self.reset(seed=self.seed, options=options)
             for agent in self.agent_iter():
                 _, _, _, _, infos = self.last()
-                action = self._get_each_agent_actions()
+                action = self.farmers_practice(agent, infos)
                 if self.terminations[agent]:
-                    warm_up_infos[i] = infos
+                    warm_up_infos[i].setdefault(agent, {})
+                    warm_up_infos[i][agent] = infos
                     self.step(None)
                 else:
                     self.step(action)

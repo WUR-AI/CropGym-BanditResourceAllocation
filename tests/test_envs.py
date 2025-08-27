@@ -5,6 +5,7 @@ import gymnasium as gym
 import numpy as np
 
 from cropgymzoo import _DEFAULT_PLOTDIR
+from cropgymzoo.envs.allocation_env import AllocationBandit
 from cropgymzoo.envs.singular_env import ParcelEnv
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 from cropgymzoo.utils.plotters import plot_results
@@ -132,6 +133,31 @@ class TestEnvPlotter(unittest.TestCase):
 
         self.assertTrue(True)
 
+    def test_episode_farmers_practice(self):
+
+        self.env.reset(options={'year': np.random.choice(range(1951, 2024))})
+
+        infos = {}
+        for agent in self.env.agent_iter():
+            _, _, _, _, info = self.env.last()
+            action = self.env.farmers_practice(agent, info)
+            if self.env.terminations[agent]:
+                infos[agent] = info
+            if self.env.terminations[agent]:
+                infos[agent] = info
+                self.env.step(None)
+            else:
+                self.env.step(action)
+
+        plot_results(
+            infos,
+            save_path=os.path.join(_DEFAULT_PLOTDIR, 'test_episode.png'),
+        )
+
+        self.env.render()
+
+        self.assertTrue(True)
+
 class TestAgentOrder(unittest.TestCase):
     def setUp(self):
         self.env = MultiFieldEnv(
@@ -168,6 +194,20 @@ class TestAgentOrder(unittest.TestCase):
             print(self.env._agent_selector.agent_order)
 
             self.assertTrue(self.is_in_canonical_order(self.env._agent_selector.agent_order, agent_order))
+
+class TestAllocationEnv(unittest.TestCase):
+    def setUp(self):
+        self.bandit_env = AllocationBandit(
+            warm_up_eps=2,
+        )
+
+    def test_init(self):
+        context, info = self.bandit_env.reset()
+
+        print(f"Context: {context}")
+        print(f"Info: {info}")
+
+        self.assertTrue(True)
 
 
 if __name__ == '__main__':
