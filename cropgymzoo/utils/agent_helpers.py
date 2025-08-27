@@ -2,7 +2,7 @@ import itertools
 import numpy as np
 
 
-def _make_base_arms(self, cap: float = 0.5) -> dict[str, np.ndarray]:
+def _make_base_arms(self, cap: float = 0.7) -> dict[str, np.ndarray]:
     """
     Per-farm allowed reductions in kg/ha: [0, delta, 2*delta, ..., floor(cap*budget/delta)*delta].
     """
