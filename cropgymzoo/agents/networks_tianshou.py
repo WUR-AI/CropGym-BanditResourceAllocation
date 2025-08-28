@@ -102,7 +102,7 @@ class RecurrentGRU(NetBase[RecurrentStateBatch]):
                 x,
                 h_in
             )  # for eval h: [B, H], for train: [T, B, H]
-        logits = self.fc2(y[:,-1] if y.ndim == 3 else y)  # [B_alive, A]
+        logits = self.fc2(y)  # [:,-1] if y.ndim == 3 else y)  # [B_alive, A]
 
         # return to [B, T, H] for storing
         next_hidden = cast(
@@ -119,27 +119,35 @@ class RecurrentGRU(NetBase[RecurrentStateBatch]):
         return logits, next_hidden
 
 
-class RecurrentLSTM(Recurrent):
+class RecurrentLSTM(NetBase[RecurrentStateBatch]):
     def __init__(
             self,
             layer_num: int,
             state_shape: int | Sequence[int],
-            action_shape,
-            device: str | int | torch.device = "cpu",
+            action_shape: int | Sequence[int],
             hidden_layer_size: int = 128,
+            device: str | int | torch.device = "cpu",
     ) -> None:
-        super().__init__(
-            layer_num=layer_num,
-            state_shape=state_shape,
-            action_shape=action_shape,
-            device=device,
-            hidden_layer_size=hidden_layer_size,
-        )
+        super().__init__()
+        self.device = device
         self.output_dim = int(np.prod(action_shape))
+        self.obs_dim = state_shape
+        self.hidden_dim = hidden_layer_size
+        self.env_num = 1
+        self.flag = False
 
-    def forward(
+        self.fc1 = nn.Linear(int(np.prod(state_shape)), hidden_layer_size)
+        self.lstm = nn.GRU(
+            input_size=hidden_layer_size,
+            hidden_size=hidden_layer_size,
+            num_layers=layer_num,
+            batch_first=True,
+        )
+        self.fc2 = nn.Linear(hidden_layer_size, int(np.prod(action_shape)))
+
+    def forward(  # pylint: disable=arguments-differ
             self,
-            obs: np.ndarray | torch.Tensor,
+            obs: Batch,
             state: RecurrentStateBatch | None = None,
             info: dict[str, Any] | None = None,
     ) -> tuple[torch.Tensor, RecurrentStateBatch]:
@@ -147,7 +155,53 @@ class RecurrentLSTM(Recurrent):
         if isinstance(obs, Batch):
             obs = obs.obs  # or dict(obs)   (no copy of scalars)
 
-        return super().forward(obs, state, info)
+        # input -> [B, T, H] for training, [B, H] for eval
+        if not torch.is_tensor(obs):
+            obs = torch.from_numpy(obs).to(self.device)
+
+        if obs.ndim == 1:  # single env
+            obs = obs.unsqueeze(0)  # for eval, dim: [B, H]
+        elif obs.ndim == 2:
+            obs = obs.unsqueeze(-2)  # for training, dim: [B, T, H]
+
+        # 2. feed-forward + add time dim
+        x = self.fc1(obs)  # [B, H] or [B, T, H]
+
+        if state is None or "hidden" not in state:
+            y, (h, c) = self.lstm(x)  # hidden output: [T, B, H]
+        else:
+            # input to lstm should be [B, T, H]
+            h_in = (
+                state["hidden"].transpose(0, 1).contiguous()
+                if state["hidden"].ndim == 3
+                else state["hidden"].contiguous(),
+                state["cell"].transpose(0, 1).contiguous()
+                if state["cell"].ndim == 3
+                else state["cell"].contiguous(),
+            )
+
+            y, (h, c) = self.lstm(
+                x,
+                h_in
+            )  # for eval h: [B, H], for train: [T, B, H]
+        logits = self.fc2(y)  # [:,-1] if y.ndim == 3 else y)  # [B_alive, A]
+
+        # return to [B, T, H] for storing
+        next_hidden = cast(
+            RecurrentStateBatch,
+            Batch(
+                {
+                    "hidden": h.transpose(0, 1).detach()
+                    if h.ndim == 3
+                    else h.detach(),
+                    "cell": c.transpose(0, 1).detach()
+                    if c.ndim == 3
+                    else c.detach(),
+                }
+            )
+        )
+
+        return logits, next_hidden
 
 
 class MaskedActor(Actor):
