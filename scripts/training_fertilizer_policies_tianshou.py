@@ -39,7 +39,7 @@ if __name__ == "__main__":
 
     # Meta stuff
     parser.add_argument("--logdir", type=str, default=_DEFAULT_LOGDIR)
-    parser.add_argument("--not_recurrent", action='store_false', dest='recurrent')
+    parser.add_argument("--architecture", type=str, default='gru', dest='architecture')
     parser.add_argument("--parallel", action='store_true', dest='parallel')
     parser.add_argument("--not_independent", action="store_false",
                         help="not use independent learning (IPPO)", dest='independent')

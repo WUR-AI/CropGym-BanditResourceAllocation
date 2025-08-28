@@ -24,6 +24,7 @@ import gymnasium as gym
 from cropgymzoo import _DEFAULT_MODEL_DIR
 from cropgymzoo.agents.networks_tianshou import (
     RecurrentGRU,
+    RecurrentLSTM,
     MaskedActor,
     IntrinsicCuriosityModuleMARL,
     ConstraintCritic,
@@ -97,47 +98,72 @@ def make_ppo_policy(
 ) -> PPOPolicy | ICMPolicy:
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    actor_net = RecurrentGRU(
+    if args.lagrangian_ppo:
+        obs_constraint_dim = args.obs_constraint_dim
+        obs_constraint_idx = args.constraint_indices
+
+    if args.architecture == 'lstm':
+        network_fn = RecurrentLSTM
+    else:
+        network_fn = RecurrentGRU
+    actor_net = network_fn(
         layer_num=len(hidden),
         hidden_layer_size=hidden[0],
         state_shape=obs_dim,
         action_shape=act_dim,
         device=device,
     )
-
-    if args.lagrangian_ppo:
-        obs_constraint_dim = args.obs_constraint_dim
-        obs_constraint_idx = args.constraint_indices
-
-    if mlp_critics:
-        constraint_net = ObsMLP(
-            input_dim=obs_constraint_dim,
-            hidden_sizes=hidden,
-            activation=torch.nn.Tanh,
-            device=device,
-        ) if args.lagrangian_ppo else None
-        critic_net = ObsMLP(
-            input_dim=obs_dim[0],
-            hidden_sizes=hidden,
-            activation=torch.nn.Tanh,
-            device=device,
-        )
-    else:
-        constraint_net = RecurrentGRU(
-            layer_num=len(hidden),
-            hidden_layer_size=hidden[0],
-            state_shape=obs_constraint_dim,
-            action_shape=act_dim,
-            device=device,
-        ) if args.lagrangian_ppo else None
-        critic_net = RecurrentGRU(
+    if not mlp_critics:
+        critic_net = network_fn(
             layer_num=len(hidden),
             hidden_layer_size=hidden[0],
             state_shape=obs_dim,
             action_shape=act_dim,
             device=device,
         )
+        constraint_net = network_fn(
+            layer_num=len(hidden),
+            hidden_layer_size=hidden[0],
+            state_shape=obs_constraint_dim,
+            action_shape=act_dim,
+            device=device,
+        ) if args.lagrangian_ppo else None
+    else:
+        critic_net = ObsMLP(
+            input_dim=obs_dim[0],
+            hidden_sizes=hidden,
+            activation=torch.nn.Tanh,
+            device=device,
+        )
+        constraint_net = ObsMLP(
+            input_dim=obs_constraint_dim,
+            hidden_sizes=hidden,
+            activation=torch.nn.Tanh,
+            device=device,
+        ) if args.lagrangian_ppo else None
 
+    if args.architecture == 'mlp':
+        actor_net = ObsMLP(
+            input_dim=obs_dim[0],
+            output_dim=act_dim,
+            hidden_sizes=hidden,
+            activation=torch.nn.Tanh,
+            device=device,
+        )
+        critic_net = ObsMLP(
+            input_dim=obs_dim[0],
+            output_dim=1,
+            hidden_sizes=hidden,
+            activation=torch.nn.Tanh,
+            device=device,
+        )
+        constraint_net = ObsMLP(
+            input_dim=obs_constraint_dim,
+            output_dim=1,
+            hidden_sizes=hidden,
+            activation=torch.nn.Tanh,
+            device=device,
+        ) if args.lagrangian_ppo else None
 
     actor = MaskedActor(preprocess_net=actor_net, action_dim=act_dim).to(device)
     critic = Critic(preprocess_net=critic_net).to(device)
