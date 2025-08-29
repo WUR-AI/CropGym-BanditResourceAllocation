@@ -939,7 +939,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             self.infos[feature].append(self._misc_features_mapper(terminate)[feature])
 
         self.infos['Reward'].append(reward)
-        self.infos['Action'].append(action if not isinstance(action, (np.array, th.Tensor)) else action.item())
+        self.infos['Action'].append(action if not isinstance(action, (np.ndarray, th.Tensor)) else action.item())
         self.infos['Yield'].append(pcse_output[-1]['WSO'])
         self.infos['CropName'].append(self.crop)
         self.infos['Alive'].append(True if not terminate else False)
