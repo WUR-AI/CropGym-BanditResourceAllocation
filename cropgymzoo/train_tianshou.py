@@ -26,6 +26,7 @@ from cropgymzoo.agents.networks_tianshou import (
     RecurrentGRU,
     RecurrentLSTM,
     MaskedActor,
+    StackedCritic,
     IntrinsicCuriosityModuleMARL,
     ConstraintCritic,
     ObsMLP
@@ -94,7 +95,7 @@ def make_ppo_policy(
     hidden: Sequence = [64, 64],
     use_icm: bool = False,
     args: Namespace = None,
-    mlp_critics = True,
+    mlp_critics = False,
 ) -> PPOPolicy | ICMPolicy:
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -145,28 +146,26 @@ def make_ppo_policy(
     if args.architecture == 'mlp':
         actor_net = ObsMLP(
             input_dim=obs_dim[0],
-            output_dim=act_dim,
+            flatten_input=False,
             hidden_sizes=hidden,
             activation=torch.nn.Tanh,
             device=device,
         )
         critic_net = ObsMLP(
             input_dim=obs_dim[0],
-            output_dim=1,
             hidden_sizes=hidden,
             activation=torch.nn.Tanh,
             device=device,
         )
         constraint_net = ObsMLP(
             input_dim=obs_constraint_dim,
-            output_dim=1,
             hidden_sizes=hidden,
             activation=torch.nn.Tanh,
             device=device,
         ) if args.lagrangian_ppo else None
 
     actor = MaskedActor(preprocess_net=actor_net, action_dim=act_dim).to(device)
-    critic = Critic(preprocess_net=critic_net).to(device)
+    critic = StackedCritic(preprocess_net=critic_net).to(device)
     constraint_critic = ConstraintCritic(
         preprocess_net=constraint_net,
         constraint_indices=obs_constraint_idx,
@@ -309,7 +308,7 @@ def grab_spaces(seed):
 def create_logger(args):
     logdir = args.logdir
     # Logger
-    run_name = f"PPO_GRU_{'parallel' if args.parallel else 'dummy'}_{datetime.datetime.now():%d_%H%M}"
+    run_name = f"PPO_{str(args.architecture).upper()}_{'parallel' if args.parallel else 'dummy'}_{datetime.datetime.now():%m%d_%H%M}"
     run_name = (run_name + "_resume") if args.resume else run_name
     writer = SummaryWriter(os.path.join(logdir, run_name))
     logger = TensorboardLogger(writer)
@@ -341,8 +340,6 @@ def collect_test_episodes(collector: Collector, years: list[int] = list(range(20
 def train_gru_ppo(args: Namespace):
     """
     Script to train a GRU-PPO agent
-    :param hyperparams:
-    :return:
     """
 
     # resume model?
@@ -355,7 +352,7 @@ def train_gru_ppo(args: Namespace):
 
         print("Resuming training from saved model!")
 
-    print(f"\nTraining PPO with {'GRU' if args.recurrent else 'MLP'} Network")
+    print(f"\nTraining PPO with {str(args.architecture).upper()} Network")
     print(f"Using {'Dummy' if not args.parallel else 'SubProc'}VectorEnv\n")
     print(f"Training with {args.train_envs_num} env(s)\n")
 
@@ -424,7 +421,7 @@ def train_gru_ppo(args: Namespace):
         buffer=VectorReplayBuffer(
             total_size=args.buffer_size,
             buffer_num=args.train_envs_num if args.parallel else 1,
-            stack_num=1,
+            stack_num=args.seq_len if args.architecture in ['lstm', 'gru'] else 1,
         ),  # use this buffer
         exploration_noise=True,
     )

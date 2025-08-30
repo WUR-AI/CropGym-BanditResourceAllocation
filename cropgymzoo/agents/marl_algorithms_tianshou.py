@@ -60,11 +60,13 @@ class IPPOPolicy(PPOPolicy):
             bat_term = batch.info["Alive"] == False
             batch.done = bat_done
             batch.terminated = bat_term
+            batch.truncated = bat_term
         if "Alive" in buffer.info:
             buf_done = buffer.info["Alive"] == False
             buf_term = buffer.info["Alive"] == False
             buffer._meta.done = buf_done
             buffer._meta.terminated = buf_term
+            buffer._meta.truncated = buf_term
         if self.recompute_adv:
             # buffer input `buffer` and `indices` to be used in `learn()`.
             self._buffer, self._indices = buffer, indices
@@ -184,6 +186,8 @@ class LagrangianIPPOPolicy(IPPOPolicy):
     ) -> tuple[np.ndarray, np.ndarray]:
 
         cost = batch.info['TotalConstraint']
+        if len(cost.shape) > 1:
+            cost = cost[:, -1]
         if v_s_ is None:
             assert np.isclose(gae_lambda, 1.0)
             v_s_ = np.zeros_like(cost)
@@ -194,7 +198,39 @@ class LagrangianIPPOPolicy(IPPOPolicy):
 
         end_flag = np.logical_or(batch.terminated, batch.truncated)
         end_flag[np.isin(indices, buffer.unfinished_index())] = True
+        if len(end_flag.shape) > 1:
+            end_flag = end_flag[:, -1]
         advantage = _gae_return(v_s, v_s_, cost, end_flag, gamma, gae_lambda)
+        returns = advantage + v_s
+        # normalization varies from each policy, so we don't do it here
+        return returns, advantage
+
+
+    @staticmethod
+    def compute_episodic_return(
+            batch: RolloutBatchProtocol,
+            buffer: ReplayBuffer,
+            indices: np.ndarray,
+            v_s_: np.ndarray | torch.Tensor | None = None,
+            v_s: np.ndarray | torch.Tensor | None = None,
+            gamma: float = 0.99,
+            gae_lambda: float = 0.95,
+    ) -> tuple[np.ndarray, np.ndarray]:
+
+        rew = batch.rew
+        if v_s_ is None:
+            assert np.isclose(gae_lambda, 1.0)
+            v_s_ = np.zeros_like(rew)
+        else:
+            v_s_ = to_numpy(v_s_.flatten())
+            v_s_ = v_s_ * BasePolicy.value_mask(buffer, indices)
+        v_s = np.roll(v_s_, 1) if v_s is None else to_numpy(v_s.flatten())
+
+        end_flag = np.logical_or(batch.terminated, batch.truncated)
+        end_flag[np.isin(indices, buffer.unfinished_index())] = True
+        if len(end_flag.shape) > 1:
+            end_flag = end_flag[:, -1]
+        advantage = _gae_return(v_s, v_s_, rew, end_flag, gamma, gae_lambda)
         returns = advantage + v_s
         # normalization varies from each policy, so we don't do it here
         return returns, advantage
@@ -211,10 +247,19 @@ class LagrangianIPPOPolicy(IPPOPolicy):
         gradient_steps = 0
         split_batch_size = batch_size or -1
 
+        if len(batch.info["TotalConstraint"].shape) > 1:
+            total_constraint = batch.info["TotalConstraint"][:, -1]
+        else:
+            total_constraint = batch.info["TotalConstraint"]
+
+        if len(batch.done.shape) > 1:
+            done = batch.done[:, -1]
+        else:
+            done = batch.done
         # lagrangian stuff
         final_constraint_values = [
             float(tc)
-            for tc, d in zip(batch.info["TotalConstraint"], batch.done)
+            for tc, d in zip(total_constraint, done)
             if d and tc is not None
         ]
         mean_ep_constraint_values = float(np.mean(final_constraint_values)) if final_constraint_values else 0.0
@@ -308,7 +353,10 @@ class IPPOCollector(Collector):
         """Overwrite obs_next of a single transition row with a nested Batch `value`."""
         # Use a 1-length index to get a 1-row Batch view
         row_idx = np.array([int(idx)])
+        original_stack = buffer.stack_num
+        buffer.stack_num = 1
         row = buffer[row_idx]  # -> Batch of length 1
+        buffer.stack_num = original_stack
         # if isinstance(value, dict):
         #     for k, v in value.items():
         #         if not isinstance(v, ndarray):
@@ -431,11 +479,15 @@ class IPPOCollector(Collector):
                 last_hidden_state_RH=state_filtered_RH  # last_hidden_state_RH,
             )
 
+            # if len(collect_action_computation_batch_R.act.shape) > 1:
+            #     collect_action_computation_batch_R.act = collect_action_computation_batch_R.act[:, -1]
+            #     collect_action_computation_batch_R.act_normalized = collect_action_computation_batch_R.act_normalized[:, -1]
+
             self._update_hs_bank_from_forward(
                 collect_action_computation_batch_R.hidden_state,
                 ready_env_ids_R,
                 last_obs_RO,
-            )
+            ) if collect_action_computation_batch_R.hidden_state else None
 
             TraceLogger.log(log, lambda: f"Action: {collect_action_computation_batch_R.act}")
 

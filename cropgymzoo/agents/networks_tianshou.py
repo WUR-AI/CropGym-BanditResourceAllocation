@@ -210,6 +210,7 @@ class MaskedActor(Actor):
     def __init__(self, preprocess_net, action_dim, device='cpu'):
         super().__init__(preprocess_net=preprocess_net, action_shape=action_dim,
                          softmax_output=False, device=device)  # remember for logits
+        self.last.flatten_input = False
 
     def forward(self, obs: torch.Tensor, state: torch.Tensor | None = None, info: dict | Batch = None):
 
@@ -222,11 +223,14 @@ class MaskedActor(Actor):
         # generate logits from mlp
         logits = self.last(x)
 
+        if logits.ndim == 1:
+            logits = logits.unsqueeze(0)
+
         # mask
         if isinstance(obs, Batch) and "mask" in obs:
             mask = torch.as_tensor(obs["mask"], device=logits.device).bool()
             # logits = logits.clone()
-            mask = mask.expand_as(logits)
+            # mask = mask.expand_as(logits)
             if mask.ndim == 1:
                 mask = mask.unsqueeze(0)
             elif mask.ndim == 2 and mask.ndim != logits.ndim:
@@ -240,6 +244,28 @@ class MaskedActor(Actor):
             logits = logits.masked_fill(~mask, -1e10)
 
         return logits, h
+
+
+class StackedCritic(Critic):
+    def __init__(self, preprocess_net, device='cpu', **kwargs):
+        super().__init__(
+            preprocess_net=preprocess_net,
+            device=device,
+            **kwargs
+        )
+
+    def forward(self, obs: np.ndarray | torch.Tensor, **kwargs: Any) -> torch.Tensor:
+        """Mapping: s_B -> V(s)_B."""
+        # TODO: don't use this mechanism for passing state
+        logits, _ = self.preprocess(obs, state=kwargs.get("state", None))
+
+        if logits.ndim == 3:
+            logits = logits.clone()
+            logits = logits[:, -1, :]
+            logits = logits.squeeze(-1)
+
+        return self.last(logits)
+
 
 
 class ConstraintCritic(Critic):
@@ -263,6 +289,12 @@ class ConstraintCritic(Critic):
             obs = obs[:, :, self.constraint_indices]
 
         logits, _ = self.preprocess(obs, state=kwargs.get("state", None))
+
+        if logits.ndim == 3:
+            logits = logits.clone()
+            logits = logits[:, -1, :]
+            logits = logits.squeeze(-1)
+
         return self.last(logits)
 
 
@@ -285,7 +317,8 @@ class ObsMLP(MLP):
         if isinstance(obs, Batch):
             obs = obs.obs
 
-        x = super().forward(obs)
+        obs = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
+        x = self.model(obs)
 
         return x, state
 
