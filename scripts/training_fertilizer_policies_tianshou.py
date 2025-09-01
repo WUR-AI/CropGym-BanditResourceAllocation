@@ -52,6 +52,7 @@ if __name__ == "__main__":
     parser.add_argument("--ent_coef", type=float, default=0.01)
     parser.add_argument("--hidden_layers", type=int, nargs="*",
                         help="Input space separated layer sizes", default=[64, 64])
+    parser.add_argument("--seq_len", type=int, default=32)  # For RNNs
 
     # Use curriculum learning?
     parser.add_argument("--curriculum", action='store_true', dest='curriculum')
