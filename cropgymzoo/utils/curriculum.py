@@ -45,7 +45,7 @@ def make_default_stages():
         {'sowing': False, 'weather': False, 'budget': False, 'co2': False, 'initial_n': False, 'parameters': False},
         {'sowing': True, 'weather': False, 'budget': False, 'co2': False, 'initial_n': False, 'parameters': False},
         {'sowing': True, 'weather': True, 'budget': False, 'co2': False, 'initial_n': False, 'parameters': False},
-        {'sowing': True, 'weather': True, 'budget': True, 'co2': False, 'initial_n': False, 'parameters': False},
+        {'sowing': True, 'weather': True, 'budget': False, 'co2': True, 'initial_n': False, 'parameters': False},
         {'sowing': True, 'weather': True, 'budget': True, 'co2': True, 'initial_n': False, 'parameters': False},
     ]
 
