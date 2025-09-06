@@ -101,6 +101,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
         self.shared_obs = shared_obs
         self.dict_obs = dict_obs
         self.year = self.years[0]
+        self.rng, self.seed = gym.utils.seeding.np_random(seed=seed)
 
         self.has_reset = False
 
@@ -398,9 +399,11 @@ class MultiFieldEnv(AECEnv, EzPickle):
         # change the logic of random allocation here if needed!
         choices = {}
         for (a, max_budget), (_, lowest_budget) in zip(parcel_budgets.items(), lowest_budgets.items()):
-            list_choice = [*np.arange(lowest_budget, max_budget, 10.)]
-            probs = self.left_heavy_weights(len(list_choice))
-            choices[a] = np.random.choice(list_choice, p=probs)
+            # list_choice = [*np.arange(lowest_budget, max_budget, 10.)]
+            # probs = self.left_heavy_weights(len(list_choice))
+            # choices[a] = self.rng.choice(list_choice, p=probs)
+            choice = self.rng.uniform(low=lowest_budget, high=max_budget)
+            choices[a] = choice
 
         # set random budget reduction for each parcel
         for (_agent, choice), (_, budget) in zip(choices.items(), parcel_budgets.items()):
