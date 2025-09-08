@@ -2,7 +2,7 @@ import os
 import yaml
 import pickle
 
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 
 import numpy as np
 
@@ -293,7 +293,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
     Callable helper functions and property
     '''
 
-    def allocate_bandit_budgets(self, allocations):
+    def allocate_bandit_budgets(self, allocations: list | np.ndarray):
         assert len(allocations) == len(self.fields)
 
         for agent, reduction in zip(self.possible_agents, allocations):
@@ -513,22 +513,23 @@ class MultiFieldEnv(AECEnv, EzPickle):
             print("Loaded warm up info!")
             return warm_up_infos
         print("No file found...")
-        warm_up_infos = defaultdict(dict)
+        warm_up_infos: deque[dict] = deque(maxlen=100)
         options = {}
         print('Starting warm up...')
         for i, _ in enumerate(range(warm_up_counter)):
             print('Start warm up iteration {}'.format(i))
             options['year'] = np.random.choice(self.years)
             self.reset(seed=self.seed, options=options)
+            iter_info = {}
             for agent in self.agent_iter():
                 _, _, _, _, infos = self.last()
                 action = self.farmers_practice(agent, infos)
                 if self.terminations[agent]:
-                    warm_up_infos[i].setdefault(agent, {})
-                    warm_up_infos[i][agent] = infos
+                    iter_info[agent] = infos
                     self.step(None)
                 else:
                     self.step(action)
+            warm_up_infos.append(iter_info)
             print(self)
         print('Finished warm up...')
         print('Attempting to save pickle...')

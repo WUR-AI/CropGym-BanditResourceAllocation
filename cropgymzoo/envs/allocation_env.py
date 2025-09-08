@@ -29,14 +29,14 @@ class AllocationBandit(gym.Env):
         reward_fn=None,
         years: list = get_default_years(),
         seed: int = 107,
-        action_type: str = 'multi_discrete',
+        action_type: str = 'continuous',
         args: argparse.Namespace = None,
     ):
         super().__init__()
 
         self.warm_up_eps = warm_up_eps
 
-        assert action_type in ['discrete', 'multi_discrete']
+        assert action_type in ['discrete', 'multi_discrete', 'continuous']
         self.action_type = action_type
 
         self.rng, self.seed = gym.utils.seeding.np_random(seed=seed)
@@ -76,7 +76,7 @@ class AllocationBandit(gym.Env):
         assert self.action_space.contains(action), "invalid action"
 
         # save action this episode
-        self.infos['AllocationAction'] = self.super_arms[action]
+        self.infos['AllocationAction'] = action
 
         self.farm.allocate_bandit_budgets(self.infos['AllocationAction'])
 
@@ -93,6 +93,7 @@ class AllocationBandit(gym.Env):
         # convert budget left as profit
         budget_lefts = np.array([self.farm.infos['AgentInfos'][agent]['BudgetLeft'][-1] for agent in self.parcel_meta_infos.keys()])
         fertilizer_prices = np.array([self.farm.infos['AgentInfos'][agent]['FertilizerPrice'][-1] for agent in self.parcel_meta_infos.keys()])
+        # dot product below
         budget_left_profit = budget_lefts @ fertilizer_prices
 
         # add with actual profit
@@ -123,6 +124,9 @@ class AllocationBandit(gym.Env):
             "HistoricalTemperatureMax",
             "HistoricalIrradiation",
         ]
+
+    def _get_historical_context_keys(self):
+        return self._get_context_keys()[4:]
 
     '''
     Helper functions
@@ -162,25 +166,32 @@ class AllocationBandit(gym.Env):
             "HistoricalIrradiation": self._get_historical_weather_features('IRRAD'),
         }
 
-    def _get_historical_end_season_features(self, feature):
-        # returns vector length of n_fields based on average end season feature
-        return [
-            np.mean([
-                self.farm.warm_up_infos[i][agent][feature][-1]
-                for i in self.farm.warm_up_infos
-            ])
-            for agent in self.parcel_meta_infos.keys()
-        ]
+    def _get_historical_end_season_features(self, feature: str):
+        """Return [mean_over_iters( last value of feature for this agent ), for each agent]."""
+        out = []
+        for agent in self.parcel_meta_infos.keys():
+            vals = []
+            for iter_info in self.farm.warm_up_infos:  # iter_info: dict per iteration
+                agent_info = iter_info.get(agent)
+                seq = agent_info.get(feature)
+                vals.append(seq[-1])
+            out.append(float(np.mean(vals)))
+        return out
 
-    def _get_historical_weather_features(self, feature):
-        # returns vector length of n_fields with mean of weather
-        return [
-            np.mean([
-                np.mean(self.farm.warm_up_infos[i][agent][feature])
-                for i in self.farm.warm_up_infos
-            ])
-            for agent in self.parcel_meta_infos.keys()
-        ]
+    def _get_historical_weather_features(self, feature: str):
+        """Return [mean_over_iters( mean of the feature sequence for this agent ), per agent]."""
+        out = []
+        for agent in self.parcel_meta_infos.keys():
+            vals = []
+            for iter_info in self.farm.warm_up_infos:
+                agent_info = iter_info.get(agent)
+                seq = agent_info.get(feature)
+                vals.append(np.mean(seq))
+            out.append(float(np.mean(vals)))
+        return out
+
+    def add_stats_to_context(self, info):
+        self.farm.warm_up_infos.append(info)
 
     '''
     Init helpers
@@ -202,6 +213,7 @@ class AllocationBandit(gym.Env):
             self.farm = self.env_agent.env
 
     def _init_spaces(self):
+
         # Set up action space based on farm
         self.base_arms = _make_base_arms(self)
         self.super_arms = _make_super_arms(self, self.base_arms)
@@ -210,10 +222,18 @@ class AllocationBandit(gym.Env):
         }
 
         # Action space
+        # discrete and multi_discrete is not implemented properly yet.
         if self.action_type == 'discrete':
             self.action_space = spaces.Discrete(len(self.super_arms))
         if self.action_type == 'multi_discrete':
-            self.action_space = spaces.MultiDiscrete([len(self.base_arms[a]) for a in self.farm.possible_agents])
+            self.action_space = spaces.MultiDiscrete(
+                [
+                    len(self.base_arms[a])
+                    for a in self.farm.possible_agents
+                ]
+            )
+        if self.action_type == 'continuous':
+            self.action_space = spaces.Box(low=0, high=1, shape=(self.n_fields,), dtype=np.float32)
 
         # Observation space
         self.observation_space = spaces.Dict(
@@ -241,42 +261,3 @@ class AllocationBandit(gym.Env):
                     'area': self.farm.fields[agent].unwrapped.area, }
             for agent in self.farm.possible_agents
         }
-
-
-
-# ---------------------------------------------------------------------
-# Minimal CUCB-style loop (works for any n_fields)
-# ---------------------------------------------------------------------
-
-if __name__ == "__main__":
-    env = AllocationBandit(n_fields=8, total_kg=200, delta_kg=10)
-    Q, n = env.Q, env.n_fields
-
-    counts  = np.zeros((n, Q + 1))
-    rewards = np.zeros((n, Q + 1))
-
-    def greedy_fill_ucb(ucb, Q):
-        """Allocate one quantum at a time to the field that maximises margin."""
-        alloc = np.zeros(n, dtype=int)
-        for _ in range(Q):
-            best_j = np.argmax([
-                ucb[j, alloc[j] + 1] if alloc[j] < Q else -np.inf
-                for j in range(n)
-            ])
-            alloc[best_j] += 1
-        return alloc
-
-    for season in range(1, 501):
-        ucb = rewards / np.maximum(1, counts) + np.sqrt(
-            2 * np.log(season) / np.maximum(1, counts)
-        )
-        alloc_vec = greedy_fill_ucb(ucb, Q)
-        action = env.super_arm_to_idx[tuple(alloc_vec)]
-        _, R, *_ = env.step(action)
-
-        for j, l in enumerate(alloc_vec):
-            counts[j, l]  += 1
-            rewards[j, l] += R
-
-        if season % 100 == 0:
-            print(f"S{season:3d}  reward={R:6.2f}  alloc(kg)={alloc_vec*env.bins}")
