@@ -161,7 +161,13 @@ class AllocationBandit(gym.Env):
     '''
 
     def _flatten_context(self, context: dict) -> np.ndarray:
-        return np.concatenate([np.array(context[k], dtype=float).ravel() for k in self._get_context_keys()])
+        return np.concatenate(
+            [
+                np.array(context[k], dtype=float).ravel()
+                for k in self._get_context_keys()
+            ],
+            dtype=np.float32,
+        )
 
     def _get_context(self):
         context = {
@@ -277,7 +283,7 @@ class AllocationBandit(gym.Env):
             self.observation_space = spaces.Box(
                 -np.inf,
                 np.inf,
-                shape=(len(self._get_context_keys()),),
+                shape=(len(self._get_context_keys()) * self.n_fields,),
                 dtype=np.float32
             )
 
