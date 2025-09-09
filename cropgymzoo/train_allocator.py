@@ -1,0 +1,91 @@
+import torch
+
+import numpy as np
+
+import gymnasium as gym
+from gymnasium.spaces.utils import flatten_space
+from torch import dtype
+
+from cropgymzoo.agents.nn_acgp import NNAGPBandit
+
+from cropgymzoo.envs.allocation_env import AllocationBandit
+
+
+def min_max_normalize(x, min_val=0, max_val=300000) -> float:
+    """Scale from [min_val, max_val] -> [0, 1]."""
+    return (x - min_val) / (max_val - min_val)
+
+def min_max_denormalize(x_norm, min_val=0, max_val=300000) -> float:
+    """Scale from [0, 1] -> [min_val, max_val]."""
+    return x_norm * (max_val - min_val) + min_val
+
+
+def train_allocator(args):
+
+    # initialize env
+    env = AllocationBandit(
+        warm_up_eps=2,
+        args=args,
+        seed=args.seed,
+        flat_context=True,
+    )
+
+    # misc
+    rng = np.random.RandomState(args.seed)
+    torch.set_default_dtype(torch.float32)
+
+    # context and action dims
+    d_theta, d_x = env.observation_space.shape[0], env.action_space.shape[0]
+
+    # put the bandit algorithm here
+    bandit = NNAGPBandit(
+        d_theta=d_theta,
+        d_x=d_x,
+        m=8,
+        Q=1,
+        device=torch.device("cpu")
+    )
+
+    # make action candidates for each round. Get super arms and randomly sample
+    action_candidates = env.super_arms
+    num_candidates = args.action_candidate_length
+
+    # put the training loop here
+    for t in range(1, args.rounds + 1):
+        theta_t, env_info = env.reset(
+            options={
+                'year': rng.choice(env.years),
+            },
+            seed=args.seed
+        )
+
+        # convert to numpy
+        theta_t = torch.from_numpy(theta_t)
+
+        # candidate set for actions; sampled from the super_arms array
+        indices = torch.randperm(action_candidates.shape[0])[:num_candidates]
+        x_cand = action_candidates[indices]
+        x_cand = torch.from_numpy(x_cand)
+
+        # train the surrogate a bit on accumulated data
+        loss_val = bandit.train_step(steps=args.bandit_epochs, lr=args.bandit_lr)
+        print(f"round {t}, loss: {loss_val}")
+
+        # pick by UCB (or switch to bandit.select_ts(...))
+        x_t, selection_info = bandit.select_ucb(theta_t, x_cand, delta=0.1)
+        if isinstance(x_t, np.ndarray):
+            x_t = torch.from_numpy(x_t)
+
+        # run env and normalize reward
+        _, reward_env, _, _, step_info = env.step(x_t)
+        normalized_reward = min_max_normalize(float(reward_env))
+
+        env.add_stats_to_context(step_info['AgentInfos'])
+
+        # observe noisy reward
+        y_t = float(normalized_reward + 0.05 * torch.randn(()))
+        bandit.update(theta_t, x_t, y_t)
+
+        # save the model iteratively
+        if t % 50 == 0:
+            bandit.save(args.seed, t)
