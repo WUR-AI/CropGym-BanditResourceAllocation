@@ -1,12 +1,8 @@
 # CropGymZoo
 
 
-install with
-
-`uv sync`
-
-choose the MARL framework to use, from either `tianshou`, `rllib`, `stable-baselines3` or `id-mava` (Mava).
-
-Install a specific framework with, for instance,
+install with uv:
 
 `uv sync --extra tianshou --exact`
+
+Developed with `Python 3.11.9`.
