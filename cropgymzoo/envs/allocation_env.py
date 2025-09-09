@@ -31,9 +31,11 @@ class AllocationBandit(gym.Env):
         seed: int = 107,
         action_type: str = 'continuous',
         args: argparse.Namespace = None,
+        flat_context: bool = True,
     ):
         super().__init__()
 
+        self.flat_context = flat_context
         self.warm_up_eps = warm_up_eps
 
         assert action_type in ['discrete', 'multi_discrete', 'continuous']
@@ -78,6 +80,7 @@ class AllocationBandit(gym.Env):
         # save action this episode
         self.infos['AllocationAction'] = action
 
+        # allocate here
         self.farm.allocate_bandit_budgets(self.infos['AllocationAction'])
 
         # runs one episode of the MARL agent
@@ -93,12 +96,20 @@ class AllocationBandit(gym.Env):
         # convert budget left as profit
         budget_lefts = np.array([self.infos['AgentInfos'][agent]['BudgetLeft'][-1] for agent in self.parcel_meta_infos.keys()])
         fertilizer_prices = np.array([self.infos['AgentInfos'][agent]['FertilizerPrice'][-1] for agent in self.parcel_meta_infos.keys()])
+
+        self.infos['BudgetLeft'] = budget_lefts
+        self.infos['FertilizerPrice'] = fertilizer_prices
         # dot product below
         budget_left_profit = budget_lefts @ fertilizer_prices
 
         # add with actual profit
         profit = np.array([np.sum(self.infos['AgentInfos'][agent]['Profit']) for agent in self.parcel_meta_infos.keys()])
-        reward = profit + budget_left_profit
+
+        # log in infos, will be erased in next round
+        self.infos['Profit'] = profit
+
+        reward = np.sum(profit) + budget_left_profit
+        self.infos['Reward'] = reward
 
         return reward
 
@@ -149,8 +160,11 @@ class AllocationBandit(gym.Env):
     Context helper functions
     '''
 
+    def _flatten_context(self, context: dict) -> np.ndarray:
+        return np.concatenate([np.array(context[k], dtype=float).ravel() for k in self._get_context_keys()])
+
     def _get_context(self):
-        return {
+        context = {
             "InitialN": list(self.farm.get_initial_n().values()),
             "CropPrice": list(self.farm.get_per_field_crop_price().values()),
             "CropCode": list(self.farm.get_per_field_crop_code().values()),
@@ -169,6 +183,12 @@ class AllocationBandit(gym.Env):
             "HistoricalTemperatureMax": self._get_historical_weather_features('TMAX'),
             "HistoricalIrradiation": self._get_historical_weather_features('IRRAD'),
         }
+
+        if not self.flat_context:
+            return context
+        else:
+            return self._flatten_context(context)
+
 
     def _get_historical_end_season_features(self, feature: str):
         """Return [mean_over_iters( last value of feature for this agent ), for each agent]."""
@@ -238,20 +258,28 @@ class AllocationBandit(gym.Env):
                 ]
             )
         if self.action_type == 'continuous':
-            self.action_space = spaces.Box(low=0, high=1, shape=(self.n_fields,), dtype=np.float32)
+            self.action_space = spaces.Box(low=0, high=20, shape=(self.n_fields,), dtype=np.float32)
 
         # Observation space
-        self.observation_space = spaces.Dict(
-            {
-                feature: spaces.Box(
-                    -np.inf,
-                    np.inf,
-                    shape=(self.n_fields,),
-                    dtype=np.float32
-                )
-                for feature in self._get_context_keys()
-            }
-        )
+        if not self.flat_context:
+            self.observation_space = spaces.Dict(
+                {
+                    feature: spaces.Box(
+                        -np.inf,
+                        np.inf,
+                        shape=(self.n_fields,),
+                        dtype=np.float32
+                    )
+                    for feature in self._get_context_keys()
+                }
+            )
+        else:
+            self.observation_space = spaces.Box(
+                -np.inf,
+                np.inf,
+                shape=(len(self._get_context_keys()),),
+                dtype=np.float32
+            )
 
     def _init_meta_info(self):
         self.n_fields = len(self.farm.possible_agents)
