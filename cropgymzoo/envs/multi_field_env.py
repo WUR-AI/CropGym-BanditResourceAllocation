@@ -294,9 +294,15 @@ class MultiFieldEnv(AECEnv, EzPickle):
     '''
 
     def allocate_bandit_budgets(self, allocations: list | np.ndarray):
+        """
+        It is assumed that the allocation is in the factor of single digits, since it will be multiplied by
+        10 in this method.
+        """
         assert len(allocations) == len(self.fields)
 
         for agent, reduction in zip(self.possible_agents, allocations):
+            # multiply here
+            reduction = reduction * 10
             agent_max = self.get_per_parcel_max_budget(agent)
             allocation = agent_max - reduction
             self.set_per_parcel_budget(agent, allocation)
