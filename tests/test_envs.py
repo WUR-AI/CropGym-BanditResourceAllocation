@@ -222,6 +222,23 @@ class TestAllocationEnv(unittest.TestCase):
 
         self.assertTrue(True)
 
+    def test_add_stats_to_context(self):
+        _, _ = self.bandit_env.reset()
+
+        init_len = len(self.bandit_env.farm.warm_up_infos)
+
+        _, reward, _, _, step_info = self.bandit_env.step(self.bandit_env.action_space.sample())
+
+        self.bandit_env.add_stats_to_context(step_info['AgentInfos'])
+
+        print(init_len)
+
+        print(len(self.bandit_env.farm.warm_up_infos))
+
+        self.assertTrue(init_len < len(self.bandit_env.farm.warm_up_infos))
+
+
+
 
 if __name__ == '__main__':
     unittest.main()
