@@ -9,8 +9,8 @@ from cropgymzoo.utils.agent_helpers import _make_super_arms, _make_base_arms
 
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 from cropgymzoo.utils.defaults import get_default_years
-from cropgymzoo.train_tianshou import load_model, make_ppo_policy
-from cropgymzoo.eval_tianshou import MultiRLAgent
+from cropgymzoo.train_policy import load_model, make_ppo_policy
+from cropgymzoo.eval_policy import MultiRLAgent
 
 
 # ---------------------------------------------------------------------

@@ -1,7 +1,7 @@
 import math, torch, numpy as np
 from collections import defaultdict
 
-from cropgymzoo.agents.networks_tianshou import UCBNetwork
+from cropgymzoo.agents.networks import UCBNetwork
 
 
 class FeatureNet(torch.nn.Module):

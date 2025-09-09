@@ -11,7 +11,7 @@ from tianshou.env import PettingZooEnv
 from tianshou.data import Batch
 from tianshou.policy import MultiAgentPolicyManager
 
-from cropgymzoo.train_tianshou import (
+from cropgymzoo.train_policy import (
     make_ppo_policy,
     load_model
 )

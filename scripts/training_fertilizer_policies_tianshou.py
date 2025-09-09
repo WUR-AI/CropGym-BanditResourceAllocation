@@ -7,7 +7,7 @@ from cropgymzoo.utils import curriculum
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 import os
-from cropgymzoo.train_tianshou import train_gru_ppo
+from cropgymzoo.train_policy import train_gru_ppo
 from cropgymzoo import _DEFAULT_LOGDIR
 import yaml
 

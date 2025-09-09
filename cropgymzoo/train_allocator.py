@@ -1,18 +1,14 @@
 import warnings
+
+from cropgymzoo.utils.callbacks import _setup_bandit_comet, log_selection_info
+
 warnings.filterwarnings("ignore", category=DeprecationWarning)
-
-import os
-from datetime import datetime
-
-import comet_ml
-from comet_ml import Experiment
 
 import torch
 
 import numpy as np
 
-from cropgymzoo import _BASE_PATH, _SOURCE_PATH
-from cropgymzoo.agents.nn_acgp import NNAGPBandit, SelectionInfo
+from cropgymzoo.agents.nn_acgp import NNAGPBandit
 
 from cropgymzoo.envs.allocation_env import AllocationBandit
 
@@ -24,74 +20,6 @@ def min_max_normalize(x, min_val=0, max_val=300000) -> float:
 def min_max_denormalize(x_norm, min_val=0, max_val=300000) -> float:
     """Scale from [0, 1] -> [min_val, max_val]."""
     return x_norm * (max_val - min_val) + min_val
-
-def _setup_bandit_comet(args):
-    if not os.path.isdir(os.path.join(_BASE_PATH, 'comet')):
-        print("Not using comet!")
-        return
-
-    with open(os.path.join(_BASE_PATH, 'comet', 'api'), 'r') as f:
-        api_key = f.readline()
-    # prefer env vars; fall back to sensible defaults
-    experiment = Experiment(
-        api_key=api_key,
-        project_name="cropgymzoo_allocation_experiments",
-        workspace="cropgymzoo",
-        log_code=True,
-        auto_metric_logging=True,
-        auto_histogram_weight_logging=True,
-        auto_histogram_gradient_logging=True,
-        auto_param_logging=True,
-        auto_histogram_tensorboard_logging=True
-    )
-
-    experiment.log_code(folder=_SOURCE_PATH)
-
-    name = f"s{args.seed}-allocation-agent-{datetime.now():%m%d-%H%M}"
-    experiment.set_name(name)
-    experiment.add_tag("allocation-bandit")
-    experiment.add_tag("NN-ACGP")
-
-    # log hyperparameters (robustly)
-    experiment.log_parameters({k: v for k, v in vars(args).items()})
-
-    return experiment
-
-def log_selection_info(experiment: Experiment, info: SelectionInfo, t):
-    experiment.log_histogram_3d(
-        info.mu,
-        name="mu",
-        step=t
-    )
-    experiment.log_histogram_3d(
-        info.std,
-        name="std",
-        step=t
-    )
-    if info.ucb is not None:
-        experiment.log_histogram_3d(
-            info.ucb,
-            name="ucb",
-            step=t
-        )
-    if info.beta_t:
-        experiment.log_metric("beta_t", info.beta_t, step=t)
-    if info.sampled_vals is not None:
-        experiment.log_histogram_3d(
-            info.sampled_vals,
-            name="sampled_vals",
-            step=t
-        )
-
-def log_candidates(experiment: Experiment, cand: torch.Tensor, t):
-    fields = cand.shape[1]
-
-    for field in range(fields):
-        experiment.log_histogram_3d(
-            f"field-{field+1}-candidates",
-            cand[:, field].detach().cpu().numpy(),
-            step=t
-        )
 
 
 def train_allocator(args):

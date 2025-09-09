@@ -2,7 +2,7 @@ import os
 
 import argparse
 
-from cropgymzoo.eval_tianshou import run_episodes
+from cropgymzoo.eval_policy import run_episodes
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

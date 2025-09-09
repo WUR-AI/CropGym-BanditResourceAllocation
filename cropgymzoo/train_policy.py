@@ -7,7 +7,7 @@ from argparse import Namespace
 import pickle
 
 # for comet_ml
-from cropgymzoo.utils.callbacks_tianshou import (
+from cropgymzoo.utils.callbacks import (
     marl_save_checkpoint_fn,
     save_best_fn,
     create_comet_experiment,
@@ -22,7 +22,7 @@ import numpy as np
 import gymnasium as gym
 
 from cropgymzoo import _DEFAULT_MODEL_DIR
-from cropgymzoo.agents.networks_tianshou import (
+from cropgymzoo.agents.networks import (
     RecurrentGRU,
     RecurrentLSTM,
     MaskedActor,
@@ -34,7 +34,7 @@ from cropgymzoo.agents.networks_tianshou import (
 from cropgymzoo.agents.marl_algorithms_tianshou import IPPOPolicy, IPPOCollector, LagrangianIPPOPolicy
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
-from cropgymzoo.envs.wrappers_tianshou import MultiAgentVecNormObs
+from cropgymzoo.envs.wrappers import MultiAgentVecNormObs
 from cropgymzoo.utils.curriculum import CurriculumCallbackManager
 
 

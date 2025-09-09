@@ -2,6 +2,7 @@ import argparse
 import os
 import glob
 import re
+from datetime import datetime
 
 from pathlib import Path
 
@@ -21,7 +22,8 @@ from tianshou.policy import MultiAgentPolicyManager, BasePolicy
 from tianshou.utils.logger.base import BaseLogger
 
 from cropgymzoo import _SOURCE_PATH, _BASE_PATH
-from cropgymzoo.envs.wrappers_tianshou import MultiAgentVecNormObs
+from cropgymzoo.agents.nn_acgp import SelectionInfo
+from cropgymzoo.envs.wrappers import MultiAgentVecNormObs
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
 def run_test_callback(
@@ -134,6 +136,7 @@ def yearly_eval_test_fn(
     for year, agent_info in info_dict.items():
         across_years_reward[year] = []
         reward_year = []
+        agent_actions = []
         for a_id, full_info in agent_info.items():
             agent_reward = np.sum(full_info['Reward'])
             agent_nue = full_info['Nue'][-1]
@@ -141,9 +144,11 @@ def yearly_eval_test_fn(
             agent_budget_left = full_info['BudgetLeft'][-1]
             agent_yield = full_info['Yield'][-1]
             agent_n_action = full_info['Naction'][-1]
+            agent_action = full_info['Action']
 
             # put into year reward
             reward_year.append(agent_reward)
+            agent_actions.append(agent_action)
 
             if writer:
                 writer.add_scalar(f"test/{year}/{a_id}/Reward", agent_reward, epoch)
@@ -152,6 +157,8 @@ def yearly_eval_test_fn(
                 writer.add_scalar(f"test/{year}/{a_id}/BudgetLeft", agent_budget_left, epoch)
                 writer.add_scalar(f"test/{year}/{a_id}/Yield", agent_yield, epoch)
                 writer.add_scalar(f"test/{year}/{a_id}/Naction", agent_n_action, epoch)
+            else:
+                ...
         else:
             across_years_reward[year].append(np.sum(reward_year))
             # Logging intermediate results
@@ -507,3 +514,74 @@ def get_checkpoint(path):
         print("No matching files found.")
 
     return latest_file
+
+
+def _setup_bandit_comet(args):
+    if not os.path.isdir(os.path.join(_BASE_PATH, 'comet')):
+        print("Not using comet!")
+        return
+
+    with open(os.path.join(_BASE_PATH, 'comet', 'api'), 'r') as f:
+        api_key = f.readline()
+    # prefer env vars; fall back to sensible defaults
+    experiment = Experiment(
+        api_key=api_key,
+        project_name="cropgymzoo_allocation_experiments",
+        workspace="cropgymzoo",
+        log_code=True,
+        auto_metric_logging=True,
+        auto_histogram_weight_logging=True,
+        auto_histogram_gradient_logging=True,
+        auto_param_logging=True,
+        auto_histogram_tensorboard_logging=True
+    )
+
+    experiment.log_code(folder=_SOURCE_PATH)
+
+    name = f"s{args.seed}-allocation-agent-{datetime.now():%m%d-%H%M}"
+    experiment.set_name(name)
+    experiment.add_tag("allocation-bandit")
+    experiment.add_tag("NN-ACGP")
+
+    # log hyperparameters (robustly)
+    experiment.log_parameters({k: v for k, v in vars(args).items()})
+
+    return experiment
+
+
+def log_selection_info(experiment: Experiment, info: SelectionInfo, t):
+    experiment.log_histogram_3d(
+        info.mu,
+        name="mu",
+        step=t
+    )
+    experiment.log_histogram_3d(
+        info.std,
+        name="std",
+        step=t
+    )
+    if info.ucb is not None:
+        experiment.log_histogram_3d(
+            info.ucb,
+            name="ucb",
+            step=t
+        )
+    if info.beta_t:
+        experiment.log_metric("beta_t", info.beta_t, step=t)
+    if info.sampled_vals is not None:
+        experiment.log_histogram_3d(
+            info.sampled_vals,
+            name="sampled_vals",
+            step=t
+        )
+
+
+def log_candidates(experiment: Experiment, cand: torch.Tensor, t):
+    fields = cand.shape[1]
+
+    for field in range(fields):
+        experiment.log_histogram_3d(
+            f"field-{field+1}-candidates",
+            cand[:, field].detach().cpu().numpy(),
+            step=t
+        )
