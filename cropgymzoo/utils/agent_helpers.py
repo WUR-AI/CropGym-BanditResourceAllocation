@@ -11,7 +11,8 @@ def _make_base_arms(self, cap: float = 0.7) -> dict[str, np.ndarray]:
     for agent, max_budget in max_budgets.items():
         half_budget = max(0.0, float(max_budget) * cap)
         q = int(np.floor(half_budget / float(self.bins)))
-        base[agent] = (np.arange(q + 1, dtype=np.float32) * float(self.bins))
+        # divide by 10 to lower range
+        base[agent] = (np.arange(q + 1, dtype=np.float32) * float(self.bins)) / 10
     return base
 
 
