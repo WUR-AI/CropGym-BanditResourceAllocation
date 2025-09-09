@@ -1,4 +1,5 @@
 import unittest
+import argparse
 import os
 import gymnasium as gym
 
@@ -197,8 +198,11 @@ class TestAgentOrder(unittest.TestCase):
 
 class TestAllocationEnv(unittest.TestCase):
     def setUp(self):
+        args = argparse.Namespace()
+        args.use_model = True
         self.bandit_env = AllocationBandit(
             warm_up_eps=2,
+            args=args,
         )
 
     def test_init(self):
@@ -206,6 +210,15 @@ class TestAllocationEnv(unittest.TestCase):
 
         print(f"Context: {context}")
         print(f"Info: {info}")
+
+        self.assertTrue(True)
+
+    def test_step(self):
+        _, _ = self.bandit_env.reset()
+
+        _, reward, _, _, _ = self.bandit_env.step(self.bandit_env.action_space.sample())
+
+        print(reward)
 
         self.assertTrue(True)
 

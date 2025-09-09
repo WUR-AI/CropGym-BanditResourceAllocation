@@ -81,7 +81,7 @@ class AllocationBandit(gym.Env):
         self.farm.allocate_bandit_budgets(self.infos['AllocationAction'])
 
         # runs one episode of the MARL agent
-        infos_agents = self.env_agent.run([self.infos['year']])
+        infos_agents = self.env_agent.run([self.infos['year']], year_key=False)
 
         self.infos['AgentInfos'] = infos_agents
         reward = self._get_reward()
@@ -91,13 +91,13 @@ class AllocationBandit(gym.Env):
 
     def _get_reward(self):
         # convert budget left as profit
-        budget_lefts = np.array([self.farm.infos['AgentInfos'][agent]['BudgetLeft'][-1] for agent in self.parcel_meta_infos.keys()])
-        fertilizer_prices = np.array([self.farm.infos['AgentInfos'][agent]['FertilizerPrice'][-1] for agent in self.parcel_meta_infos.keys()])
+        budget_lefts = np.array([self.infos['AgentInfos'][agent]['BudgetLeft'][-1] for agent in self.parcel_meta_infos.keys()])
+        fertilizer_prices = np.array([self.infos['AgentInfos'][agent]['FertilizerPrice'][-1] for agent in self.parcel_meta_infos.keys()])
         # dot product below
         budget_left_profit = budget_lefts @ fertilizer_prices
 
         # add with actual profit
-        profit = np.array([np.sum(self.farm.infos['AgentInfos'][agent]['Profit']) for agent in self.parcel_meta_infos.keys()])
+        profit = np.array([np.sum(self.infos['AgentInfos'][agent]['Profit']) for agent in self.parcel_meta_infos.keys()])
         reward = profit + budget_left_profit
 
         return reward
@@ -134,7 +134,11 @@ class AllocationBandit(gym.Env):
 
     def _construct_info(self, options=None):
         if options is not None:
-            self.infos = {'options': options, 'seed': options.get('seed', 0)}
+            self.infos = {
+                'options': options,
+                'seed': options.get('seed', 0),
+                'year': options.get('year', self.rng.choice(self.years)),
+            }
         else:
             self.infos = {}
 
@@ -203,6 +207,7 @@ class AllocationBandit(gym.Env):
             years=self.years,
         )
 
+        self.env_agent = None
         if args is not None and hasattr(args, 'use_model'):
             saved_model = load_model(args)
             self.env_agent = MultiRLAgent(

@@ -29,11 +29,12 @@ class BaseAgent(ABC):
         self.env = env
         self.render = render
 
-    def run(self, years: list) -> dict:
+    def run(self, years: list, year_key=True) -> dict:
 
         info_dict = {}
         for year in years:
-            info_dict[year] = {}
+            if year_key:
+                info_dict[year] = {}
 
             self.env.reset(options={'year': year})
 
@@ -43,7 +44,10 @@ class BaseAgent(ABC):
                 action = self.get_action(agent)
 
                 if self.env.terminations[agent]:
-                    info_dict[year][agent] = info
+                    if year_key:
+                        info_dict[year][agent] = info
+                    else:
+                        info_dict[agent] = info
                     self.env.step(None)
                 else:
                     self.env.step(action)
@@ -119,10 +123,11 @@ class MultiRLAgent(BaseAgent):
 
         return out
 
-    def run(self, years: list) -> dict:
+    def run(self, years: list, year_key=True) -> dict:
         info_dict = {}
         for i, year in enumerate(years):
-            info_dict[year] = {}
+            if year_key:
+                info_dict[year] = {}
 
             next_states = {
                 ag: None for ag in self.agents
@@ -151,7 +156,10 @@ class MultiRLAgent(BaseAgent):
                 next_states[agent] = state
 
                 if self.env.terminations[agent]:
-                    info_dict[year][agent] = info  # grab info before agent dies
+                    if year_key:
+                        info_dict[year][agent] = info
+                    else:
+                        info_dict[agent] = info
                     self.env.step(None)
                 else:
                     self.env.step(action)
