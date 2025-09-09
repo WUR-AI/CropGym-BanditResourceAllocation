@@ -381,6 +381,7 @@ class NNAGPBandit:
             self.model.state_dict(),
             os.path.join(
                 _DEFAULT_MODEL_DIR,
+                "NN-ACGP-Bandit",
                 f"s{seed}_model{t if t is not None else ''}.pth"
             )
         )
