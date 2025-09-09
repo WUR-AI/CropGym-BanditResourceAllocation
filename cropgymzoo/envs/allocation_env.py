@@ -152,6 +152,7 @@ class AllocationBandit(gym.Env):
             }
         else:
             self.infos = {}
+        return self.infos
 
     def _get_default_reset_options(self):
         return {'year': self.rng.choice(self.years)}
@@ -216,7 +217,7 @@ class AllocationBandit(gym.Env):
             for iter_info in self.farm.warm_up_infos:
                 agent_info = iter_info.get(agent)
                 seq = agent_info.get(feature)
-                vals.append(np.mean(seq))
+                vals.append(np.mean(seq) / 1e6 if feature == 'IRRAD' else np.mean(seq))
             out.append(float(np.mean(vals)))
         return out
 

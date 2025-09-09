@@ -15,8 +15,10 @@ if __name__ == '__main__':
     parser.add_argument("--bandit_epochs", type=int, default=50)
     parser.add_argument("--action_candidate_length", type=int, default=2048)
     parser.add_argument("--model_name", type=str, default='s107_model50')
+    parser.add_argument("--no-comet", action='store_false', dest='use_comet')
     parser.set_defaults(
         use_model=True,
+        use_comet=True,
     )
     args = parser.parse_args()
 

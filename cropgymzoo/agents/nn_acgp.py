@@ -375,16 +375,19 @@ class NNAGPBandit:
         self.y_hist.append(torch.tensor([y_t], dtype=torch.get_default_dtype()))
         self.t += 1
 
-    def save(self, seed: int = None, t=None):
+    def save(self, seed: int = None, t=None, name: str = None):
         os.makedirs(os.path.join(_DEFAULT_MODEL_DIR, "NN-ACGP-Bandit"), exist_ok=True)
-        torch.save(
-            self.model.state_dict(),
-            os.path.join(
+        name_file = f"s{seed}_model{t if t is not None else ''}.pth" if name is None else f"{name}.pth"
+        file_dir = os.path.join(
                 _DEFAULT_MODEL_DIR,
                 "NN-ACGP-Bandit",
-                f"s{seed}_model{t if t is not None else ''}.pth"
-            )
+                name_file,
         )
+        torch.save(
+            self.model.state_dict(),
+            file_dir,
+        )
+        return file_dir
 
     def load(self, load_dir: str):
         state = torch.load(
