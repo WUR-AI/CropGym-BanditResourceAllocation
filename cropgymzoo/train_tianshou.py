@@ -62,7 +62,7 @@ except ImportError:
 def load_model(args: Namespace) -> dict:
 
     if not hasattr(args, 'model_dir'):
-        args.model_dir = 'GRU_PPO'
+        args.model_dir = 'MLP_PPO'
 
     model_dir = Path(str(os.path.join(_DEFAULT_MODEL_DIR, args.model_dir)))
 
