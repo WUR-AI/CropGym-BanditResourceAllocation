@@ -551,18 +551,18 @@ def _setup_bandit_comet(args):
 
 def log_selection_info(experiment: Experiment, info: SelectionInfo, t):
     experiment.log_histogram_3d(
-        info.mu,
+        info.mu.T,
         name="mu",
         step=t
     )
     experiment.log_histogram_3d(
-        info.std,
+        info.std.T,
         name="std",
         step=t
     )
     if info.ucb is not None:
         experiment.log_histogram_3d(
-            info.ucb,
+            info.ucb.T,
             name="ucb",
             step=t
         )
@@ -570,7 +570,7 @@ def log_selection_info(experiment: Experiment, info: SelectionInfo, t):
         experiment.log_metric("beta_t", info.beta_t, step=t)
     if info.sampled_vals is not None:
         experiment.log_histogram_3d(
-            info.sampled_vals,
+            info.sampled_vals.T,
             name="sampled_vals",
             step=t
         )

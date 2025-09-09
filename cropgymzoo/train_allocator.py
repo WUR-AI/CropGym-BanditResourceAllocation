@@ -9,8 +9,8 @@ import torch
 import numpy as np
 
 from cropgymzoo.agents.nn_acgp import NNAGPBandit
-
 from cropgymzoo.envs.allocation_env import AllocationBandit
+from tianshou.utils.statistics import RunningMeanStd
 
 
 def min_max_normalize(x, min_val=0, max_val=300000) -> float:
@@ -47,7 +47,7 @@ def train_allocator(args):
     bandit = NNAGPBandit(
         d_theta=d_theta,
         d_x=d_x,
-        m=8,
+        m=16,
         Q=1,
         device=torch.device("cpu")
     )
@@ -55,6 +55,9 @@ def train_allocator(args):
     # make action candidates for each round. Get super arms and randomly sample
     action_candidates = env.super_arms
     num_candidates = args.action_candidate_length
+
+    # initialize running mean
+    rms = RunningMeanStd()
 
     # put the training loop here
     for t in range(1, args.rounds + 1):
@@ -65,7 +68,11 @@ def train_allocator(args):
             seed=args.seed
         )
         if comet_experiment:
-            comet_experiment.log_metric("episode/year", int(env_info['year']), step=t)
+            comet_experiment.log_metric("episode/year", int(env_info['year']))
+
+        # normalize
+        rms.update(theta_t)
+        rms.norm(theta_t)
 
         # convert to numpy
         theta_t = torch.from_numpy(theta_t)
@@ -116,7 +123,13 @@ def train_allocator(args):
 
         # save the model iteratively
         if t % 50 == 0:
-            file_dir = bandit.save(args.seed, t, )
+            file_dir = bandit.save(
+                seed=args.seed,
+                t=t,
+                args=args,
+                rms=rms,
+            )
+
             if comet_experiment:
                 comet_experiment.log_asset(
                     file_dir,
