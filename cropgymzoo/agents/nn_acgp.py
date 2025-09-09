@@ -376,7 +376,7 @@ class NNAGPBandit:
         self.t += 1
 
     def save(self, seed: int = None, t=None):
-        os.makedirs(_DEFAULT_MODEL_DIR, exist_ok=True)
+        os.makedirs(os.path.join(_DEFAULT_MODEL_DIR, "NN-ACGP-Bandit"), exist_ok=True)
         torch.save(
             self.model.state_dict(),
             os.path.join(
