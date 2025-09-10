@@ -276,10 +276,18 @@ class NNAGP(nn.Module):
     # ---- posterior over a finite candidate set for one context θ_t (UCB, TS use this)
     @torch.no_grad()
     def posterior_on_candidates(
-        self, Xc: torch.Tensor, theta: torch.Tensor, train_X: torch.Tensor, train_Theta: torch.Tensor, y: torch.Tensor
+            self,
+            Xc: torch.Tensor,
+            theta: torch.Tensor,
+            train_X: torch.Tensor,
+            train_Theta: torch.Tensor,
+            y: torch.Tensor,
+            calculate_covariance: bool = True,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # returns μ_c (M,), σ_c (M,), and (optional) full covariance Σ_c (M,M)
         mu, std = self.predict(Xc, theta.expand(Xc.shape[0], -1), train_X, train_Theta, y)
+        if calculate_covariance:
+            return mu, std, None
         # Build covariance only when needed (e.g., TS)
         # Σ = K_cand - K_*^T (K+σ^2I)^{-1} K_*
         G_tr = self._train_cache["G"]
@@ -356,11 +364,43 @@ class NNAGPBandit:
         X = torch.vstack(self.x_hist)
         Theta = torch.vstack(self.theta_hist)
         y = torch.hstack(self.y_hist)
-        mu, std, _ = self.model.posterior_on_candidates(X_candidates, theta_t.unsqueeze(0), X, Theta, y)
+        mu, std, _ = self.model.posterior_on_candidates(X_candidates, theta_t.unsqueeze(0), X, Theta, y, calculate_covariance=False)
         beta_t = beta_finite_candidates(self.t, X_candidates.shape[0], delta)
         ucb = mu + math.sqrt(beta_t) * std
         idx = int(torch.argmax(ucb).item())
         return X_candidates[idx], SelectionInfo(mu=mu.cpu(), std=std.cpu(), ucb=ucb.cpu(), beta_t=beta_t, rule="ucb")
+
+    @torch.no_grad()
+    def select_ucb_streaming(self, theta_t, all_actions, chunk=8192, delta=0.1):
+        """
+        all_actions: (M, d_x) tensor (can be on disk-mapped or memmap if huge)
+        Returns the best action under UCB without ever materializing all M scores.
+        """
+        # pull the posterior data once
+        if not self.y_hist:
+            # cold start: pick random
+            idx = torch.randint(0, all_actions.shape[0], (1,)).item()
+            return all_actions[idx], None
+
+        X = torch.vstack(self.x_hist)
+        Theta = torch.vstack(self.theta_hist)
+        y = torch.hstack(self.y_hist)
+        beta_t = beta_finite_candidates(self.t, chunk, delta)  # use chunk size conservatively
+
+        best_ucb = -float("inf")
+        best_x = None
+
+        for i in range(0, all_actions.shape[0], chunk):
+            Xc = all_actions[i:i + chunk]
+            # only need mean & std; DO NOT build candidate covariance
+            mu, std, _ = self.model.posterior_on_candidates(Xc, theta_t.unsqueeze(0), X, Theta, y, calculate_covariance=False)
+            ucb = mu + (beta_t ** 0.5) * std
+            j = int(torch.argmax(ucb))
+            if ucb[j].item() > best_ucb:
+                best_ucb = ucb[j].item()
+                best_x = Xc[j].clone()
+
+        return best_x, {"best_ucb": best_ucb, "beta_t": beta_t}
 
     # ---- choose x_t by Thompson Sampling over candidates (supp §6.1)   [oai_citation:12‡9244_Contextual_Gaussian_Proce_Supplementary Material.pdf](file-service://file-VVr9GXm9MSGcjuonPbh1BE)
     @torch.no_grad()

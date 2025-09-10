@@ -51,7 +51,7 @@ def train_allocator(args):
         d_theta=d_theta,
         d_x=d_x,
         m=m,
-        Q=1,
+        Q=args.q,
         lr=args.bandit_lr,
         device=torch.device("cpu")
     )
@@ -81,29 +81,37 @@ def train_allocator(args):
         # convert to numpy
         theta_t = torch.from_numpy(theta_t)
 
-        # candidate set for actions; sampled from the super_arms array
-        indices = torch.randperm(action_candidates.shape[0])[:num_candidates]
-        x_cand = action_candidates[indices]
-        x_cand = torch.from_numpy(x_cand)
+        if not args.streaming:
+            # candidate set for actions; sampled from the super_arms array
+            indices = torch.randperm(action_candidates.shape[0])[:num_candidates]
+            x_cand = action_candidates[indices]
+            x_cand = torch.from_numpy(x_cand)
+            if comet_experiment:
+                comet_experiment.log_histogram_3d(
+                    x_cand.T,
+                    name="x_cand",
+                    step=t,
+                )
 
         # train the surrogate a bit on accumulated data
         loss_val = bandit.train_step(steps=args.bandit_epochs, lr=args.bandit_lr)
         print(f"round {t}, loss: {loss_val}")
         if comet_experiment:
             comet_experiment.log_metric("loss", loss_val, step=t)
-            comet_experiment.log_histogram_3d(
-                x_cand.T,
-                name="x_cand",
-                step=t,
-            )
 
-
-        # pick by UCB (or switch to bandit.select_ts(...))
-        x_t, selection_info = bandit.select_ucb(theta_t, x_cand, delta=0.1)
-        if isinstance(x_t, np.ndarray):
-            x_t = torch.from_numpy(x_t)
-        if comet_experiment:
-            log_selection_info(comet_experiment, selection_info, t)
+        if not args.streaming:
+            # pick by UCB (or switch to bandit.select_ts(...))
+            x_t, selection_info = bandit.select_ucb(theta_t, x_cand, delta=0.1)
+            if isinstance(x_t, np.ndarray):
+                x_t = torch.from_numpy(x_t)
+            if comet_experiment:
+                log_selection_info(comet_experiment, selection_info, t)
+        else:
+            x_t, best = bandit.select_ucb_streaming(theta_t, torch.from_numpy(action_candidates), delta=0.1)
+            if isinstance(x_t, np.ndarray):
+                x_t = torch.from_numpy(x_t)
+            if comet_experiment:
+                comet_experiment.log_metrics(best, step=t) if best is not None else None
 
         # run env and normalize reward
         _, reward_env, _, _, step_info = env.step(x_t)
