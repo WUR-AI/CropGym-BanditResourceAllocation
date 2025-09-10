@@ -43,12 +43,16 @@ def train_allocator(args):
     # context and action dims
     d_theta, d_x = env.observation_space.shape[0], env.action_space.shape[0]
 
+    m = d_theta//10 + d_x//3 + 3
+    print(f"d_theta: {d_theta}, d_x: {d_x}. So, m: {m}")
+
     # put the bandit algorithm here
     bandit = NNAGPBandit(
         d_theta=d_theta,
         d_x=d_x,
-        m=16,
+        m=m,
         Q=1,
+        lr=args.bandit_lr,
         device=torch.device("cpu")
     )
 
@@ -72,7 +76,7 @@ def train_allocator(args):
 
         # normalize
         rms.update(theta_t)
-        rms.norm(theta_t)
+        theta_t = rms.norm(theta_t)
 
         # convert to numpy
         theta_t = torch.from_numpy(theta_t)
@@ -87,6 +91,11 @@ def train_allocator(args):
         print(f"round {t}, loss: {loss_val}")
         if comet_experiment:
             comet_experiment.log_metric("loss", loss_val, step=t)
+            comet_experiment.log_histogram_3d(
+                x_cand.T,
+                name="x_cand",
+                step=t,
+            )
 
 
         # pick by UCB (or switch to bandit.select_ts(...))

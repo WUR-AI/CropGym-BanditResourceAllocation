@@ -200,7 +200,7 @@ class NNAGP(nn.Module):
         self.g_net = FeatureNet(d_theta, m)
         self.mogp = CollaborativeMOGP(d_x, m, Q=Q)
         self.raw_noise = nn.Parameter(torch.tensor(-2.0))  # σ_ε ≈ 0.12
-        self.jitter = 1e-6
+        self.jitter = 1e-4
         self.device = device or torch.device("cpu")
         self.to(self.device)
 
@@ -209,7 +209,8 @@ class NNAGP(nn.Module):
 
     @property
     def noise(self) -> torch.Tensor:
-        return positive_param(self.raw_noise)
+        sigma = positive_param(self.raw_noise)
+        return torch.clamp(sigma, min=1e-3)  # floor the noise
 
     def _clear_cache(self):
         self._train_cache.clear()
@@ -219,6 +220,7 @@ class NNAGP(nn.Module):
         act, context_in, y = act.to(self.device), context_in.to(self.device), y.to(self.device)
         G = self.g_net(context_in)                        # (n,m)
         Kt = self.mogp.K_tilde(act, context_in, act, context_in, G, G)  # (n,n)
+        Kt = 0.5 * (Kt + Kt.T)
         Kn = add_jitter(Kt, self.jitter) + self.noise**2 * torch.eye(act.shape[0], device=act.device)
         L = torch.linalg.cholesky(Kn)
         alpha = torch.cholesky_solve(y.unsqueeze(1), L).squeeze(1)  # (n,)
@@ -237,8 +239,11 @@ class NNAGP(nn.Module):
     def predict(self, X_star: torch.Tensor, Theta_star: torch.Tensor,
                 train_X: torch.Tensor, train_Theta: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         device = self.device
-        X_star = X_star.to(device); Theta_star = Theta_star.to(device)
-        train_X = train_X.to(device); train_Theta = train_Theta.to(device); y = y.to(device)
+        X_star = X_star.to(device)
+        Theta_star = Theta_star.to(device)
+        train_X = train_X.to(device)
+        train_Theta = train_Theta.to(device)
+        y = y.to(device)
 
         # reuse cached Cholesky if consistent with latest parameters/inputs
         need_refit = not self._train_cache or \
@@ -308,12 +313,14 @@ class SelectionInfo:
 
 
 class NNAGPBandit:
-    def __init__(self, d_theta: int, d_x: int, m: int = 8, Q: int = 1, device: Optional[torch.device] = None):
+    def __init__(self, d_theta: int, d_x: int, m: int = 8, Q: int = 1, lr: float = 3e-3, device: Optional[torch.device] = None):
         self.model = NNAGP(d_theta, d_x, m=m, Q=Q, device=device or torch.device("cpu"))
         self.theta_hist: List[torch.Tensor] = []
         self.x_hist: List[torch.Tensor] = []
         self.y_hist: List[torch.Tensor] = []
         self.t = 1
+
+        self.opt = torch.optim.Adam(self.model.parameters(), lr=lr, weight_decay=1e-4)
 
     # ---- training step: maximize log marginal likelihood (Eq. (5))   [oai_citation:10‡9244_Contextual_Gaussian_Proce.pdf](file-service://file-TsvLCc4k6gDpym1pL6Qi5r)
     def train_step(self, steps: int = 200, lr: float = 3e-3) -> float:
@@ -323,14 +330,16 @@ class NNAGPBandit:
         theta = torch.vstack(self.theta_hist)
         y = torch.hstack(self.y_hist)
         self.model._clear_cache()
-        opt = torch.optim.Adam(self.model.parameters(), lr=lr)
+
         loss_val = 0.0
         for _ in range(steps):
-            opt.zero_grad()
+            self.opt.zero_grad()
             loss = self.model.nll(x, theta, y)
+            # n = x.shape[0]
+            # print(f"[diag] nll={float(loss):.3f}  per_samp={float(loss) / n:.4f}  sigma={float(self.model.noise):.4g}")
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5.0)
-            opt.step()
+            self.opt.step()
             loss_val = float(loss.detach().cpu())
         return loss_val
 
@@ -344,7 +353,9 @@ class NNAGPBandit:
             std = torch.ones(X_candidates.shape[0])
             return X_candidates[idx], SelectionInfo(mu=mu, std=std, ucb=None, beta_t=None, rule="ucb")
 
-        X = torch.vstack(self.x_hist); Theta = torch.vstack(self.theta_hist); y = torch.hstack(self.y_hist)
+        X = torch.vstack(self.x_hist)
+        Theta = torch.vstack(self.theta_hist)
+        y = torch.hstack(self.y_hist)
         mu, std, _ = self.model.posterior_on_candidates(X_candidates, theta_t.unsqueeze(0), X, Theta, y)
         beta_t = beta_finite_candidates(self.t, X_candidates.shape[0], delta)
         ucb = mu + math.sqrt(beta_t) * std
@@ -375,6 +386,48 @@ class NNAGPBandit:
         self.y_hist.append(torch.tensor([y_t], dtype=torch.get_default_dtype()))
         self.t += 1
 
+    def export_posterior(self):
+        """Return everything needed for posterior predictions."""
+        X = torch.vstack(self.x_hist) if self.x_hist else torch.empty(0, self.model.mogp.k_shared[
+            0].raw_lengthscale.numel())
+        Theta = torch.vstack(self.theta_hist) if self.theta_hist else torch.empty(0,
+                                                                                  self.model.g_net.net[0].in_features)
+        y = torch.hstack(self.y_hist) if self.y_hist else torch.empty(0)
+        cache = None
+        if self.model._train_cache:
+            # optional speed-up: store Cholesky and alpha so we don’t recompute
+            cache = {
+                "L": self.model._train_cache["L"].cpu(),
+                "alpha": self.model._train_cache["alpha"].cpu(),
+                "G": self.model._train_cache["G"].cpu(),
+            }
+        return {
+            "model_state": self.model.state_dict(),
+            "X": X.cpu(),
+            "Theta": Theta.cpu(),
+            "y": y.cpu(),
+            "cache": cache,
+        }
+
+    def import_posterior(self, blob: dict, map_location="cpu"):
+        self.model.load_state_dict(blob["model_state"])
+        self.x_hist = [blob["X"].to(map_location)]
+        self.theta_hist = [blob["Theta"].to(map_location)]
+        self.y_hist = [blob["y"].to(map_location)]
+        # rebuild cache (optional)
+        self.model._clear_cache()
+
+        if blob.get("cache"):
+            c = blob["cache"]
+            self.model._train_cache = {
+                "X": blob["X"].to(map_location),
+                "Theta": blob["Theta"].to(map_location),
+                "y": blob["y"].to(map_location),
+                "L": c["L"].to(map_location),
+                "alpha": c["alpha"].to(map_location),
+                "G": c["G"].to(map_location),
+            }
+
     def save(
             self,
             seed: int = None,
@@ -390,22 +443,24 @@ class NNAGPBandit:
                 "NN-ACGP-Bandit",
                 name_file,
         )
+
+        dict_to_save: dict = self.export_posterior()
+        dict_to_save["context_rms"] = rms
+        dict_to_save["args"] = args
+
         torch.save(
-            {
-                "model": self.model.state_dict(),
-                "context_rms": rms,
-                "args": args,
-            },
+            dict_to_save,
             file_dir,
         )
         return file_dir
 
-    def load(self, load_dir: str):
+    def load(self, load_dir: str = None):
         state = torch.load(
             os.path.join(
                 _DEFAULT_MODEL_DIR,
                 load_dir
             )
         )
-        self.model.load_state_dict(state)
+        self.import_posterior(state)
+        return state
 
