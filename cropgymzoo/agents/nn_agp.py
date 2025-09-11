@@ -282,11 +282,11 @@ class NNAGP(nn.Module):
             train_X: torch.Tensor,
             train_Theta: torch.Tensor,
             y: torch.Tensor,
-            calculate_covariance: bool = True,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            calculate_covariance: bool = False,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         # returns μ_c (M,), σ_c (M,), and (optional) full covariance Σ_c (M,M)
         mu, std = self.predict(Xc, theta.expand(Xc.shape[0], -1), train_X, train_Theta, y)
-        if calculate_covariance:
+        if not calculate_covariance:
             return mu, std, None
         # Build covariance only when needed (e.g., TS)
         # Σ = K_cand - K_*^T (K+σ^2I)^{-1} K_*
@@ -371,7 +371,7 @@ class NNAGPBandit:
         return X_candidates[idx], SelectionInfo(mu=mu.cpu(), std=std.cpu(), ucb=ucb.cpu(), beta_t=beta_t, rule="ucb")
 
     @torch.no_grad()
-    def select_ucb_streaming(self, theta_t, all_actions, chunk=8192, delta=0.1):
+    def select_ucb_streaming(self, theta_t, all_actions, chunk=16000, delta=0.1):
         """
         all_actions: (M, d_x) tensor (can be on disk-mapped or memmap if huge)
         Returns the best action under UCB without ever materializing all M scores.
@@ -476,11 +476,11 @@ class NNAGPBandit:
             args = None,
             rms = None,
     ):
-        os.makedirs(os.path.join(_DEFAULT_MODEL_DIR, "NN-ACGP-Bandit"), exist_ok=True)
+        os.makedirs(os.path.join(_DEFAULT_MODEL_DIR, f"NN-ACGP-Bandit{'-streaming' if args.streaming else ''}"), exist_ok=True)
         name_file = f"s{seed}_model{t if t is not None else ''}.pth" if name is None else f"{name}.pth"
         file_dir = os.path.join(
                 _DEFAULT_MODEL_DIR,
-                "NN-ACGP-Bandit",
+                f"NN-ACGP-Bandit{'-streaming' if args.streaming else ''}",
                 name_file,
         )
 

@@ -8,7 +8,7 @@ import torch
 
 import numpy as np
 
-from cropgymzoo.agents.nn_acgp import NNAGPBandit
+from cropgymzoo.agents.nn_agp import NNAGPBandit
 from cropgymzoo.envs.allocation_env import AllocationBandit
 from tianshou.utils.statistics import RunningMeanStd
 
