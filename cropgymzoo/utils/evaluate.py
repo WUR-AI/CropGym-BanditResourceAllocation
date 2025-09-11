@@ -18,6 +18,10 @@ def evaluate_policy(
 ) -> dict[int, dict[str, dict[str, list]]]:
     """Evaluate a policy on CropGymZoo."""
 
+    policy.eval()
+    for p in policy.policies:
+        p.deterministic_eval = True
+
     if agents is None:
         agents = env.possible_agents
 

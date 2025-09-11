@@ -203,6 +203,7 @@ class TestAllocationEnv(unittest.TestCase):
         self.bandit_env = AllocationBandit(
             warm_up_eps=2,
             args=args,
+            action_type='continuous',
         )
 
     def test_init(self):
@@ -236,6 +237,24 @@ class TestAllocationEnv(unittest.TestCase):
         print(len(self.bandit_env.farm.warm_up_infos))
 
         self.assertTrue(init_len < len(self.bandit_env.farm.warm_up_infos))
+
+    def test_policy_deterministic(self):
+        actions = np.ones((self.bandit_env.n_fields,), dtype=np.float32)
+
+        _, _ = self.bandit_env.reset(options={'year': 2000})
+        _, reward_ori, _, _, step_info = self.bandit_env.step(actions)
+
+        _, _ = self.bandit_env.reset(options={'year': 2000})
+        _, reward, _, _, step_info = self.bandit_env.step(actions)
+
+        _, _ = self.bandit_env.reset(options={'year': 2000})
+        _, reward_late, _, _, step_info = self.bandit_env.step(actions)
+
+        print(f"Previous  {reward_ori}, new {reward}, newer {reward_late}")
+
+        self.assertEqual(reward_ori, reward)
+        self.assertEqual(reward_late, reward)
+        self.assertEqual(reward_ori, reward_late)
 
 
 

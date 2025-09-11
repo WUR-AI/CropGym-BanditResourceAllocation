@@ -67,6 +67,8 @@ class AllocationBandit(gym.Env):
 
         assert 'year' in options, "If testing, make sure to pass 'year' in the options dictionary!"
 
+        self.year = options.get('year')
+
         options['seed'] = seed
 
         self.farm.reset(seed=seed, options=options)
@@ -84,7 +86,7 @@ class AllocationBandit(gym.Env):
         self.farm.allocate_bandit_budgets(self.infos['AllocationAction'])
 
         # runs one episode of the MARL agent
-        infos_agents = self.env_agent.run([self.infos['year']], year_key=False)
+        infos_agents = self.env_agent.run([self.year], year_key=False)
 
         self.infos['AgentInfos'] = infos_agents
         reward = self._get_reward()

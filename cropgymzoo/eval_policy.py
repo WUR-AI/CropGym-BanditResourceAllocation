@@ -15,6 +15,7 @@ from cropgymzoo.train_policy import (
     make_ppo_policy,
     load_model
 )
+from cropgymzoo.agents.marl_algorithms_tianshou import IPPOPolicy
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 from cropgymzoo.utils.plotters import plot_year, plot_results
 
@@ -98,6 +99,8 @@ class MultiRLAgent(BaseAgent):
         # load models and rms
         for agent, policy in self.policy_manager.policies.items():
             policy.load_state_dict(saved_model['models'][agent], strict=True)
+            policy.eval()
+            policy.deterministic_eval = True
 
         self.obs_rms = saved_model["obs_rms"]
 

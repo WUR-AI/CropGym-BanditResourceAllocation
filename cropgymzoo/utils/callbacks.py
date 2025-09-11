@@ -76,6 +76,8 @@ def yearly_eval_test_fn(
 ):
     # shift to eval mode
     policy_mgr.eval()
+    for policy in policy_mgr.policies:
+        policy.deterministic_eval = True
 
     reset_options_list = [
         year for year in range(2010, 2011)
@@ -175,6 +177,8 @@ def yearly_eval_test_fn(
 
     # put back to train mode
     policy_mgr.train()
+    for policy in policy_mgr.policies:
+        policy.deterministic_eval = False
 
     return mean_reward
 
