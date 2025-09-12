@@ -320,6 +320,23 @@ class SelectionInfo:
     rule: str = "ucb"
 
 
+def ucb_components(mu: torch.Tensor, std: torch.Tensor, beta_t: float):
+    """
+    Inputs
+      mu, std: shape (M,) over candidates
+      beta_t:  scalar > 0
+    Returns
+      exploit = mu
+      explore = sqrt(beta_t) * std
+      ucb     = exploit + explore
+    """
+    scale = torch.sqrt(torch.as_tensor(beta_t, dtype=mu.dtype, device=mu.device))
+    explore = scale * std
+    exploit = mu
+    ucb = exploit + explore
+    return exploit, explore, ucb
+
+
 class NNAGPBandit:
     def __init__(self, d_theta: int, d_x: int, m: int = 8, Q: int = 1, lr: float = 3e-3, device: Optional[torch.device] = None):
         self.model = NNAGP(d_theta, d_x, m=m, Q=Q, device=device or torch.device("cpu"))
@@ -353,7 +370,13 @@ class NNAGPBandit:
 
     # ---- choose x_t by UCB over a finite candidate set for current θ_t (Eq. (3))   [oai_citation:11‡9244_Contextual_Gaussian_Proce.pdf](file-service://file-TsvLCc4k6gDpym1pL6Qi5r)
     @torch.no_grad()
-    def select_ucb(self, theta_t: torch.Tensor, X_candidates: torch.Tensor, delta: float = 0.1) -> Tuple[torch.Tensor, SelectionInfo]:
+    def select_ucb(
+            self,
+            theta_t: torch.Tensor,
+            X_candidates: torch.Tensor,
+            delta: float = 0.1,
+            deterministic: bool = False,
+    ) -> Tuple[torch.Tensor, SelectionInfo]:
         if len(self.y_hist) == 0:
             # cold-start: pick random
             idx = torch.randint(0, X_candidates.shape[0], (1,)).item()
@@ -365,13 +388,24 @@ class NNAGPBandit:
         Theta = torch.vstack(self.theta_hist)
         y = torch.hstack(self.y_hist)
         mu, std, _ = self.model.posterior_on_candidates(X_candidates, theta_t.unsqueeze(0), X, Theta, y, calculate_covariance=False)
-        beta_t = beta_finite_candidates(self.t, X_candidates.shape[0], delta)
-        ucb = mu + math.sqrt(beta_t) * std
+        beta_t = beta_finite_candidates(
+            self.t,
+            X_candidates.shape[0],
+            delta
+        ) if not deterministic else 0
+        ucb = mu + beta_t ** 0.5 * std
         idx = int(torch.argmax(ucb).item())
         return X_candidates[idx], SelectionInfo(mu=mu.cpu(), std=std.cpu(), ucb=ucb.cpu(), beta_t=beta_t, rule="ucb")
 
     @torch.no_grad()
-    def select_ucb_streaming(self, theta_t, all_actions, chunk=16000, delta=0.1):
+    def select_ucb_streaming(
+            self,
+            theta_t,
+            all_actions,
+            chunk=16000,
+            delta=0.1,
+            deterministic=False,
+    )->Tuple[torch.Tensor, dict | None]:
         """
         all_actions: (M, d_x) tensor (can be on disk-mapped or memmap if huge)
         Returns the best action under UCB without ever materializing all M scores.
@@ -385,7 +419,11 @@ class NNAGPBandit:
         X = torch.vstack(self.x_hist)
         Theta = torch.vstack(self.theta_hist)
         y = torch.hstack(self.y_hist)
-        beta_t = beta_finite_candidates(self.t, chunk, delta)  # use chunk size conservatively
+        beta_t = beta_finite_candidates(
+            self.t,
+            chunk, # use chunk size conservatively
+            delta
+        )  if not deterministic else 0
 
         best_ucb = -float("inf")
         best_x = None

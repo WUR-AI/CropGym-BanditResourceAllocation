@@ -1,25 +1,17 @@
 import warnings
 
-from cropgymzoo.utils.callbacks import _setup_bandit_comet, log_selection_info
-
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 import torch
 
 import numpy as np
 
+from cropgymzoo.eval_allocator import run_eval_allocator
 from cropgymzoo.agents.nn_agp import NNAGPBandit
+from cropgymzoo.utils.agent_helpers import min_max_normalize
+from cropgymzoo.utils.callbacks import _setup_bandit_comet, log_selection_info
 from cropgymzoo.envs.allocation_env import AllocationBandit
 from tianshou.utils.statistics import RunningMeanStd
-
-
-def min_max_normalize(x, min_val=0, max_val=300000) -> float:
-    """Scale from [min_val, max_val] -> [0, 1]."""
-    return (x - min_val) / (max_val - min_val)
-
-def min_max_denormalize(x_norm, min_val=0, max_val=300000) -> float:
-    """Scale from [0, 1] -> [min_val, max_val]."""
-    return x_norm * (max_val - min_val) + min_val
 
 
 def train_allocator(args):
@@ -62,6 +54,8 @@ def train_allocator(args):
 
     # initialize running mean
     rms = RunningMeanStd()
+
+    test_step = 0
 
     # put the training loop here
     for t in range(1, args.rounds + 1):
@@ -137,6 +131,29 @@ def train_allocator(args):
             )
         bandit.update(theta_t, x_t, y_t)
 
+        # eval the allocator after rounds
+        if t % 10 == 0:
+            # test bandit
+            bandit.model.eval()
+
+            raw_reward, normalized_reward = run_eval_allocator(
+                env=env,
+                bandit=bandit,
+                year=2000,
+                rms=rms,
+                candidate_size=16_000
+            )
+            bandit.model.train()
+            if comet_experiment:
+                comet_experiment.log_metrics(
+                    {
+                        "test_reward/raw": float(raw_reward),
+                        "test_reward/normalised": float(normalized_reward),
+                    },
+                    step=test_step,
+                )
+
+            test_step += 10
 
         # save the model iteratively
         if t % 50 == 0:
