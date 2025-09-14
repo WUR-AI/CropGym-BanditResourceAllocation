@@ -20,6 +20,67 @@ from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 from cropgymzoo.utils.plotters import plot_year, plot_results
 
 
+def load_policy(
+        env: pettingzoo.AECEnv,
+        saved_model: Any,
+):
+    args = saved_model['args']
+
+    agent = env.agents[0]
+    obs_dim = env.sample_observation_space_agent().shape
+    act_dim = env.action_spaces[agent].n
+
+    policies = {
+        a: make_ppo_policy(
+            obs_dim=obs_dim,
+            act_dim=act_dim,
+            hidden=args.hidden_layers,
+            use_icm=args.use_icm,
+            args=args
+        ) for a in env.agents
+    }
+    print(f"Using {'LagrangianIPPO' if args.lagrangian_ppo else 'IPPO'} policy!")
+
+    policy_manager = MultiAgentPolicyManager(
+        policies=list(policies.values()),
+        env=PettingZooEnv(env),
+    )
+
+    # load models and rms
+    for agent, policy in policy_manager.policies.items():
+        policy.load_state_dict(saved_model['models'][agent], strict=True)
+        policy.eval()
+        policy.deterministic_eval = True
+
+    obs_rms = saved_model["obs_rms"]
+
+    return policy_manager, obs_rms
+
+
+def predict_policy(
+        obs,
+        agent,
+        mask,
+        policy,
+        obs_rms,
+        info,
+        next_states = None,
+) -> tuple[int, Batch | None]:
+    out = policy.policies[agent](
+        batch=Batch(
+            {
+                'obs': {
+                    'obs': obs_rms.norm(obs['observation']),
+                    'mask': mask,
+                },
+                'info': info,
+            }
+        ),
+        state=Batch(next_states[agent]) if next_states is not None else None,
+    )
+    return out.act.item(), None if next_states is None else out.state
+
+
 class BaseAgent(ABC):
     def __init__(
         self,

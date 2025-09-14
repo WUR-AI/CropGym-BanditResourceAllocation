@@ -1,3 +1,4 @@
+import argparse
 import os
 from functools import partial
 import datetime
@@ -59,8 +60,10 @@ except ImportError:
     tianshou = None
 
 
-def load_model(args: Namespace) -> dict:
+def load_model(args: Namespace | None = None) -> dict:
 
+    if args is None:
+        args = argparse.Namespace()
     if not hasattr(args, 'model_dir'):
         args.model_dir = 'MLP_PPO'
 

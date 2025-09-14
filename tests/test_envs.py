@@ -4,11 +4,14 @@ import os
 import gymnasium as gym
 
 import numpy as np
+from sqlalchemy.sql.operators import in_op
 
 from cropgymzoo import _DEFAULT_PLOTDIR
 from cropgymzoo.envs.allocation_env import AllocationBandit
 from cropgymzoo.envs.singular_env import ParcelEnv
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
+from cropgymzoo.train_policy import load_model
+from cropgymzoo.eval_policy import load_policy, predict_policy
 from cropgymzoo.utils.plotters import plot_results
 
 try:
@@ -142,6 +145,43 @@ class TestEnvPlotter(unittest.TestCase):
         for agent in self.env.agent_iter():
             _, _, _, _, info = self.env.last()
             action = self.env.farmers_practice(agent, info)
+            if self.env.terminations[agent]:
+                infos[agent] = info
+            if self.env.terminations[agent]:
+                infos[agent] = info
+                self.env.step(None)
+            else:
+                self.env.step(action)
+
+        plot_results(
+            infos,
+            save_path=os.path.join(_DEFAULT_PLOTDIR, 'test_episode.png'),
+        )
+
+        self.env.render()
+
+        self.assertTrue(True)
+
+    def test_episode_trained_mlp(self):
+
+        policy, rms = load_policy(
+            self.env,
+            load_model()
+        )
+
+        self.env.reset(options={'year': 1999})
+
+        infos = {}
+        for agent in self.env.agent_iter():
+            obs, _, _, _, info = self.env.last()
+            action, _ = predict_policy(
+                obs=obs,
+                agent=agent,
+                mask=self.env._get_mask(agent),
+                policy=policy,
+                obs_rms=rms,
+                info=info,
+            )
             if self.env.terminations[agent]:
                 infos[agent] = info
             if self.env.terminations[agent]:
