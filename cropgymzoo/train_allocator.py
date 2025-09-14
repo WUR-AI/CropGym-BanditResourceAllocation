@@ -6,6 +6,8 @@ import torch
 
 import numpy as np
 
+import datetime
+
 from cropgymzoo.eval_allocator import run_eval_allocator
 from cropgymzoo.agents.nn_agp import NNAGPBandit
 from cropgymzoo.utils.agent_helpers import min_max_normalize
@@ -15,6 +17,7 @@ from tianshou.utils.statistics import RunningMeanStd
 
 
 def train_allocator(args):
+    log_folder_name = f"NN-AGP-Bandit_{datetime.datetime.now():%m%d-%H%M}"
     # initialize comet if using
     comet_experiment = None
     if args.use_comet:
@@ -164,6 +167,7 @@ def train_allocator(args):
             file_dir = bandit.save(
                 seed=args.seed,
                 t=t,
+                name=log_folder_name,
                 args=args,
                 rms=rms,
             )

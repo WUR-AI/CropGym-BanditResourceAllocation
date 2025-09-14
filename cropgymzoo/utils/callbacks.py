@@ -545,7 +545,7 @@ def _setup_bandit_comet(args):
     name = f"s{args.seed}-allocation-agent-{datetime.now():%m%d-%H%M}"
     experiment.set_name(name)
     experiment.add_tag("allocation-bandit")
-    experiment.add_tag("NN-ACGP")
+    experiment.add_tag("NN-AGP")
 
     # log hyperparameters (robustly)
     experiment.log_parameters({k: v for k, v in vars(args).items()})

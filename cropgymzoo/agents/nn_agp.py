@@ -1,3 +1,4 @@
+import datetime
 import os
 import math
 from dataclasses import dataclass
@@ -7,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from cropgymzoo import _DEFAULT_MODEL_DIR
+from cropgymzoo import _DEFAULT_MODEL_DIR, _DEFAULT_LOGDIR
 
 
 # --------------------------- Utilities ---------------------------
@@ -521,11 +522,11 @@ class NNAGPBandit:
             args = None,
             rms = None,
     ):
-        os.makedirs(os.path.join(_DEFAULT_MODEL_DIR, f"NN-ACGP-Bandit{'-streaming' if args.streaming else ''}"), exist_ok=True)
-        name_file = f"s{seed}_model{t if t is not None else ''}.pth" if name is None else f"{name}.pth"
+        file_dir = os.path.join(_DEFAULT_LOGDIR, name)
+        os.makedirs(file_dir, exist_ok=True)
+        name_file = f"s{seed}_model{t if t is not None else ''}.pth"
         file_dir = os.path.join(
-                _DEFAULT_MODEL_DIR,
-                f"NN-ACGP-Bandit{'-streaming' if args.streaming else ''}",
+                file_dir,
                 name_file,
         )
 
