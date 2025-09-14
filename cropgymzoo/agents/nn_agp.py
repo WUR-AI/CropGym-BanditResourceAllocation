@@ -84,7 +84,7 @@ class Matern32(nn.Module):
 
 class FeatureNet(nn.Module):
     """Small MLP: θ -> g(θ) in R^m."""
-    def __init__(self, d_theta: int, m: int, hidden: int = 64, depth: int = 2):
+    def __init__(self, d_theta: int, m: int, hidden: int = 256, depth: int = 2):
         super().__init__()
         layers: List[nn.Module] = []
         in_dim = d_theta

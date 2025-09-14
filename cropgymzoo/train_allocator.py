@@ -11,7 +11,7 @@ import datetime
 from cropgymzoo.eval_allocator import run_eval_allocator
 from cropgymzoo.agents.nn_agp import NNAGPBandit
 from cropgymzoo.utils.agent_helpers import min_max_normalize
-from cropgymzoo.utils.callbacks import _setup_bandit_comet, log_selection_info
+from cropgymzoo.utils.callbacks import _setup_bandit_comet, log_selection_info, log_model_histograms
 from cropgymzoo.envs.allocation_env import AllocationBandit
 from tianshou.utils.statistics import RunningMeanStd
 
@@ -91,6 +91,14 @@ def train_allocator(args):
         print(f"round {t}, loss: {loss_val}")
         if comet_experiment:
             comet_experiment.log_metric("loss", loss_val, step=t)
+
+            log_model_histograms(
+                comet_experiment,
+                bandit.model,
+                step=t,
+                prefix="nn-agp/",
+                log_grads=True,
+            )
 
         if not args.streaming:
             # pick by UCB (or switch to bandit.select_ts(...))

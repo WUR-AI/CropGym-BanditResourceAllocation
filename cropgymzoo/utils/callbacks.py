@@ -589,3 +589,47 @@ def log_candidates(experiment: Experiment, cand: torch.Tensor, t):
             cand[:, field].detach().cpu().numpy(),
             step=t
         )
+
+def _flatten_np(t: torch.Tensor, max_elems: int = 1_000_000) -> np.ndarray:
+    """Detach -> CPU -> float32 -> flatten (optionally subsample if huge)."""
+    if t is None:
+        return None
+    flat = t.detach().to("cpu", dtype=torch.float32).view(-1)
+    if flat.numel() > max_elems:  # keep uploads snappy
+        idx = torch.randperm(flat.numel())[:max_elems]
+        flat = flat[idx]
+    return flat.numpy()
+
+def log_model_histograms(
+    experiment,
+    model: torch.nn.Module,
+    *,
+    step: int | None = None,
+    prefix: str = "",
+    log_grads: bool = True,
+):
+    """
+    Logs 1D histograms of all parameters (and gradients if available).
+    Names are hierarchical, e.g. 'FeatureNet.net.0.weight' etc.
+    """
+    for name, param in model.named_parameters():
+        safe_name = f"{prefix}{name}"
+
+        # Weights/bias values
+        values = _flatten_np(param)
+        experiment.log_histogram_3d(
+            values,
+            name=f"{safe_name}",
+            step=step,
+            metadata={"shape": list(param.shape), "type": "param"},
+        )
+
+        # Gradients (if they exist)
+        if log_grads and param.grad is not None:
+            grads = _flatten_np(param.grad)
+            experiment.log_histogram_3d(
+                grads,
+                name=f"{safe_name}_grad",
+                step=step,
+                metadata={"shape": list(param.grad.shape), "type": "grad"},
+            )
