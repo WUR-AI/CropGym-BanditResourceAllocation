@@ -112,8 +112,8 @@ def train_allocator(args):
         if comet_experiment:
             comet_experiment.log_metrics(
                 {
-                    "reward/normalised": float(normalized_reward),
-                    "reward/reward": float(reward_env),
+                    "reward/train/normalized": float(normalized_reward),
+                    "reward/train/reward": float(reward_env),
                 },
                 step=t
             )
@@ -152,8 +152,8 @@ def train_allocator(args):
                 if comet_experiment:
                     comet_experiment.log_metrics(
                         {
-                            f"test/reward/year_{year}/raw": float(raw_reward),
-                            f"test/reward/year_{year}/normalized": float(normalized_reward),
+                            f"reward/test_year:{year}/raw": float(raw_reward),
+                            f"reward/test_year:{year}/normalized": float(normalized_reward),
                         },
                         step=test_step,
                     )
