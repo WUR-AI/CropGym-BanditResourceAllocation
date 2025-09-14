@@ -346,7 +346,7 @@ class NNAGPBandit:
         self.y_hist: List[torch.Tensor] = []
         self.t = 1
 
-        self.opt = torch.optim.Adam(self.model.parameters(), lr=lr, weight_decay=1e-4)
+        self.opt = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=1e-4)
 
     # ---- training step: maximize log marginal likelihood (Eq. (5))   [oai_citation:10‡9244_Contextual_Gaussian_Proce.pdf](file-service://file-TsvLCc4k6gDpym1pL6Qi5r)
     def train_step(self, steps: int = 200, lr: float = 3e-3) -> float:
