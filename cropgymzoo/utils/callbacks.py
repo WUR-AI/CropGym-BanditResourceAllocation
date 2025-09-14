@@ -556,18 +556,18 @@ def _setup_bandit_comet(args):
 def log_selection_info(experiment: Experiment, info: SelectionInfo, t):
     experiment.log_histogram_3d(
         info.mu.T,
-        name="mu",
+        name="action_ucb/mu",
         step=t
     )
     experiment.log_histogram_3d(
         info.std.T,
-        name="std",
+        name="action_ucb/std",
         step=t
     )
     if info.ucb is not None:
         experiment.log_histogram_3d(
             info.ucb.T,
-            name="ucb",
+            name="action_ucb/ucb",
             step=t
         )
     if info.beta_t:
@@ -613,6 +613,8 @@ def log_model_histograms(
     Names are hierarchical, e.g. 'FeatureNet.net.0.weight' etc.
     """
     for name, param in model.named_parameters():
+        if "k_indep" in name:
+            continue
         safe_name = f"{prefix}{name}"
 
         # Weights/bias values
