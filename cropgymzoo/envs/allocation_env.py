@@ -5,7 +5,7 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 
-from cropgymzoo.utils.agent_helpers import _make_super_arms, _make_base_arms
+from cropgymzoo.utils.agent_helpers import _make_super_arms, _make_base_arms, _make_topk_super_arms
 
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 from cropgymzoo.utils.defaults import get_default_years
@@ -24,7 +24,7 @@ class AllocationBandit(gym.Env):
 
     def __init__(
         self,
-        delta_kg: float = 10.0,
+        delta_kg: float = 20.0,
         warm_up_eps: int = 10,
         reward_fn=None,
         years: list = get_default_years(),
@@ -249,8 +249,13 @@ class AllocationBandit(gym.Env):
     def _init_spaces(self):
 
         # Set up action space based on farm
-        self.base_arms = _make_base_arms(self)
+        self.base_arms = _make_base_arms(self, cap=0.3)
         self.super_arms = _make_super_arms(self, self.base_arms)
+        self.top_super_arms = _make_topk_super_arms(
+            self.base_arms,
+            self.farm.possible_agents,
+            top_k=3
+        )
         self.super_arm_to_idx = {
             tuple(a): i for i, a in enumerate(self.super_arms)
         }

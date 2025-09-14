@@ -75,17 +75,13 @@ def train_allocator(args):
         # convert to numpy
         theta_t = torch.from_numpy(theta_t)
 
-        if not args.streaming:
+        if not args.streaming and args.action_candidate_length < action_candidates.shape[0]:
             # candidate set for actions; sampled from the super_arms array
             indices = torch.randperm(action_candidates.shape[0])[:num_candidates]
             x_cand = action_candidates[indices]
-            x_cand = torch.from_numpy(x_cand)
-            if comet_experiment:
-                comet_experiment.log_histogram_3d(
-                    x_cand.T,
-                    name="x_cand",
-                    step=t,
-                )
+        else:
+            x_cand = action_candidates
+        x_cand = torch.from_numpy(x_cand)
 
         # train the surrogate a bit on accumulated data
         loss_val = bandit.train_step(steps=args.bandit_epochs, lr=args.bandit_lr)
@@ -119,6 +115,7 @@ def train_allocator(args):
                 step=t
             )
 
+        # update rolling historical average
         env.add_stats_to_context(step_info['AgentInfos'])
 
         # observe noisy reward
@@ -135,28 +132,35 @@ def train_allocator(args):
         if t % 10 == 0:
             # test bandit
             bandit.model.eval()
+            # edit?
+            years: list = [2000]
 
-            raw_reward, normalized_reward = run_eval_allocator(
-                env=env,
-                bandit=bandit,
-                year=2000,
-                rms=rms,
-                candidate_size=16_000
-            )
-            bandit.model.train()
-            if comet_experiment:
-                comet_experiment.log_metrics(
-                    {
-                        "test_reward/raw": float(raw_reward),
-                        "test_reward/normalised": float(normalized_reward),
-                    },
-                    step=test_step,
+            for year in years:
+                raw_reward, normalized_reward = run_eval_allocator(
+                    env=env,
+                    bandit=bandit,
+                    year=year,
+                    rms=rms,
+                    experiment=comet_experiment,
+                    step=t,
+                    candidate_size=50_0000,
                 )
+                print(f"test year: {year}, reward: {raw_reward}")
+                if comet_experiment:
+                    comet_experiment.log_metrics(
+                        {
+                            f"test/reward/year_{year}/raw": float(raw_reward),
+                            f"test/reward/year_{year}/normalized": float(normalized_reward),
+                        },
+                        step=test_step,
+                    )
 
             test_step += 10
 
+            bandit.model.train()
+
         # save the model iteratively
-        if t % 50 == 0:
+        if t % 10 == 0:
             file_dir = bandit.save(
                 seed=args.seed,
                 t=t,

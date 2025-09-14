@@ -11,6 +11,8 @@ def run_eval_allocator(
         bandit,
         year,
         rms,
+        experiment: Experiment = None,
+        step: int = None,
         seed=107,
         streaming=False,
         candidate_size=24000,
@@ -51,6 +53,18 @@ def run_eval_allocator(
             torch.from_numpy(allocation_actions),
             delta=0.1,
             deterministic=True,
+        )
+    if experiment is not None:
+        for i in range(x_t.shape[0]):
+            experiment.log_metric(
+                f"test/action/year-{year}/action-field-{i+1}",
+                x_t[i].item(),
+                step=step
+            )
+        experiment.log_metric(
+            f"test/action/year-{year}/action_vector",
+            f"{str(x_t)}",
+            step=step,
         )
     if isinstance(x_t, np.ndarray):
         x_t = torch.from_numpy(x_t)

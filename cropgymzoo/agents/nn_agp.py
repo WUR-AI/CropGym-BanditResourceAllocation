@@ -387,13 +387,20 @@ class NNAGPBandit:
         X = torch.vstack(self.x_hist)
         Theta = torch.vstack(self.theta_hist)
         y = torch.hstack(self.y_hist)
-        mu, std, _ = self.model.posterior_on_candidates(X_candidates, theta_t.unsqueeze(0), X, Theta, y, calculate_covariance=False)
+        mu, std, _ = self.model.posterior_on_candidates(
+            X_candidates,
+            theta_t.unsqueeze(0),
+            X,
+            Theta,
+            y,
+            calculate_covariance=False
+        )
         beta_t = beta_finite_candidates(
             self.t,
             X_candidates.shape[0],
             delta
         ) if not deterministic else 0
-        ucb = mu + beta_t ** 0.5 * std
+        ucb = mu + (beta_t ** 0.5) * std
         idx = int(torch.argmax(ucb).item())
         return X_candidates[idx], SelectionInfo(mu=mu.cpu(), std=std.cpu(), ucb=ucb.cpu(), beta_t=beta_t, rule="ucb")
 
