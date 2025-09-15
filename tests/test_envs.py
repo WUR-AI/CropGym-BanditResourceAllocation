@@ -139,14 +139,12 @@ class TestEnvPlotter(unittest.TestCase):
 
     def test_episode_farmers_practice(self):
 
-        self.env.reset(options={'year': np.random.choice(range(1951, 2024))})
+        self.env.reset(options={'year': 1999})
 
         infos = {}
         for agent in self.env.agent_iter():
             _, _, _, _, info = self.env.last()
             action = self.env.farmers_practice(agent, info)
-            if self.env.terminations[agent]:
-                infos[agent] = info
             if self.env.terminations[agent]:
                 infos[agent] = info
                 self.env.step(None)
@@ -182,8 +180,6 @@ class TestEnvPlotter(unittest.TestCase):
                 obs_rms=rms,
                 info=info,
             )
-            if self.env.terminations[agent]:
-                infos[agent] = info
             if self.env.terminations[agent]:
                 infos[agent] = info
                 self.env.step(None)

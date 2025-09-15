@@ -62,8 +62,11 @@ def plot_results(
             if variable in ['RAIN']:
                 plot_function = axes[j].bar
             if variable in ['Action']:
-                infos[agent][variable] = [val if val != 0.0 else np.nan for val in infos[agent][variable]]
+                # [val if val != 0.0 else np.nan for val in infos[agent][variable]]
+                infos[agent][variable] = [val * 10 for val in infos[agent][variable]]
                 plot_function = axes[j].scatter
+                axes[j].set_ylim(10, 110)  # <-- set Y limit for Action
+                axes[j].set_yticks(range(10, 100, 20))
             else:
                 plot_function = axes[j].plot
             plot_function(
