@@ -493,9 +493,12 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
     def _get_dvs_constraint(self) -> float:
         return 0 if 0.01 < self.model.get_output()[-1]['DVS'] <= 1 else 1
 
-    def _get_budget_constraint(self) -> float:
-        # sort of quadratic penalty to encourage lower use of budget
-        return (1 - self.budget_left / self.budget_n) ** 2
+    def _get_budget_constraint(self, terminated) -> float:
+        # sort of quadratic penalty to encourage finishing the budget
+        if terminated:
+            return (self.budget_left / self.budget_n) ** 2
+        else:
+            return 0
 
     def _get_nue_constraint(self) -> float:
         return (
@@ -512,7 +515,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             else 1
         )
 
-    def _calculate_constraints(self):
+    def _calculate_constraints(self, terminated):
         """
         Function to calculate constraints
         1. Action constraint
@@ -523,7 +526,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         frequency_constraint = self._get_frequency_constraint()
         dvs_constraint = self._get_dvs_constraint()
-        budget_constraint = self._get_budget_constraint()
+        budget_constraint = self._get_budget_constraint(terminated)
         nue_constraint = self._get_nue_constraint()
         nsurp_constraint = self._get_nsurp_constraint()
 
@@ -950,10 +953,10 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.infos['Profit'].append(self.reward_container.cum_profit)
         not self.infos['CO2'] and self.infos['CO2'].append(self.carbon_dioxide_level)
 
-        self.infos['TotalConstraint'].append(self._calculate_constraints())
+        self.infos['TotalConstraint'].append(self._calculate_constraints(terminate))
         self.infos['FrequencyConstraint'].append(self._get_frequency_constraint())
         self.infos['DVSConstraint'].append(self._get_dvs_constraint())
-        self.infos['BudgetConstraint'].append(self._get_budget_constraint())
+        self.infos['BudgetConstraint'].append(self._get_budget_constraint(terminate))
         self.infos['NueConstraint'].append(self._get_nue_constraint())
         self.infos['NsurpConstraint'].append(self._get_nsurp_constraint())
 
