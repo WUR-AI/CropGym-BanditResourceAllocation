@@ -22,6 +22,7 @@ from tianshou.policy import MultiAgentPolicyManager, BasePolicy
 from tianshou.utils.logger.base import BaseLogger
 
 from cropgymzoo import _SOURCE_PATH, _BASE_PATH
+from cropgymzoo.agents.marl_algorithms_tianshou import IPPOPolicy
 from cropgymzoo.agents.nn_agp import SelectionInfo
 from cropgymzoo.envs.wrappers import MultiAgentVecNormObs
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
@@ -77,10 +78,11 @@ def yearly_eval_test_fn(
     # shift to eval mode
     policy_mgr.eval()
     for policy in policy_mgr.policies:
-        policy.deterministic_eval = True
+        if isinstance(policy, IPPOPolicy):
+            policy.deterministic_eval = True
 
     reset_options_list = [
-        year for year in range(2010, 2011)
+        1990, 2000, 2010, 2020
     ]
     # get writer
     if hasattr(logger, 'writer'):
@@ -153,32 +155,33 @@ def yearly_eval_test_fn(
             agent_actions.append(agent_action)
 
             if writer:
-                writer.add_scalar(f"test/{year}/{a_id}/Reward", agent_reward, epoch)
-                writer.add_scalar(f"test/{year}/{a_id}/NUE", agent_nue, epoch)
-                writer.add_scalar(f"test/{year}/{a_id}/Nsurp", agent_nsurp, epoch)
-                writer.add_scalar(f"test/{year}/{a_id}/BudgetLeft", agent_budget_left, epoch)
-                writer.add_scalar(f"test/{year}/{a_id}/Yield", agent_yield, epoch)
-                writer.add_scalar(f"test/{year}/{a_id}/Naction", agent_n_action, epoch)
+                writer.add_scalar(f"test/year:{year}/{a_id}/Reward", agent_reward, epoch)
+                writer.add_scalar(f"test/year:{year}/{a_id}/NUE", agent_nue, epoch)
+                writer.add_scalar(f"test/year:{year}/{a_id}/Nsurp", agent_nsurp, epoch)
+                writer.add_scalar(f"test/year:{year}/{a_id}/BudgetLeft", agent_budget_left, epoch)
+                writer.add_scalar(f"test/year:{year}/{a_id}/Yield", agent_yield, epoch)
+                writer.add_scalar(f"test/year:{year}/{a_id}/Naction", agent_n_action, epoch)
             else:
                 ...
         else:
             across_years_reward[year].append(np.sum(reward_year))
             # Logging intermediate results
             if writer:
-                writer.add_scalar(f"test/{year}/total_reward", np.sum(reward_year), epoch)
+                writer.add_scalar(f"metrics/reward/year:{year}/total_reward", np.sum(reward_year), epoch)
     else:
         # Final aggregated logging
         mean_reward = np.mean(list(across_years_reward.values()))
 
         if writer:
-            writer.add_scalar("test/mean_reward_all_years", mean_reward, epoch)
+            writer.add_scalar("metrics/mean_reward_all_years", mean_reward, epoch)
 
     writer.flush()
 
     # put back to train mode
     policy_mgr.train()
     for policy in policy_mgr.policies:
-        policy.deterministic_eval = False
+        if isinstance(policy, IPPOPolicy):
+            policy.deterministic_eval = True
 
     return mean_reward
 
