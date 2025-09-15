@@ -508,7 +508,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
     def _get_nsurp_constraint(self) -> float:
         return (
             0
-            if 0.0 <= self.infos['Nue'][-1] <= 40
+            if 0.0 <= self.infos['Nsurp'][-1] <= 40
             else 1
         )
 
