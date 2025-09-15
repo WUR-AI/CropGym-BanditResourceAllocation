@@ -292,7 +292,7 @@ class Rewards:
             self.fertilizer_beta = 1
             self.nsurp_beta = 10
             self.nue_beta = 10
-            self.budget_beta = 1
+            self.budget_beta = 0
 
         def return_reward(
                 self,
@@ -303,7 +303,8 @@ class Rewards:
                 obj=None,
                 price_crop=None,
                 price_fertilizer=None,
-                budget_left=None
+                budget_left=None,
+                fresh_yield_fn=None,
         ):
 
             obj.calculate_amount(amount)
@@ -315,6 +316,9 @@ class Rewards:
 
             growth = process_pcse.compute_growth_storage_organ(output, self.timestep, multiplier)
             obj.calculate_positive_reward_cumulative(output, output_baseline, multiplier)
+
+            if fresh_yield_fn is not None:
+                growth = fresh_yield_fn(growth)
 
             # get profit
             profit_now = obj.calculate_profit_term(

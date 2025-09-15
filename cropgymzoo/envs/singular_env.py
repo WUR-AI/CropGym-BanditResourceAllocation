@@ -567,7 +567,10 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             obj=self.reward_container,
             **prices
             if self.reward_function in ['PNY', 'PNB']
-            else {}
+            else {},
+            fresh_yield_fn=self._get_fresh_weight
+            if self.crop in ['winterwheat', 'sugarbeet', 'potato']
+            else None
         )
         del prices
 
@@ -916,6 +919,19 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             fert_price = np.mean(list(self.fertilizer_prices.values()))
             return fert_price
 
+    def _get_fresh_weight(
+            self,
+            wso,
+    ):
+        if self.crop == 'winterwheat':
+            return wso / 0.85  # 15% water/moisture assumption
+        elif self.crop == 'sugarbeet':
+            return wso / 0.23  # 77% water
+        elif self.crop == 'potato':
+            return wso / 0.20  # 80% water
+        else:
+            return wso
+
     def _get_crop_price(self):
         try:
             return self.crop_prices[self.crop][self.year] \
@@ -943,7 +959,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         self.infos['Reward'].append(reward)
         self.infos['Action'].append(action if not isinstance(action, (np.ndarray, th.Tensor)) else action.item())
-        self.infos['Yield'].append(pcse_output[-1]['WSO'])
+        self.infos['Yield'].append(self._get_fresh_weight(pcse_output[-1]['WSO']))
         self.infos['CropName'].append(self.crop)
         self.infos['Alive'].append(True if not terminate else False)
         self.infos['ActionMask'].append(self.action_mask())
