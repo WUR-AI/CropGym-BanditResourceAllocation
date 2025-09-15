@@ -913,7 +913,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                             else self.rng.choice(list(self.fertilizer_prices.values()))
             return fert_price
         except KeyError:
-            fert_price = list(self.fertilizer_prices.values())[0]
+            fert_price = np.mean(list(self.fertilizer_prices.values()))
             return fert_price
 
     def _get_crop_price(self):
@@ -922,7 +922,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                     if not self.training \
                     else self.rng.choice(list(self.crop_prices[self.crop].values()))
         except KeyError:
-            return list(self.crop_prices[self.crop].values())[0]
+            return np.mean(list(self.crop_prices[self.crop].values()))
 
     def _populate_infos(self, pcse_output, action, reward, terminate):
 
