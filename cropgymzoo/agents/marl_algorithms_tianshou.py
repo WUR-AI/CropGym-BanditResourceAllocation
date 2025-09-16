@@ -75,7 +75,10 @@ class IPPOPolicy(PPOPolicy):
         logp_old = []
         with torch.no_grad():
             for minibatch in batch.split(self.max_batchsize, shuffle=False, merge_last=True):
-                logp_old.append(self(minibatch).dist.log_prob(minibatch.act))
+                lp = self(minibatch).dist.log_prob(minibatch.act)
+                # if lp.ndim > 1:
+                #     lp = lp.sum(-1)
+                logp_old.append(lp)
             batch.logp_old = torch.cat(logp_old, dim=0).flatten()
         batch: LogpOldProtocol
         return batch
@@ -186,8 +189,6 @@ class LagrangianIPPOPolicy(IPPOPolicy):
     ) -> tuple[np.ndarray, np.ndarray]:
 
         cost = batch.info['TotalConstraint']
-        if len(cost.shape) > 1:
-            cost = cost[:, -1]
         if v_s_ is None:
             assert np.isclose(gae_lambda, 1.0)
             v_s_ = np.zeros_like(cost)
@@ -247,22 +248,20 @@ class LagrangianIPPOPolicy(IPPOPolicy):
         gradient_steps = 0
         split_batch_size = batch_size or -1
 
-        if len(batch.info["TotalConstraint"].shape) > 1:
-            total_constraint = batch.info["TotalConstraint"][:, -1]
-        else:
-            total_constraint = batch.info["TotalConstraint"]
+        total_constraint = batch.info["TotalEpisodicConstraint"]
+        done = batch.done
 
-        if len(batch.done.shape) > 1:
-            done = batch.done[:, -1]
-        else:
-            done = batch.done
         # lagrangian stuff
-        final_constraint_values = [
-            float(tc)
-            for tc, d in zip(total_constraint, done)
-            if d and tc is not None
-        ]
-        mean_ep_constraint_values = float(np.mean(final_constraint_values)) if final_constraint_values else 0.0
+        # final_constraint_values = [
+        #     float(tc)
+        #     for tc, d in zip(total_constraint, done)
+        #     if d and tc is not None
+        # ]
+        # mean_ep_constraint_values = float(np.mean(final_constraint_values)) if final_constraint_values else 0.0
+        if total_constraint.ndim > 1 and total_constraint.shape[-1] == 1:
+            total_constraint = np.squeeze(total_constraint, axis=-1)
+        final_tc = total_constraint[done]
+        mean_ep_constraint_values = float(np.mean(final_tc)) if final_tc.size > 0 else 0.0
         lagrangian_multiplier = float(self.lagrange.lagrangian_multiplier)
 
         for step in range(repeat):
