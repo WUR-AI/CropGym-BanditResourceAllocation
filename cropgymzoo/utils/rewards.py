@@ -290,8 +290,8 @@ class Rewards:
             self.crop_price = crop_price
 
             self.fertilizer_beta = 1
-            self.nsurp_beta = 10
-            self.nue_beta = 10
+            self.nsurp_beta = 7 * 5
+            self.nue_beta = 7 * 5
             self.budget_beta = 0
 
         def return_reward(
