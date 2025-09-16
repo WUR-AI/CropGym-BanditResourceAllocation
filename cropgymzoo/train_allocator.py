@@ -38,6 +38,7 @@ def train_allocator(args):
     # context and action dims
     d_theta, d_x = env.observation_space.shape[0], env.action_space.shape[0]
 
+    # the paper suggested this
     m = d_theta//10 + d_x//3 + 3
     print(f"d_theta: {d_theta}, d_x: {d_x}. So, m: {m}")
 
@@ -45,8 +46,8 @@ def train_allocator(args):
     bandit = NNAGPBandit(
         d_theta=d_theta,
         d_x=d_x,
-        m=m,
-        Q=args.q,
+        m=m,  # vector len of multi output GP
+        Q=args.q,  # number of shared GP outputs
         lr=args.bandit_lr,
         device=torch.device("cpu")
     )
