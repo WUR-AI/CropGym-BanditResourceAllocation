@@ -82,7 +82,7 @@ def yearly_eval_test_fn(
             policy.deterministic_eval = True
 
     reset_options_list = [
-        1990, 2000, 2010, 2020
+        2000, 2010,
     ]
     # get writer
     if hasattr(logger, 'writer'):
