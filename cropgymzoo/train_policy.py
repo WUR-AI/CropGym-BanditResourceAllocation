@@ -41,7 +41,7 @@ from cropgymzoo.utils.curriculum import CurriculumCallbackManager
 
 import torch
 from torch.utils.tensorboard import SummaryWriter
-from torch.optim import Adam
+from torch.optim import Adam, AdamW
 
 try:
     # ---- Tianshou imports ----
@@ -174,11 +174,11 @@ def make_ppo_policy(
         constraint_indices=obs_constraint_idx,
     ) if args.lagrangian_ppo else None
 
-    optim = Adam(
+    optim = AdamW(
         list(actor.parameters()) + list(critic.parameters()) + list(constraint_critic.parameters()),
         lr=args.lr if args is not None else 1e-3,
         ) if args.lagrangian_ppo else (
-        Adam(
+        AdamW(
             list(actor.parameters()) + list(critic.parameters()),
             lr=args.lr if args is not None else 1e-3,
         )
