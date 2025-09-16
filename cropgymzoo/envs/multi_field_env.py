@@ -397,7 +397,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
         parcel_budgets = {a: self.get_per_parcel_max_budget(a) for a in self.possible_agents}
 
         lowest_budgets = {
-            a: float(np.ceil(parcel_budgets[a] * 0.7 / 10) * 10)
+            a: float(np.ceil(parcel_budgets[a] * 0.6 / 10) * 10)
             for a in self.possible_agents
         }
 
@@ -405,11 +405,11 @@ class MultiFieldEnv(AECEnv, EzPickle):
         # change the logic of random allocation here if needed!
         choices = {}
         for (a, max_budget), (_, lowest_budget) in zip(parcel_budgets.items(), lowest_budgets.items()):
-            # list_choice = [*np.arange(lowest_budget, max_budget, 10.)]
+            list_choice = [*np.arange(lowest_budget, max_budget, 10.)]
             # probs = self.left_heavy_weights(len(list_choice))
-            # choices[a] = self.rng.choice(list_choice, p=probs)
-            choice = self.rng.uniform(low=lowest_budget, high=max_budget)
-            choices[a] = choice
+            choices[a] = self.rng.choice(list_choice) #, p=probs)
+            # choice = self.rng.uniform(low=lowest_budget, high=max_budget)
+            # choices[a] = choice
 
         # set random budget reduction for each parcel
         for (_agent, choice), (_, budget) in zip(choices.items(), parcel_budgets.items()):
