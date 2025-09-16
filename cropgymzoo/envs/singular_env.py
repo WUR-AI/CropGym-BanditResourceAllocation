@@ -111,13 +111,14 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         "DVS_N_TRANSL"  # development stage above which N translocation to storage organs does occur
     ]
 
+    # modified/lowered by 5kg/ha to match RL agent actions
     CROP_SOIL_MAX = {
-        "winterwheat": {'clay': 245, 'sand': 160, 'silt': 190, 'peat': 160},
-        "sugarbeet": {'clay': 150, 'sand': 145, 'silt': 116, 'peat': 145},
-        "potato": {'clay': 275, 'sand': 260, 'silt': 204, 'peat': 270},
+        "winterwheat": {'clay': 240, 'sand': 160, 'silt': 190, 'peat': 160},
+        "sugarbeet": {'clay': 150, 'sand': 140, 'silt': 110, 'peat': 140},
+        "potato": {'clay': 270, 'sand': 260, 'silt': 200, 'peat': 270},
         "barley": {'clay': 80, 'sand': 80, 'silt': 80, 'peat': 80},
         "seed_onion": {'clay': 170, 'sand': 120, 'silt': 120, 'peat': 120},
-        'rapeseed': {'clay': 205, 'sand': 190, 'silt': 152, 'peat': 195},
+        'rapeseed': {'clay': 200, 'sand': 190, 'silt': 150, 'peat': 190},
         'sunflower': {'clay': 150, 'sand': 150, 'silt': 150, 'peat': 150},
     }
 
@@ -468,6 +469,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         if isinstance(action, np.ndarray):
             action = action[0] if action.shape else action
 
+        self.action: int = action
         if action > 0:
             self.n_action += action * 10
             self.non_zero_action_count += action
@@ -479,6 +481,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             self.steps_since_last_action += 1
 
     def _reset_action_variables(self):
+        self.action = 0
         self.n_steps = 0
         self.n_action = 0
         self.non_zero_action_count = 0
@@ -488,10 +491,14 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
     # For constraints
 
     def _get_frequency_constraint(self) -> float:
-        return max(self.non_zero_action_count - 3, 0)
+        return 1.0 if self.non_zero_action_count > 4 else 0.0
 
     def _get_dvs_constraint(self) -> float:
-        return 0 if 0.01 < self.model.get_output()[-1]['DVS'] <= 1 else 1
+        dvs = self.model.get_output()[-1]['DVS']
+        acted = self.action > 0  # or whatever check means "fertilizer applied"
+        if acted and not (0.01 < dvs <= 1):
+            return 1.0
+        return 0.0
 
     def _get_budget_constraint(self, terminated) -> float:
         # sort of quadratic penalty to encourage finishing the budget
@@ -977,7 +984,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.infos['NsurpConstraint'].append(self._get_nsurp_constraint())
 
         self.infos['TotalEpisodicConstraint'].append(
-            0 if not terminate else np.sum(self.infos['TotalConstraint'])
+            np.cumsum(self.infos['TotalConstraint'])[-1]
         )
         self.infos['DaysAfterPlanting'].append(self._calculate_dap())
 
@@ -1180,6 +1187,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
     def _init_action_variables(self):
         self.n_action = 0
+        self.action = 0
         self.steps_since_last_action = 0
         """Masking variables"""
         self.n_steps = 0
