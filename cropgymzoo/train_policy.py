@@ -97,6 +97,7 @@ def make_ppo_policy(
     act_dim: int,
     hidden: Sequence = [64, 64],
     use_icm: bool = False,
+    logger = None,
     args: Namespace = None,
     mlp_critics = False,
 ) -> PPOPolicy | ICMPolicy:
@@ -196,6 +197,7 @@ def make_ppo_policy(
         actor=actor,
         critic=critic,
         **lagrangian_kwarg,
+        logger=logger,
         optim=optim,
         dist_fn=dist,
         discount_factor=args.gamma if args is not None else 0.99,
@@ -384,6 +386,23 @@ def train_gru_ppo(args: Namespace):
         train_envs.reset(options={'year': np.random.choice(range(1951, 2024))})
         test_envs.set_obs_rms(train_envs.get_obs_rms())
 
+        # get tensorboard logger
+        tb_logger, run_name = create_logger(args)
+
+        # get comet logger
+        comet_experiment = create_comet_experiment(run_name, args)
+
+        comet_logger = CometTianshouLogger(
+            experiment=comet_experiment,
+            log_dir=args.logdir,
+        ) if comet_experiment is not None else None
+
+        # put both in the multi-logger item
+        logger = MultiLogger(
+            tb_logger,
+            comet_logger if comet_logger else None
+        )
+
     # For constraint critic
     obs_features = dummy_env.get_field_env_with_idx(0).unwrapped.obs_constraint_features()
     args.obs_constraint_dim = len(obs_features)
@@ -397,6 +416,7 @@ def train_gru_ppo(args: Namespace):
             act_dim=act_dim,
             hidden=args.hidden_layers,
             use_icm=args.use_icm,
+            logger=logger,
             args=args,
         )
         for a in agents
@@ -431,23 +451,6 @@ def train_gru_ppo(args: Namespace):
     test_collector = IPPOCollector(
         policy=marl_policy_manager,
         env=test_envs,
-    )
-
-    # get tensorboard logger
-    tb_logger, run_name = create_logger(args)
-
-    # get comet logger
-    comet_experiment = create_comet_experiment(run_name, args)
-
-    comet_logger = CometTianshouLogger(
-        experiment=comet_experiment,
-        log_dir=args.logdir,
-    ) if comet_experiment is not None else None
-
-    # put both in the multi-logger item
-    logger = MultiLogger(
-        tb_logger,
-        comet_logger if comet_logger else None
     )
 
     curriculum_manager = None
