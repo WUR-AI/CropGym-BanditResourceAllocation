@@ -472,7 +472,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.action: int = action
         if action > 0:
             self.n_action += action * 10
-            self.non_zero_action_count += action
+            self.non_zero_action_count += 1
             self.steps_since_last_action = 0
 
             # budget count
@@ -490,8 +490,25 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
     # For constraints
 
-    def _get_frequency_constraint(self) -> float:
-        return 1.0 if self.non_zero_action_count > 4 else 0.0
+    # def _get_frequency_constraint(self) -> float:
+    #     return 1.0 if self.non_zero_action_count > 4 else 0.0
+
+    def _get_frequency_constraint(self, terminated: bool) -> float:
+        acted = float(self.action) > 0.0
+        step_cost = 0.0
+        if acted:
+            # small per-step penalty only when over K
+            step_cost = 0.2 if self.non_zero_action_count > 3 else 0.0
+
+        term_cost = 0.0
+        if terminated:
+            if self.non_zero_action_count > 3:
+                diff = float(self.non_zero_action_count - 3)
+                term_cost = (diff / 3) ** 2
+            else:
+                term_cost = 0.0  # no penalty if under or equal to max
+
+        return step_cost + term_cost
 
     def _get_dvs_constraint(self) -> float:
         dvs = self.model.get_output()[-1]['DVS']
@@ -531,7 +548,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         4. Nue and Nsurp constraints (legacy)
         """
 
-        frequency_constraint = self._get_frequency_constraint()
+        frequency_constraint = self._get_frequency_constraint(terminated)
         dvs_constraint = self._get_dvs_constraint()
         budget_constraint = self._get_budget_constraint(terminated)
         nue_constraint = self._get_nue_constraint()
@@ -977,7 +994,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         not self.infos['CO2'] and self.infos['CO2'].append(self.carbon_dioxide_level)
 
         self.infos['TotalConstraint'].append(self._calculate_constraints(terminate))
-        self.infos['FrequencyConstraint'].append(self._get_frequency_constraint())
+        self.infos['FrequencyConstraint'].append(self._get_frequency_constraint(terminate))
         self.infos['DVSConstraint'].append(self._get_dvs_constraint())
         self.infos['BudgetConstraint'].append(self._get_budget_constraint(terminate))
         self.infos['NueConstraint'].append(self._get_nue_constraint())
