@@ -91,6 +91,8 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             initial_lagrangian_multiplier: float = 0.001,
             lagrangian_learning_rate: float = 0.0005,
             lagrangian_upper_bound: float = 3.0,
+            const_norm: bool = False,
+            logger = None,
             **kwargs,
     ):
         super().__init__(**kwargs)
@@ -104,7 +106,10 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             lagrangian_multiplier_lr = lagrangian_learning_rate,
             lagrangian_upper_bound = lagrangian_upper_bound,
         )
+        self.const_norm = const_norm
         self._actor_critic = ActorCriticConstraint(self.actor, self.critic, self.constraint_critic)
+
+        self.logger = logger
 
     def _compute_returns(
             self,
@@ -139,7 +144,7 @@ class LagrangianIPPOPolicy(IPPOPolicy):
         if self.rew_norm:  # unnormalize v_s & v_s_
             v_s = v_s * np.sqrt(self.ret_rms.var + self._eps)
             v_s_ = v_s_ * np.sqrt(self.ret_rms.var + self._eps)
-
+        if self.const_norm:
             c_s = c_s * np.sqrt(self.const_rms.var + self._eps)
             c_s_ = c_s_ * np.sqrt(self.const_rms.var + self._eps)
         unnormalized_returns, advantages = self.compute_episodic_return(
@@ -157,18 +162,19 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             indices,
             c_s_,
             c_s,
-            gamma=self.gamma,
+            gamma=1.0,
             gae_lambda=self.gae_lambda,
         )
 
         if self.rew_norm:
             batch.returns = unnormalized_returns / np.sqrt(self.ret_rms.var + self._eps)
             self.ret_rms.update(unnormalized_returns)
-
+        else:
+            batch.returns = unnormalized_returns
+        if self.const_norm:
             batch.const_returns = const_returns / np.sqrt(self.const_rms.var + self._eps)
             self.const_rms.update(const_returns)
         else:
-            batch.returns = unnormalized_returns
             batch.const_returns = const_returns
         batch.returns = to_torch_as(batch.returns, batch.v_s)
         batch.adv = to_torch_as(advantages, batch.v_s)
