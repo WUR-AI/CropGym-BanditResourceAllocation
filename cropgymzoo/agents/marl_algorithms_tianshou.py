@@ -46,6 +46,26 @@ class ActorCriticConstraint(nn.Module):
         self.constraint_critic = constraint_critic
 
 
+def _last1d(x) -> np.ndarray:
+    # numpy array, last time slice if stacked, flattened to 1-D
+    x = np.asarray(x)
+    if x.ndim > 1:
+        x = x[..., -1]
+    return x.reshape(-1)
+
+def _bool_last1d(x) -> np.ndarray:
+    x = np.asarray(x)
+    if x.ndim > 1:
+        x = x[..., -1]
+    return x.reshape(-1).astype(bool)
+
+
+def _masked_mean(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    # mask is 1.0 for valid steps, 0.0 for resets
+    denom = mask.sum().clamp_min(1.0)
+    return (x * mask).sum() / denom
+
+
 class IPPOPolicy(PPOPolicy):
     def __init__(
             self,
@@ -92,7 +112,11 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             lagrangian_learning_rate: float = 0.0005,
             lagrangian_upper_bound: float = 3.0,
             const_norm: bool = False,
+            norm_const_adv: bool = False,
             logger = None,
+            recurrent: bool = False,
+            unroll_len: int = 32,
+            burn_in: int = 0,  # optional: use 0 to keep it simple
             **kwargs,
     ):
         super().__init__(**kwargs)
@@ -107,7 +131,12 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             lagrangian_upper_bound = lagrangian_upper_bound,
         )
         self.const_norm = const_norm
+        self.norm_const_adv = norm_const_adv
         self._actor_critic = ActorCriticConstraint(self.actor, self.critic, self.constraint_critic)
+
+        self.recurrent = recurrent
+        self.unroll_len = int(unroll_len)
+        self.burn_in = int(burn_in)
 
         self.logger = logger
 
@@ -194,7 +223,7 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             gae_lambda: float = 0.95,
     ) -> tuple[np.ndarray, np.ndarray]:
 
-        cost = batch.info['TotalConstraint']
+        cost = _last1d(batch.info['TotalConstraint'])
         if v_s_ is None:
             assert np.isclose(gae_lambda, 1.0)
             v_s_ = np.zeros_like(cost)
@@ -284,7 +313,7 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                 if self.norm_adv:
                     mean, std = advantages.mean(), advantages.std()
                     advantages = (advantages - mean) / (std + self._eps)  # per-batch norm
-
+                if self.norm_constraint_adv:
                     const_mean, const_std = constraint_advantages.mean(), constraint_advantages.std()
                     constraint_advantages = (constraint_advantages - const_mean) / (const_std + self._eps)
 
