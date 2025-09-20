@@ -22,7 +22,7 @@ def _make_super_arms(self, base_arms: dict[str, np.ndarray]) -> np.ndarray:
     Cartesian product over the per-farm base arms, returned as an array of shape (num_arms, N).
     Each row is an N-length reduction vector, e.g., [10, 40, 20, 30, 40, 0] for N=6.
     """
-    grids = [base_arms[a] for a in self.farm.possible_agents]  # fixed order → stable indexing
+    grids = [base_arms[a] for a in self.farm.possible_agents]  # fixed order
     super_arms = np.array(list(itertools.product(*grids)), dtype=np.float32)
     return super_arms
 

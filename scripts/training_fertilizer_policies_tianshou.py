@@ -67,6 +67,9 @@ if __name__ == "__main__":
     # use lagrangian
     parser.add_argument("--lagrangian_ppo", action="store_true", dest='lagrangian_ppo')
 
+    # use comet
+    parser.add_argument("--no_comet", action='store_true', dest='no_comet')
+
     parser.set_defaults(
         resume=None,
         parallel=False,
@@ -75,6 +78,7 @@ if __name__ == "__main__":
         debug=False,
         use_icm=False,
         lagrangian_ppo=False,
+        no_comet=False,
     )
     hyperparams = parser.parse_args()
 
