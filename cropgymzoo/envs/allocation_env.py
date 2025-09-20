@@ -26,7 +26,7 @@ class AllocationBandit(gym.Env):
         self,
         delta_kg: float = 20.0,
         warm_up_eps: int = 10,
-        reward_fn=None,
+        cap: float = 0.4,
         years: list = get_default_years(),
         seed: int = 107,
         action_type: str = 'continuous',
@@ -45,6 +45,7 @@ class AllocationBandit(gym.Env):
 
         self.years = years
         self.year = None
+        self.cap = cap
 
         # The MARL env
         self._init_envs(args)
@@ -140,6 +141,39 @@ class AllocationBandit(gym.Env):
 
     def _get_historical_context_keys(self):
         return self._get_context_keys()[4:]
+
+    def _get_max_budgets(self) -> list:
+        max_budgets = []
+        for agent in self.farm.possible_agents:
+            max_budgets.append(self.farm.get_per_parcel_max_budget(agent))
+        return max_budgets
+
+    def super_arms_limit(self, limit: float) -> np.ndarray:
+        """
+        Keep rows where the *remaining* total allocation is <= limit:
+            sum_i (M_i - R_i) <= limit
+        Equivalently:
+            sum_i R_i >= sum(M) - limit
+
+        Also enforces 0 <= R_i <= M_i.
+        """
+        reductions = np.asarray(self.super_arms, dtype=np.float32)  # (K, N)
+        max_budgets = np.asarray(self.max_budgets, dtype=np.float32)  # (N,)
+
+        m_sum = float(max_budgets.sum())
+        assert (0.0 <= float(limit) <= m_sum), f"limit must be in [0, {m_sum:.3f}]"
+
+        # sanity check
+        # sum each arm
+        row_sum_reduction = reductions.sum(axis=1)
+
+        # get the difference between max and given limit
+        threshold = m_sum/10 - float(limit/10)
+
+        # get mask of all row sums that are above this difference
+        meets_total = row_sum_reduction >= threshold
+
+        return reductions[meets_total]
 
     '''
     Helper functions
@@ -249,7 +283,7 @@ class AllocationBandit(gym.Env):
     def _init_spaces(self):
 
         # Set up action space based on farm
-        self.base_arms = _make_base_arms(self, cap=0.3)
+        self.base_arms = _make_base_arms(self, cap=self.cap)
         self.super_arms = _make_super_arms(self, self.base_arms)
         self.top_super_arms = _make_topk_super_arms(
             self.base_arms,
@@ -308,3 +342,4 @@ class AllocationBandit(gym.Env):
                     'area': self.farm.fields[agent].unwrapped.area, }
             for agent in self.farm.possible_agents
         }
+        self.max_budgets = self._get_max_budgets()
