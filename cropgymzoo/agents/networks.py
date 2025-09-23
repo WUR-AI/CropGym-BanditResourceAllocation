@@ -215,7 +215,7 @@ class MaskedActor(Actor):
     def forward(self, obs: torch.Tensor, state: torch.Tensor | None = None, info: dict | Batch = None):
 
         # grab vector
-        obs.obs = obs.obs.astype(np.float32)
+        obs.obs = obs.obs.astype(np.float32) if isinstance(obs.obs, np.ndarray) else obs.obs
 
         # preprocess obs (with GRU or anything else)
         x, h = self.preprocess(obs, state, info)

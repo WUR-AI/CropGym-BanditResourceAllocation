@@ -10,7 +10,8 @@ import numpy as np
 
 from tianshou.data import to_torch_as, to_numpy, ReplayBuffer, Batch, SequenceSummaryStats
 from tianshou.data.types import BatchWithAdvantagesProtocol
-from tianshou.policy import BasePolicy
+from tianshou.policy import BasePolicy, MultiAgentPolicyManager
+from tianshou.policy.multiagent.mapolicy import MapTrainingStats
 from tianshou.policy.base import _gae_return
 from tianshou.policy.modelfree.ppo import PPOPolicy, TPPOTrainingStats, PPOTrainingStats
 from tianshou.data.types import LogpOldProtocol, RolloutBatchProtocol
@@ -22,6 +23,7 @@ from tianshou.data.collector import (
     EpisodeBatchProtocol,
     MalformedBufferError,
 )
+from tianshou.policy.multiagent.mapolicy import MAPRolloutBatchProtocol
 from tianshou.utils.determinism import TraceLogger
 from tianshou.utils.net.common import ActorCritic
 from tianshou.utils.statistics import RunningMeanStd
@@ -139,6 +141,266 @@ class LagrangianIPPOPolicy(IPPOPolicy):
         self.burn_in = int(burn_in)
 
         self.logger = logger
+
+    def _as_sequences(self, flat: Batch, T: int):
+        """
+        Convert a flat rollout Batch into sequences of length T (with padding).
+        Returns: (seq_batch, h0, valid_mask, learn_mask)
+          - seq_batch: Batch with fields shaped [B, T, ...]
+          - h0: RecurrentStateBatch with key 'hidden' of shape [B, L, H]
+          - valid_mask: [B, T] (True where real data, False for padding)
+          - learn_mask: [B, T] (False on pads and optional burn-in steps)
+        """
+        obs = flat.obs
+        aid = np.asarray(obs.agent_id)
+        done = np.asarray(flat.done).astype(bool)
+        if done.ndim > 1:
+            done = done[..., -1]
+
+        env_id = np.asarray(getattr(flat.info, 'env_id', flat.info["env_id"]))  # shape [N]
+
+        # 1) Segment indices where episode or agent changes
+        N = aid.shape[0]
+        cuts = [0]
+        for i in range(1, N):
+            if done[i - 1] or (aid[i] != aid[i - 1]) or (env_id[i] != env_id[i - 1]):
+                cuts.append(i)
+        cuts.append(N)
+
+        # 2) Fixed windows of length T inside each segment (non-overlapping for simplicity)
+        windows = []  # (start, end)
+        for s, e in zip(cuts[:-1], cuts[1:]):
+            Lseg = e - s
+            if Lseg <= 0:
+                continue
+            for off in range(0, Lseg, T):
+                ws, we = s + off, min(s + off + T, e)
+                windows.append((ws, we))
+
+        B = len(windows)
+
+        assert (aid[ws:we] == aid[ws]).all(), "Window mixes agents"
+        assert (env_id[ws:we] == env_id[ws]).all(), "Window mixes envs"
+
+        # 3) Stack/pad fields to [B, T, ...]
+        def slice_field(field, slc):
+            return field[slc]
+
+        def pad_to_T(x, tlen):
+            # x is torch.Tensor or np.ndarray with leading dim tlen
+            if isinstance(x, torch.Tensor):
+                if tlen < T:
+                    pad = torch.zeros((T - tlen, *x.shape[1:]), dtype=x.dtype, device=x.device)
+                    x = torch.cat([x, pad], dim=0)
+            else:  # np
+                if tlen < T:
+                    pad = np.zeros((T - tlen, *x.shape[1:]), dtype=x.dtype)
+                    x = np.concatenate([x, pad], axis=0)
+            return x
+
+        # Helper: more general padding that respects various dtypes
+        def pad_to_T_general(x, tlen):
+            # x has leading time dim of length tlen
+            if isinstance(x, torch.Tensor):
+                if tlen < T:
+                    pad = torch.zeros((T - tlen, *x.shape[1:]), dtype=x.dtype, device=x.device)
+                    x = torch.cat([x, pad], dim=0)
+                return x
+
+            # Convert lists/tuples to np.ndarray
+            if not isinstance(x, np.ndarray):
+                x = np.asarray(x)
+
+            if tlen >= T:
+                return x
+
+            pad_len = T - tlen
+            lead_shape = (pad_len,)
+            tail_shape = x.shape[1:]
+            pad_shape = lead_shape + tail_shape
+
+            kind = x.dtype.kind  # 'b' bool, 'i' int, 'u' uint, 'f' float, 'c' complex, 'O' object, 'U' unicode, 'S' bytes, 'M' datetime64, 'm' timedelta64
+
+            if kind in ('b',):
+                pad = np.zeros(pad_shape, dtype=x.dtype)  # False
+            elif kind in ('i', 'u', 'f', 'c'):
+                pad = np.zeros(pad_shape, dtype=x.dtype)  # 0
+            elif kind in ('U', 'S'):
+                pad = np.full(pad_shape, '', dtype=x.dtype)  # empty string
+            elif kind == 'O':
+                pad = np.empty(pad_shape, dtype=x.dtype)
+                pad.fill(None)  # fill with None for object arrays
+            elif kind in ('M', 'm'):
+                # datetime64/timedelta64 NaT padding
+                pad = np.empty(pad_shape, dtype=x.dtype)
+                pad[...] = np.datetime64('NaT') if kind == 'M' else np.timedelta64('NaT')
+            else:
+                # Fallback: attempt zeros
+                pad = np.zeros(pad_shape, dtype=x.dtype)
+
+            return np.concatenate([x, pad], axis=0)
+
+        # obs: keep Batch semantics but ensure obs.obs ends up [B, T, H]
+        obs_list = []
+        valid_list = []
+        for ws, we in windows:
+            o = slice_field(flat.obs, slice(ws, we))  # Batch of length t
+            t = we - ws
+
+            # obs: [t, H] -> [T, H]
+            if torch.is_tensor(o.obs):
+                o_obs = pad_to_T(o.obs, t)
+            else:
+                o_obs = pad_to_T(torch.as_tensor(o.obs), t)
+
+            entry = Batch(obs=o_obs)
+
+            # carry over agent_id if you need it later (optional)
+            if hasattr(o, 'agent_id') and o.agent_id is not None:
+                # agent_id is typically length-t; padding is optional (unused by nets), but safe:
+                entry.agent_id = pad_to_T(o.agent_id, t)
+
+            # IMPORTANT: carry over action mask and pad it to [T, ...]
+            if hasattr(o, 'mask') and o.mask is not None:
+                m = o.mask
+                if not torch.is_tensor(m):
+                    # preserve dtype: bool or float
+                    m = torch.as_tensor(m)
+                entry.mask = pad_to_T(m, t)
+                # Optionally, if padded positions should be invalid, ensure zeros in the padded tail.
+                # pad_to_T with zeros already accomplishes that.
+
+            obs_list.append(entry)
+
+            val = np.zeros((T,), dtype=bool)
+            val[:t] = True
+            valid_list.append(val)
+
+        valid_mask = torch.as_tensor(np.stack(valid_list, axis=0))  # [B, T]
+
+        # actions, advantages, returns, old logp
+        def stack_time(field_name):
+            xs = []
+            for ws, we in windows:
+                x = slice_field(getattr(flat, field_name), slice(ws, we))
+                t = we - ws
+                if not torch.is_tensor(x):
+                    x = torch.as_tensor(
+                        x, device=getattr(flat, field_name).device
+                        if hasattr(getattr(flat, field_name), 'device')
+                        else None
+                    )
+                xs.append(pad_to_T_general(x, t))
+            return torch.stack(xs, dim=0)  # [B, T, ...]
+
+        act = stack_time('act')
+        adv = stack_time('adv')
+        ret = stack_time('returns')
+        v_s = stack_time('v_s')
+        logp_old = stack_time('logp_old')
+
+        # Build info as Batch over windows without converting to tensors
+        info_list = []
+        for ws, we in windows:
+            sub = flat.info[slice(ws, we)]
+            t = we - ws
+            entry = {}
+            for k, v in sub.items():
+                entry[k] = pad_to_T_general(v, t)
+            info_list.append(Batch(entry))
+        info = Batch.stack(info_list, axis=0)
+
+        const_adv = getattr(flat, 'const_adv', None)
+        const_returns = getattr(flat, 'const_returns', None)
+        if const_adv is not None:
+            const_adv = stack_time('const_adv')
+        if const_returns is not None:
+            const_returns = stack_time('const_returns')
+
+        # 4) Initial hidden state for each window from the first element’s stored state
+        # Assumes collector saved pre-action hidden per step in flat.policy.hidden_state[agent_id]['hidden']
+        # Hidden can be one of: [N, H], [N, E, H], [N, L, H], [N, E, L, H]
+
+        def _get_local_env_id(self, flat: Batch, row: int) -> int:
+            if 'env_id' in getattr(flat.info, '__dict__', {}) and flat.info.env_id is not None:
+                return int(flat.info.env_id[row])
+            # Fallback: derive from buffer and indices (works for VectorReplayBuffer)
+            if hasattr(self, '_buffer') and hasattr(self, '_indices') and self._buffer is not None:
+                buf = self._buffer
+                idx = int(self._indices[row])
+                if hasattr(buf, 'buffer_num') and buf.buffer_num > 0 and buf.maxsize % buf.buffer_num == 0:
+                    per_env = buf.maxsize // buf.buffer_num
+                    return idx // per_env
+            # Last resort: assume single env
+            return 0
+
+        h0_list: list[torch.Tensor] = []
+        hs_any = None
+        for ws, _ in windows:
+            agent_id = aid[ws]
+            st = flat.policy.hidden_state[agent_id]  # Batch or tensor-like
+
+            # Get the hidden tensor regardless of wrapping
+            if isinstance(st, Batch):
+                hs = st.get('hidden', None)
+            else:
+                hs = st
+            if hs is None:
+                raise RuntimeError('policy.hidden_state[agent_id] does not contain a "hidden" tensor')
+
+            # hs shapes we handle: [N, H], [N, E, H], [N, L, H], [N, E, L, H]
+            # Select time row `ws` and env column if present
+            if hs.ndim == 2:
+                # [N, H]
+                h_ws = hs[ws]  # [H]
+                h_ws = h_ws.unsqueeze(0)  # -> [L=1, H]
+            elif hs.ndim == 3:
+                # Could be [N, E, H] or [N, L, H]; disambiguate by matching E to buffer_num if available
+                    # [N, E, H]
+                env_local = _get_local_env_id(self, flat, ws)
+                h_ws = hs[ws, env_local]  # [H]
+                h_ws = h_ws.unsqueeze(0)  # -> [L=1, H]
+                # else:
+                #     # [N, L, H]
+                #     h_ws = hs[ws]  # [L, H]
+            elif hs.ndim == 4:
+                # [N, E, L, H]
+                env_local = _get_local_env_id(self, flat, ws)
+                h_ws = hs[ws, env_local]  # [L, H]
+            else:
+                raise RuntimeError(f'Unsupported hidden shape: {tuple(hs.shape)}')
+
+            h0_list.append(h_ws)
+            hs_any = hs  # keep a reference to infer device/dtype later
+
+        # Stack to [B, L, H]
+        h0 = torch.stack(h0_list, dim=0)  # [B, L, H]
+
+        # Ensure tensor is on the same device/type as the rest of the batch
+        if isinstance(hs_any, torch.Tensor):
+            h0 = h0.to(hs_any.device, dtype=hs_any.dtype)
+
+        seq = Batch(
+            obs=Batch.stack(obs_list, axis=0),  # .obs will be [B, T, H]
+            act=act,
+            adv=adv,
+            returns=ret,
+            v_s=v_s,
+            logp_old=logp_old,
+            info=info,
+        )
+        if const_adv is not None:
+            seq.const_adv = const_adv
+        if const_returns is not None:
+            seq.const_returns = const_returns
+
+        learn_mask = valid_mask.clone()
+        if self.burn_in > 0:
+            learn_mask[:, :self.burn_in] = False
+
+        # Wrap h0 as RecurrentStateBatch
+        h0_batch = Batch({"hidden": h0})
+        return seq, h0_batch, valid_mask, learn_mask
 
     def _compute_returns(
             self,
@@ -271,6 +533,14 @@ class LagrangianIPPOPolicy(IPPOPolicy):
         # normalization varies from each policy, so we don't do it here
         return returns, advantage
 
+    @staticmethod
+    def _get_hidden_state(
+            batch: Batch,
+    ):
+        agent_id = batch.obs.agent_id[0]
+        hidden_state = batch.policy.hidden_state[agent_id]
+        return hidden_state
+
     def learn(  # type: ignore
             self,
             batch: RolloutBatchProtocol,
@@ -302,70 +572,105 @@ class LagrangianIPPOPolicy(IPPOPolicy):
         for step in range(repeat):
             if self.recompute_adv and step > 0:
                 batch = self._compute_returns(batch, self._buffer, self._indices)
-            for minibatch in batch.split(split_batch_size, merge_last=True):
-                gradient_steps += 1
-                # calculate loss for actor
-                advantages = minibatch.adv
+            if not self.recurrent:
+                gradient_steps, clip_losses, vf_losses, ent_losses, cf_losses, losses = self.flat_learn_ppo(
+                    batch, cf_losses, clip_losses, ent_losses, gradient_steps,
+                    lagrangian_multiplier, losses, split_batch_size, vf_losses)
+            else:
+                # Recurrent sequence path
+                T = self.burn_in + self.unroll_len
+                seq_batch, h0, valid_mask, learn_mask = self._as_sequences(batch, T)
 
-                constraint_advantages = minibatch.const_adv
+                B = seq_batch.adv.shape[0]
+                bs = batch_size or B
+                for s in range(0, B, bs):
+                    e = min(s + bs, B)
+                    mb = seq_batch[s:e]
+                    mb_valid = valid_mask[s:e]
+                    mb_learn = learn_mask[s:e]
+                    mb_h0 = Batch({"hidden": h0.hidden[s:e]})
 
-                dist = self(minibatch).dist
-                if self.norm_adv:
-                    mean, std = advantages.mean(), advantages.std()
-                    advantages = (advantages - mean) / (std + self._eps)  # per-batch norm
-                if self.norm_constraint_adv:
-                    const_mean, const_std = constraint_advantages.mean(), constraint_advantages.std()
-                    constraint_advantages = (constraint_advantages - const_mean) / (const_std + self._eps)
+                    # Forward sequence through your actor (MaskedActor with RecurrentGRU)
+                    # mb.obs is a Batch with .obs shaped [b, T, H]
+                    out = self(batch=mb, state=mb_h0)
+                    dist = out.dist  # should produce per-step distributions compatible with [b, T, ...]
 
-                # start lagrangian constraint
-                combined_advantages = advantages - lagrangian_multiplier * constraint_advantages
+                    # Per-step log-prob
+                    logp = dist.log_prob(mb.act)  # [b, T] or [b, T, A] -> reduce over action dims if needed
+                    if logp.ndim > 2:
+                        logp = logp.sum(-1)
 
-                ratios = (dist.log_prob(minibatch.act) - minibatch.logp_old).exp().float()
-                ratios = ratios.reshape(ratios.size(0), -1).transpose(0, 1)
+                    ratios = (logp - mb.logp_old).exp().float()  # [b, T]
 
-                surr1 = ratios * combined_advantages
-                surr2 = ratios.clamp(1.0 - self.eps_clip, 1.0 + self.eps_clip) * combined_advantages
-                if self.dual_clip:
-                    clip1 = torch.min(surr1, surr2)
-                    clip2 = torch.max(clip1, self.dual_clip * combined_advantages)
-                    clip_loss = -torch.where(combined_advantages < 0, clip2, clip1).mean()
-                else:
-                    clip_loss = -torch.min(surr1, surr2).mean()
+                    adv = mb.adv
+                    if self.norm_adv:
+                        mean, std = adv[mb_learn].mean(), adv[mb_learn].std()
+                        adv = (adv - mean) / (std + self._eps)
 
-                # calculate loss for critic
-                value = self.critic(minibatch.obs).flatten()
-                constraint_value = self.constraint_critic(minibatch.obs).flatten()
+                    if hasattr(mb, 'const_adv'):
+                        cadv = mb.const_adv
+                        if self.norm_const_adv:
+                            cmean, cstd = cadv[mb_learn].mean(), cadv[mb_learn].std()
+                            cadv = (cadv - cmean) / (cstd + self._eps)
+                        combined_adv = adv - float(self.lagrange.lagrangian_multiplier) * cadv
+                    else:
+                        combined_adv = adv
 
-                if self.value_clip:
-                    v_clip = minibatch.v_s + (value - minibatch.v_s).clamp(
-                        -self.eps_clip,
-                        self.eps_clip,
-                    )
-                    vf1 = (minibatch.returns - value).pow(2)
-                    vf2 = (minibatch.returns - v_clip).pow(2)
-                    vf_loss = torch.max(vf1, vf2).mean()
-                else:
-                    vf_loss = (minibatch.returns - value).pow(2).mean()
+                    surr1 = ratios * combined_adv
+                    surr2 = ratios.clamp(1.0 - self.eps_clip, 1.0 + self.eps_clip) * combined_adv
+                    if self.dual_clip:
+                        clip1 = torch.minimum(surr1, surr2)
+                        clip2 = torch.maximum(clip1, self.dual_clip * combined_adv)
+                        pg = -torch.where(combined_adv < 0, clip2, clip1)
+                    else:
+                        pg = -torch.minimum(surr1, surr2)
 
-                # calculate constraint returns
-                cf_loss = (minibatch.const_returns - constraint_value).pow(2).mean()
+                    # Critic values: if critic is non-recurrent, flatten [b, T, ...] -> [b*T, ...]
+                    # mb.obs.obs: [b, T, H]
+                    flat_obs = mb.obs.obs.reshape(-1, mb.obs.obs.shape[-1])
+                    v = self.critic(Batch(obs=flat_obs)).reshape(mb.returns.shape)  # [b, T]
 
-                # calculate regularization and overall loss
-                ent_loss = dist.entropy().mean()
-                loss = clip_loss + self.vf_coef * vf_loss + self.cf_coef * cf_loss - self.ent_coef * ent_loss
-                self.optim.zero_grad()
-                loss.backward()
-                if self.max_grad_norm:  # clip large gradient
-                    nn.utils.clip_grad_norm_(
-                        self._actor_critic.parameters(),
-                        max_norm=self.max_grad_norm,
-                    )
-                self.optim.step()
-                clip_losses.append(clip_loss.item())
-                vf_losses.append(vf_loss.item())
-                ent_losses.append(ent_loss.item())
-                cf_losses.append(cf_loss.item())
-                losses.append(loss.item())
+                    if self.value_clip:
+                        v_clip = mb.v_s + (v - mb.v_s).clamp(-self.eps_clip, self.eps_clip)
+                        vf1 = (mb.returns - v).pow(2)
+                        vf2 = (mb.returns - v_clip).pow(2)
+                        vfloss = torch.maximum(vf1, vf2)
+                    else:
+                        vfloss = (mb.returns - v).pow(2)
+
+                    # Constraint critic similarly
+                    if self.constraint_critic is not None and hasattr(mb, 'const_returns'):
+                        cv = self.constraint_critic(Batch(obs=flat_obs)).reshape(mb.const_returns.shape)
+                        cfloss = (mb.const_returns - cv).pow(2)
+                    else:
+                        cfloss = None
+
+                    ent = dist.entropy()
+                    if ent.ndim > 2:
+                        ent = ent.sum(-1)
+
+                    # Masked reductions
+                    def masked_mean(x):
+                        m = mb_learn
+                        return (x * m).sum() / m.sum().clamp_min(1)
+
+                    clip_loss = masked_mean(pg)
+                    vf_loss = masked_mean(vfloss)
+                    ent_loss = masked_mean(ent)
+                    cf_loss = masked_mean(cfloss) if isinstance(cfloss, torch.Tensor) else torch.tensor(0.0,
+                                                                                                        device=ent.device)
+
+                    loss = clip_loss + self.vf_coef * vf_loss + self.cf_coef * cf_loss - self.ent_coef * ent_loss
+                    self.optim.zero_grad()
+                    loss.backward()
+                    if self.max_grad_norm:
+                        nn.utils.clip_grad_norm_(self._actor_critic.parameters(), self.max_grad_norm)
+                    self.optim.step()
+                    clip_losses.append(clip_loss.item())
+                    vf_losses.append(vf_loss.item())
+                    ent_losses.append(ent_loss.item())
+                    cf_losses.append(cf_loss.item())
+                    losses.append(loss.item())
 
         self.lagrange.update_lagrange_multiplier(mean_ep_constraint_values)
 
@@ -377,6 +682,84 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             ent_losses=ent_losses,
             gradient_steps=gradient_steps,
         )
+
+    def flat_learn_ppo(self, batch: RolloutBatchProtocol | BatchWithAdvantagesProtocol, cf_losses: list[Any],
+                       clip_losses: list[Any], ent_losses: list[Any], gradient_steps: int, lagrangian_multiplier: float,
+                       losses: list[Any], split_batch_size: int | None, vf_losses: list[Any]) -> int:
+        for minibatch in batch.split(split_batch_size, merge_last=True, shuffle=True if self.recurrent else False):
+            gradient_steps += 1
+            # calculate loss for actor
+            advantages = minibatch.adv
+
+            constraint_advantages = minibatch.const_adv
+
+            # learn
+            if not self.recurrent:
+                dist = self(minibatch).dist
+            else:
+                out = self(
+                    batch=minibatch,
+                    state=self._get_hidden_state(minibatch),
+                )
+                dist = out.dist
+            if self.norm_adv:
+                mean, std = advantages.mean(), advantages.std()
+                advantages = (advantages - mean) / (std + self._eps)  # per-batch norm
+            if self.norm_const_adv:
+                const_mean, const_std = constraint_advantages.mean(), constraint_advantages.std()
+                constraint_advantages = (constraint_advantages - const_mean) / (const_std + self._eps)
+
+            # start lagrangian constraint
+            combined_advantages = advantages - lagrangian_multiplier * constraint_advantages
+
+            ratios = (dist.log_prob(minibatch.act) - minibatch.logp_old).exp().float()
+            ratios = ratios.reshape(ratios.size(0), -1).transpose(0, 1)
+
+            surr1 = ratios * combined_advantages
+            surr2 = ratios.clamp(1.0 - self.eps_clip, 1.0 + self.eps_clip) * combined_advantages
+            if self.dual_clip:
+                clip1 = torch.min(surr1, surr2)
+                clip2 = torch.max(clip1, self.dual_clip * combined_advantages)
+                clip_loss = -torch.where(combined_advantages < 0, clip2, clip1).mean()
+            else:
+                clip_loss = -torch.min(surr1, surr2).mean()
+
+            # calculate loss for critic
+            value = self.critic(minibatch.obs).flatten()
+            constraint_value = self.constraint_critic(minibatch.obs).flatten()
+
+            if self.value_clip:
+                v_clip = minibatch.v_s + (value - minibatch.v_s).clamp(
+                    -self.eps_clip,
+                    self.eps_clip,
+                )
+                vf1 = (minibatch.returns - value).pow(2)
+                vf2 = (minibatch.returns - v_clip).pow(2)
+                vf_loss = torch.max(vf1, vf2).mean()
+            else:
+                vf_loss = (minibatch.returns - value).pow(2).mean()
+
+            # calculate constraint returns
+            cf_loss = (minibatch.const_returns - constraint_value).pow(2).mean()
+
+            # calculate regularization and overall loss
+            ent_loss = dist.entropy().mean()
+            loss = clip_loss + self.vf_coef * vf_loss + self.cf_coef * cf_loss - self.ent_coef * ent_loss
+            self.optim.zero_grad()
+            loss.backward()
+            if self.max_grad_norm:  # clip large gradient
+                nn.utils.clip_grad_norm_(
+                    self._actor_critic.parameters(),
+                    max_norm=self.max_grad_norm,
+                )
+            self.optim.step()
+            clip_losses.append(clip_loss.item())
+            vf_losses.append(vf_loss.item())
+            ent_losses.append(ent_loss.item())
+            cf_losses.append(cf_loss.item())
+            losses.append(loss.item())
+        return gradient_steps, clip_losses, vf_losses, ent_losses, cf_losses, losses
+
 
 log = logging.getLogger(__name__)
 
@@ -606,10 +989,21 @@ class IPPOCollector(Collector):
             batch_to_add_R = copy(current_step_batch_R)
             batch_to_add_R.pop("dist")
             batch_to_add_R = cast(RolloutBatchProtocol, batch_to_add_R)
+
+            # NEW
+            agent_ids_R = np.array([obs["agent_id"] for obs in last_obs_RO])
+            env_ids = np.array(ready_env_ids_R)  # optional but handy for debugging
+
+            # Add
             insertion_idx_R, ep_return_R, ep_len_R, ep_start_idx_R = self.buffer.add(
                 batch_to_add_R,
                 buffer_ids=ready_env_ids_R,
             )
+
+            # self.buffer._meta[insertion_idx_R] = Batch({
+            #     'agent_ids': agent_ids_R,
+            #     'env_ids': env_ids,
+            # })
 
             # -_-_-_-
 
@@ -907,6 +1301,48 @@ class IPPOCollector(Collector):
                 self._hs_bank_by_agent_env.setdefault(a, {})
                 self._hs_bank_by_agent_env[a].setdefault(g, Batch())
                 self._hs_bank_by_agent_env[a][g]['hidden'] = batched_state['hidden'][j:j + 1, :, :]
+
+
+class AECMultiAgentPolicyManager(MultiAgentPolicyManager):
+
+    @staticmethod
+    def _filter_batch_for_agent(b: Batch, agent) -> Batch:
+        # 1) get per-row agent ids (handle stacked case by taking the last slice)
+        aid = b.agent_id
+        aid = np.asarray(aid)
+        mask = (aid == agent)
+
+        # 2) filter the whole batch with the mask
+        if hasattr(b, "get_keys") and len(b.get_keys()) != 0:
+            return b[mask]
+        return b
+
+    @staticmethod
+    def _assert_single_agent(b: Batch, agent):
+        aid = np.asarray(b[agent].obs.agent_id)
+        if aid.ndim > 1:
+            aid = aid[..., -1]
+        uniq = np.unique(aid)
+        assert (len(uniq) == 1 and uniq[0] == agent), f"Mixed agents: {uniq} for {agent}"
+
+    def learn(  # type: ignore
+            self,
+            batch: MAPRolloutBatchProtocol,
+            *args: Any,
+            **kwargs: Any,
+    ) -> MapTrainingStats:
+        """Dispatch the data to all policies for learning.
+
+        :param batch: must map agent_ids to rollout batches
+        """
+        agent_id_to_stats = {}
+        for agent_id, policy in self.policies.items():
+            data = batch[agent_id]
+            self._assert_single_agent(batch, agent_id)
+            if len(data.get_keys()) != 0:
+                train_stats = policy.learn(batch=data, **kwargs)
+                agent_id_to_stats[agent_id] = train_stats
+        return MapTrainingStats(agent_id_to_stats)
 
 
 # Lagrange class taken from https://github.com/PKU-Alignment/safety-gymnasium,
