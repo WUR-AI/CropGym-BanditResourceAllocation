@@ -32,7 +32,12 @@ from cropgymzoo.agents.networks import (
     ConstraintCritic,
     ObsMLP
 )
-from cropgymzoo.agents.marl_algorithms_tianshou import IPPOPolicy, IPPOCollector, LagrangianIPPOPolicy
+from cropgymzoo.agents.marl_algorithms_tianshou import (
+    IPPOPolicy,
+    IPPOCollector,
+    LagrangianIPPOPolicy,
+    AECMultiAgentPolicyManager
+)
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
 from cropgymzoo.envs.wrappers import MultiAgentVecNormObs
@@ -99,7 +104,7 @@ def make_ppo_policy(
     use_icm: bool = False,
     logger = None,
     args: Namespace = None,
-    mlp_critics = False,
+    mlp_critics = True,
 ) -> PPOPolicy | ICMPolicy:
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -191,7 +196,11 @@ def make_ppo_policy(
 
     policy_fn = IPPOPolicy if not args.lagrangian_ppo else LagrangianIPPOPolicy
 
-    lagrangian_kwarg = {'constraint_critic': constraint_critic} if args.lagrangian_ppo else {}
+    lagrangian_kwarg = {
+        'constraint_critic': constraint_critic if args.lagrangian_ppo else None,
+        'recurrent': True if args.architecture in ['lstm', 'gru'] else False,
+        'unroll_len': args.seq_len if args.architecture in ['lstm', 'gru'] else 1,
+    }
 
     ppo_policy = policy_fn(
         actor=actor,
@@ -386,9 +395,12 @@ def train_gru_ppo(args: Namespace):
         train_envs.reset(options={'year': np.random.choice(range(1951, 2024))})
         test_envs.set_obs_rms(train_envs.get_obs_rms())
 
-        # get tensorboard logger
-        tb_logger, run_name = create_logger(args)
 
+    # get tensorboard logger
+    logger, run_name = create_logger(args)
+
+    comet_logger, comet_experiment = None, None
+    if not args.no_comet:
         # get comet logger
         comet_experiment = create_comet_experiment(run_name, args)
 
@@ -399,7 +411,7 @@ def train_gru_ppo(args: Namespace):
 
         # put both in the multi-logger item
         logger = MultiLogger(
-            tb_logger,
+            logger,
             comet_logger if comet_logger else None
         )
 
@@ -425,7 +437,7 @@ def train_gru_ppo(args: Namespace):
     print(f"Using {'LagrangianIPPO' if args.lagrangian_ppo else 'IPPO'} policy!")
     print(f"Using ICM Policy!") if args.use_icm else None
 
-    marl_policy_manager = MultiAgentPolicyManager(
+    marl_policy_manager = AECMultiAgentPolicyManager(
         policies=list(policies.values()),
         env=PettingZooEnv(dummy_env),
     )
@@ -444,7 +456,7 @@ def train_gru_ppo(args: Namespace):
         buffer=VectorReplayBuffer(
             total_size=args.buffer_size,
             buffer_num=args.train_envs_num if args.parallel else 1,
-            stack_num=args.seq_len if args.architecture in ['lstm', 'gru'] else 1,
+            stack_num=1, # args.seq_len if args.architecture in ['lstm', 'gru'] else 1,
         ),  # use this buffer
         exploration_noise=True,
     )

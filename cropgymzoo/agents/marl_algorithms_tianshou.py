@@ -95,13 +95,33 @@ class IPPOPolicy(PPOPolicy):
         batch = self._compute_returns(batch, buffer, indices)
         batch.act = to_torch_as(batch.act, batch.v_s)
         logp_old = []
+        self.eval()  # avoid dropout/bn noise during behavior log-prob recomputation
         with torch.no_grad():
             for minibatch in batch.split(self.max_batchsize, shuffle=False, merge_last=True):
-                lp = self(minibatch).dist.log_prob(minibatch.act)
-                # if lp.ndim > 1:
-                #     lp = lp.sum(-1)
-                logp_old.append(lp)
-            batch.logp_old = torch.cat(logp_old, dim=0).flatten()
+                # Prepare actions with correct shape/dtype for the distribution
+                act_mb = minibatch.act
+                if not torch.is_tensor(act_mb):
+                    act_mb = torch.as_tensor(act_mb, device=batch.v_s.device)
+
+                # Retrieve the per-row pre-action hidden state for this minibatch (RNN correctness)
+                try:
+                    hs_mb = self._get_hidden_state(minibatch)  # expected Batch({"hidden": [B, L, H]}) or None
+                except Exception:
+                    hs_mb = None
+
+                out = self(minibatch, state=hs_mb) if hs_mb is not None else self(minibatch)
+                dist = out.dist
+
+                lp = dist.log_prob(act_mb)
+                # If multi-branch (e.g., Independent of multiple Categoricals), reduce branch-wise
+                if lp.ndim > 1:
+                    lp = lp.sum(-1)
+
+                # Flatten per-minibatch and collect
+                logp_old.append(lp.reshape(-1))
+
+            batch.logp_old = torch.cat(logp_old, dim=0)
+        self.train()  # restore training mode
         batch: LogpOldProtocol
         return batch
 
@@ -119,6 +139,7 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             recurrent: bool = False,
             unroll_len: int = 32,
             burn_in: int = 0,  # optional: use 0 to keep it simple
+            time_loop_actor: bool = False,  # if True, forward actor one time-step at a time during learn
             **kwargs,
     ):
         super().__init__(**kwargs)
@@ -139,6 +160,7 @@ class LagrangianIPPOPolicy(IPPOPolicy):
         self.recurrent = recurrent
         self.unroll_len = int(unroll_len)
         self.burn_in = int(burn_in)
+        self.time_loop_actor = bool(time_loop_actor)
 
         self.logger = logger
 
@@ -175,12 +197,12 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                 continue
             for off in range(0, Lseg, T):
                 ws, we = s + off, min(s + off + T, e)
+                assert (aid[ws:we] == aid[ws]).all(), "Window mixes agents"
+                assert (env_id[ws:we] == env_id[ws]).all(), "Window mixes envs"
                 windows.append((ws, we))
 
         B = len(windows)
 
-        assert (aid[ws:we] == aid[ws]).all(), "Window mixes agents"
-        assert (env_id[ws:we] == env_id[ws]).all(), "Window mixes envs"
 
         # 3) Stack/pad fields to [B, T, ...]
         def slice_field(field, slc):
@@ -290,6 +312,9 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                         if hasattr(getattr(flat, field_name), 'device')
                         else None
                     )
+                # # Squeeze trailing singleton action dim if present
+                # if field_name == 'act' and x.ndim >= 2 and x.shape[-1] == 1:
+                #     x = x.squeeze(-1)
                 xs.append(pad_to_T_general(x, t))
             return torch.stack(xs, dim=0)  # [B, T, ...]
 
@@ -348,21 +373,17 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             if hs is None:
                 raise RuntimeError('policy.hidden_state[agent_id] does not contain a "hidden" tensor')
 
-            # hs shapes we handle: [N, H], [N, E, H], [N, L, H], [N, E, L, H]
-            # Select time row `ws` and env column if present
+            # Supported shapes:
+            # [N, H]          -> add layer dim -> [1, H]
+            # [N, L, H]       -> pick time row -> [L, H]
+            # [N, E, L, H]    -> pick env then time -> [L, H]
             if hs.ndim == 2:
                 # [N, H]
                 h_ws = hs[ws]  # [H]
                 h_ws = h_ws.unsqueeze(0)  # -> [L=1, H]
             elif hs.ndim == 3:
-                # Could be [N, E, H] or [N, L, H]; disambiguate by matching E to buffer_num if available
-                    # [N, E, H]
-                env_local = _get_local_env_id(self, flat, ws)
-                h_ws = hs[ws, env_local]  # [H]
-                h_ws = h_ws.unsqueeze(0)  # -> [L=1, H]
-                # else:
-                #     # [N, L, H]
-                #     h_ws = hs[ws]  # [L, H]
+                # [N, L, H]
+                h_ws = hs[ws]  # [L, H]
             elif hs.ndim == 4:
                 # [N, E, L, H]
                 env_local = _get_local_env_id(self, flat, ws)
@@ -371,10 +392,10 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                 raise RuntimeError(f'Unsupported hidden shape: {tuple(hs.shape)}')
 
             h0_list.append(h_ws)
-            hs_any = hs  # keep a reference to infer device/dtype later
+            hs_any = hs  # remember device/dtype
 
         # Stack to [B, L, H]
-        h0 = torch.stack(h0_list, dim=0)  # [B, L, H]
+        h0 = torch.stack(h0_list, dim=0)
 
         # Ensure tensor is on the same device/type as the rest of the batch
         if isinstance(hs_any, torch.Tensor):
@@ -592,13 +613,70 @@ class LagrangianIPPOPolicy(IPPOPolicy):
 
                     # Forward sequence through your actor (MaskedActor with RecurrentGRU)
                     # mb.obs is a Batch with .obs shaped [b, T, H]
-                    out = self(batch=mb, state=mb_h0)
-                    dist = out.dist  # should produce per-step distributions compatible with [b, T, ...]
+                    if self.time_loop_actor:
+                        # Unroll in Python over time, feeding one step at a time and carrying the hidden state
+                        bsz, tlen = mb.obs.obs.shape[0], mb.obs.obs.shape[1]
+                        state = mb_h0
+                        logp_list = []
+                        ent_list = []
+                        for t in range(tlen):
+                            # Build per-step observation Batch
+                            step_obs_fields = {"obs": mb.obs.obs[:, t]}
+                            if hasattr(mb.obs, "mask") and mb.obs.mask is not None:
+                                step_obs_fields["mask"] = mb.obs.mask[:, t]
+                            if hasattr(mb.obs, "agent_id") and mb.obs.agent_id is not None:
+                                # agent_id can be [B, T] or [B]; support both
+                                agent_ids = mb.obs.agent_id[:, t] if getattr(mb.obs.agent_id, "ndim", 1) > 1 else mb.obs.agent_id
+                                step_obs_fields["agent_id"] = agent_ids
+                            step_batch = Batch(obs=Batch(step_obs_fields))
+                            out_t = self(batch=step_batch, state=state)
+                            dist_t = out_t.dist
+                            state = out_t.state  # carry hidden
+                            # Actions at time t
+                            act_t = mb.act[:, t]
+                            if act_t.ndim == 2 and act_t.shape[-1] == 1:
+                                act_t = act_t.squeeze(-1)
+                            try:
+                                is_discrete = isinstance(self.action_space, gym.spaces.Discrete)
+                            except Exception:
+                                is_discrete = False
+                            if is_discrete:
+                                act_t = act_t.long()
+                            lp_t = dist_t.log_prob(act_t)
+                            if lp_t.ndim > 1:
+                                lp_t = lp_t.sum(-1)
+                            ent_t = dist_t.entropy()
+                            if ent_t.ndim > 1:
+                                ent_t = ent_t.sum(-1)
+                            logp_list.append(lp_t)
+                            ent_list.append(ent_t)
+                        logp = torch.stack(logp_list, dim=1)  # [B, T]
+                        ent = torch.stack(ent_list, dim=1)    # [B, T]
+                    else:
+                        out = self(batch=mb, state=mb_h0)
+                        dist = out.dist  # should produce per-step distributions compatible with [b, T, ...]
+                        # Per-step log-prob
+                        act = mb.act
+                        # Make action shape compatible with distribution
+                        if act.ndim == 3 and act.shape[-1] == 1:
+                            act = act.squeeze(-1)
+                        # If discrete action space, cast to long indices
+                        try:
+                            is_discrete = isinstance(self.action_space, gym.spaces.Discrete)
+                        except Exception:
+                            is_discrete = False
+                        if is_discrete:
+                            act = act.long()
 
-                    # Per-step log-prob
-                    logp = dist.log_prob(mb.act)  # [b, T] or [b, T, A] -> reduce over action dims if needed
-                    if logp.ndim > 2:
-                        logp = logp.sum(-1)
+                        logp = dist.log_prob(act)  # [B, T] for Categorical or [B, T] for Independent
+
+                        # For multi-branch (e.g., MultiDiscrete implemented as Independent of Categoricals),
+                        # log_prob may return [B, T, A]; in that case sum across branches.
+                        if logp.ndim > 2:
+                            logp = logp.sum(-1)
+                        ent = dist.entropy()
+                        if ent.ndim > 2:
+                            ent = ent.sum(-1)
 
                     ratios = (logp - mb.logp_old).exp().float()  # [b, T]
 
