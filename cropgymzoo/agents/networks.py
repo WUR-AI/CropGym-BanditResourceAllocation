@@ -137,7 +137,7 @@ class RecurrentLSTM(NetBase[RecurrentStateBatch]):
         self.flag = False
 
         self.fc1 = nn.Linear(int(np.prod(state_shape)), hidden_layer_size)
-        self.lstm = nn.GRU(
+        self.lstm = nn.LSTM(
             input_size=hidden_layer_size,
             hidden_size=hidden_layer_size,
             num_layers=layer_num,
@@ -186,19 +186,14 @@ class RecurrentLSTM(NetBase[RecurrentStateBatch]):
             )  # for eval h: [B, H], for train: [T, B, H]
         logits = self.fc2(y)  # [:,-1] if y.ndim == 3 else y)  # [B_alive, A]
 
-        # return to [B, T, H] for storing
         next_hidden = cast(
             RecurrentStateBatch,
             Batch(
                 {
-                    "hidden": h.transpose(0, 1).detach()
-                    if h.ndim == 3
-                    else h.detach(),
-                    "cell": c.transpose(0, 1).detach()
-                    if c.ndim == 3
-                    else c.detach(),
+                    "hidden": h.transpose(0, 1).detach() if h.ndim == 3 else h.detach(),
+                    "cell": c.transpose(0, 1).detach() if c.ndim == 3 else c.detach(),
                 }
-            )
+            ),
         )
 
         return logits, next_hidden

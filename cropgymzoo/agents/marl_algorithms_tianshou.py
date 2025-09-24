@@ -342,9 +342,10 @@ class LagrangianIPPOPolicy(IPPOPolicy):
         if const_returns is not None:
             const_returns = stack_time('const_returns')
 
-        # 4) Initial hidden state for each window from the first element’s stored state
-        # Assumes collector saved pre-action hidden per step in flat.policy.hidden_state[agent_id]['hidden']
-        # Hidden can be one of: [N, H], [N, E, H], [N, L, H], [N, E, L, H]
+        # 4) Initial hidden (and optional LSTM cell) state for each window from the first element’s stored state
+        # Assumes collector saved pre-action state per step in flat.policy.hidden_state[agent_id],
+        # with keys 'hidden' (and optionally 'cell' for LSTM).
+        # Each can be one of: [N, H], [N, L, H], [N, E, L, H]
 
         def _get_local_env_id(self, flat: Batch, row: int) -> int:
             if 'env_id' in getattr(flat.info, '__dict__', {}) and flat.info.env_id is not None:
@@ -360,7 +361,9 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             return 0
 
         h0_list: list[torch.Tensor] = []
+        c0_list: list[torch.Tensor] = []
         hs_any = None
+        cs_any = None
         for ws, _ in windows:
             agent_id = aid[ws]
             st = flat.policy.hidden_state[agent_id]  # Batch or tensor-like
@@ -368,38 +371,53 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             # Get the hidden tensor regardless of wrapping
             if isinstance(st, Batch):
                 hs = st.get('hidden', None)
+                cs = st.get('cell', None)
             else:
                 hs = st
+                cs = None
             if hs is None:
                 raise RuntimeError('policy.hidden_state[agent_id] does not contain a "hidden" tensor')
 
-            # Supported shapes:
-            # [N, H]          -> add layer dim -> [1, H]
-            # [N, L, H]       -> pick time row -> [L, H]
-            # [N, E, L, H]    -> pick env then time -> [L, H]
+            # Hidden shapes:
+            # [N, H] -> add layer dim -> [1, H]
+            # [N, L, H] -> pick time row -> [L, H]
+            # [N, E, L, H] -> pick env then time -> [L, H]
             if hs.ndim == 2:
-                # [N, H]
-                h_ws = hs[ws]  # [H]
-                h_ws = h_ws.unsqueeze(0)  # -> [L=1, H]
+                h_ws = hs[ws].unsqueeze(0)
             elif hs.ndim == 3:
-                # [N, L, H]
-                h_ws = hs[ws]  # [L, H]
+                h_ws = hs[ws]
             elif hs.ndim == 4:
-                # [N, E, L, H]
                 env_local = _get_local_env_id(self, flat, ws)
-                h_ws = hs[ws, env_local]  # [L, H]
+                h_ws = hs[ws, env_local]
             else:
                 raise RuntimeError(f'Unsupported hidden shape: {tuple(hs.shape)}')
-
             h0_list.append(h_ws)
             hs_any = hs  # remember device/dtype
 
+            # Cell shapes mirror hidden; only if present
+            if cs is not None:
+                if cs.ndim == 2:
+                    c_ws = cs[ws].unsqueeze(0)
+                elif cs.ndim == 3:
+                    c_ws = cs[ws]
+                elif cs.ndim == 4:
+                    env_local = _get_local_env_id(self, flat, ws)
+                    c_ws = cs[ws, env_local]
+                else:
+                    raise RuntimeError(f'Unsupported cell shape: {tuple(cs.shape)}')
+                c0_list.append(c_ws)
+                cs_any = cs
+
         # Stack to [B, L, H]
         h0 = torch.stack(h0_list, dim=0)
-
-        # Ensure tensor is on the same device/type as the rest of the batch
         if isinstance(hs_any, torch.Tensor):
             h0 = h0.to(hs_any.device, dtype=hs_any.dtype)
+        if len(c0_list) > 0:
+            c0 = torch.stack(c0_list, dim=0)
+            if isinstance(cs_any, torch.Tensor):
+                c0 = c0.to(cs_any.device, dtype=cs_any.dtype)
+        else:
+            c0 = None
 
         seq = Batch(
             obs=Batch.stack(obs_list, axis=0),  # .obs will be [B, T, H]
@@ -419,8 +437,11 @@ class LagrangianIPPOPolicy(IPPOPolicy):
         if self.burn_in > 0:
             learn_mask[:, :self.burn_in] = False
 
-        # Wrap h0 as RecurrentStateBatch
-        h0_batch = Batch({"hidden": h0})
+        # Wrap h0 as RecurrentStateBatch (include LSTM cell if available)
+        h0_fields = {"hidden": h0}
+        if c0 is not None:
+            h0_fields["cell"] = c0
+        h0_batch = Batch(h0_fields)
         return seq, h0_batch, valid_mask, learn_mask
 
     def _compute_returns(
@@ -559,8 +580,21 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             batch: Batch,
     ):
         agent_id = batch.obs.agent_id[0]
-        hidden_state = batch.policy.hidden_state[agent_id]
-        return hidden_state
+        st = batch.policy.hidden_state[agent_id]
+
+        # If the collector stored a Batch with keys, pass them through.
+        if isinstance(st, Batch):
+            h = st.get("hidden", None)
+            c = st.get("cell", None)
+            out_fields = {}
+            if h is not None:
+                out_fields["hidden"] = h
+            if c is not None:
+                out_fields["cell"] = c
+            return Batch(out_fields) if len(out_fields) > 0 else None
+
+        # Otherwise, assume a single tensor = GRU hidden and wrap it.
+        return Batch({"hidden": st})
 
     def learn(  # type: ignore
             self,
@@ -609,7 +643,10 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                     mb = seq_batch[s:e]
                     mb_valid = valid_mask[s:e]
                     mb_learn = learn_mask[s:e]
-                    mb_h0 = Batch({"hidden": h0.hidden[s:e]})
+                    mb_h0_fields = {"hidden": h0.hidden[s:e]}
+                    if hasattr(h0, "cell") and getattr(h0, "cell") is not None:
+                        mb_h0_fields["cell"] = h0.cell[s:e]
+                    mb_h0 = Batch(mb_h0_fields)
 
                     # Forward sequence through your actor (MaskedActor with RecurrentGRU)
                     # mb.obs is a Batch with .obs shaped [b, T, H]
@@ -1031,24 +1068,43 @@ class IPPOCollector(Collector):
             temp_current_step_batch_R = copy(current_step_batch_R)
             temp_collect_action_computation_batch_R = copy(collect_action_computation_batch_R)
             temp_agent_hs = {}
+            temp_agent_cs = {}
             for _agent, _hs_agent in temp_current_step_batch_R['policy']['hidden_state'].items():
                 if not _hs_agent:
                     continue
+                # Broadcast HIDDEN if the stored batch is smaller than ready_env_ids
                 if len(_hs_agent.shape) == 3 and _hs_agent['hidden'].shape[0] < len(ready_env_ids_R):
                     hidden_agent = torch.cat(
                         [
                             self._hs_bank_by_agent_env[_agent][i]['hidden']
                             for i in ready_env_ids_R
                         ],
-                        dim=0
+                        dim=0,
                     )
                     temp_agent_hs[_agent] = hidden_agent
+                # Broadcast CELL if available and needs broadcasting
+                if 'cell' in _hs_agent and _hs_agent['cell'] is not None and (
+                    (len(_hs_agent.shape) == 3 and _hs_agent['cell'].shape[0] < len(ready_env_ids_R))
+                ):
+                    cell_agent = torch.cat(
+                        [
+                            self._hs_bank_by_agent_env[_agent][i]['cell']
+                            for i in ready_env_ids_R
+                        ],
+                        dim=0,
+                    )
+                    temp_agent_cs[_agent] = cell_agent
 
-            if temp_agent_hs:
-                for _agent, _hs_agent in temp_agent_hs.items():
-                    temp_current_step_batch_R['policy']['hidden_state'][_agent]['hidden'] = _hs_agent
-                    temp_collect_action_computation_batch_R['hidden_state'][_agent]['hidden'] = _hs_agent
-                    temp_collect_action_computation_batch_R['policy_entry']['hidden_state'][_agent]['hidden'] = _hs_agent
+            if temp_agent_hs or temp_agent_cs:
+                for _agent in set(list(temp_agent_hs.keys()) + list(temp_agent_cs.keys())):
+                    if _agent in temp_agent_hs:
+                        temp_current_step_batch_R['policy']['hidden_state'][_agent]['hidden'] = temp_agent_hs[_agent]
+                        temp_collect_action_computation_batch_R['hidden_state'][_agent]['hidden'] = temp_agent_hs[_agent]
+                        temp_collect_action_computation_batch_R['policy_entry']['hidden_state'][_agent]['hidden'] = temp_agent_hs[_agent]
+                    if _agent in temp_agent_cs:
+                        temp_current_step_batch_R['policy']['hidden_state'][_agent]['cell'] = temp_agent_cs[_agent]
+                        temp_collect_action_computation_batch_R['hidden_state'][_agent]['cell'] = temp_agent_cs[_agent]
+                        temp_collect_action_computation_batch_R['policy_entry']['hidden_state'][_agent]['cell'] = temp_agent_cs[_agent]
                 current_step_batch_R = copy(temp_current_step_batch_R)
                 collect_action_computation_batch_R = copy(temp_collect_action_computation_batch_R)
 
@@ -1336,18 +1392,33 @@ class IPPOCollector(Collector):
             self._hs_bank_by_agent_env.setdefault(a, {})
 
         for a in np.unique(agent_ids_R):
-            # local positions in this step for this agent and alive
-            # local_idx = np.nonzero((agent_ids_R == a) & (alive_R == True))[0]
-            # local_idx = np.flatnonzero((agent_ids_dict_R.values() == a))
             local_idx = np.asarray([k for k, v in agent_ids_dict_R.items() if v == a])
             if len(local_idx) == 0:
                 continue
 
             if self._hs_bank_by_agent_env[a]:
-                sliced_hs = {i: self._hs_bank_by_agent_env[a][i]['hidden'] for i in local_idx if i in self._hs_bank_by_agent_env[a]}
+                # Gather hidden for all requested env ids
+                sliced_hs = {
+                    i: self._hs_bank_by_agent_env[a][i]['hidden']
+                    for i in local_idx
+                    if i in self._hs_bank_by_agent_env[a] and 'hidden' in self._hs_bank_by_agent_env[a][i]
+                }
+                if len(sliced_hs) != len(local_idx):
+                    # If any slot is missing, skip providing state (policy will init)
+                    continue
                 hs = torch.cat([sliced_hs[i] for i in local_idx], dim=0)
 
-                result[a] = Batch({'hidden': hs})
+                # Optionally gather cell (LSTM) if present for all
+                have_all_cells = all(
+                    i in self._hs_bank_by_agent_env[a] and 'cell' in self._hs_bank_by_agent_env[a][i]
+                    for i in local_idx
+                )
+                if have_all_cells:
+                    sliced_cs = {i: self._hs_bank_by_agent_env[a][i]['cell'] for i in local_idx}
+                    cs = torch.cat([sliced_cs[i] for i in local_idx], dim=0)
+                    result[a] = Batch({'hidden': hs, 'cell': cs})
+                else:
+                    result[a] = Batch({'hidden': hs})
 
         if not result:
             result = None
@@ -1368,17 +1439,19 @@ class IPPOCollector(Collector):
 
         for a, batched_state in hidden_state_out.items():
             # positions where we forwarded this agent
-            # local_idx = np.nonzero((agent_ids_R == a) & (alive_R == True))[0]
             local_idx = np.flatnonzero((agent_ids_R == a))
             if len(local_idx) == 0:
                 continue
 
-            # slice per-sample state from batched_state and put into bank
             for j, li in enumerate(local_idx):
                 g = int(ready_env_ids_R[li])
                 self._hs_bank_by_agent_env.setdefault(a, {})
                 self._hs_bank_by_agent_env[a].setdefault(g, Batch())
+                # Always store hidden
                 self._hs_bank_by_agent_env[a][g]['hidden'] = batched_state['hidden'][j:j + 1, :, :]
+                # Store cell if present (LSTM)
+                if 'cell' in batched_state and batched_state['cell'] is not None:
+                    self._hs_bank_by_agent_env[a][g]['cell'] = batched_state['cell'][j:j + 1, :, :]
 
 
 class AECMultiAgentPolicyManager(MultiAgentPolicyManager):
