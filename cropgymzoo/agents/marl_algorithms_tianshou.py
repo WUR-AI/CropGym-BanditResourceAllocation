@@ -638,11 +638,22 @@ class LagrangianIPPOPolicy(IPPOPolicy):
 
                 B = seq_batch.adv.shape[0]
                 bs = batch_size or B
+
+                # loop whole batch by slicing batch size
                 for s in range(0, B, bs):
+                    gradient_steps += 1
+
+                    # get end index
                     e = min(s + bs, B)
+
+                    # slice batch to get minibatch
                     mb = seq_batch[s:e]
                     mb_valid = valid_mask[s:e]
+
+                    # mask for learning
                     mb_learn = learn_mask[s:e]
+
+                    # get fields for hidden states
                     mb_h0_fields = {"hidden": h0.hidden[s:e]}
                     if hasattr(h0, "cell") and getattr(h0, "cell") is not None:
                         mb_h0_fields["cell"] = h0.cell[s:e]
@@ -690,6 +701,7 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                         logp = torch.stack(logp_list, dim=1)  # [B, T]
                         ent = torch.stack(ent_list, dim=1)    # [B, T]
                     else:
+                        # case for feeding in whole minibatch
                         out = self(batch=mb, state=mb_h0)
                         dist = out.dist  # should produce per-step distributions compatible with [b, T, ...]
                         # Per-step log-prob
@@ -759,10 +771,6 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                         cfloss = (mb.const_returns - cv).pow(2)
                     else:
                         cfloss = None
-
-                    ent = dist.entropy()
-                    if ent.ndim > 2:
-                        ent = ent.sum(-1)
 
                     # Masked reductions
                     def masked_mean(x):
