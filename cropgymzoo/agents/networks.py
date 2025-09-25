@@ -50,21 +50,20 @@ class RecurrentGRU(NetBase[RecurrentStateBatch]):
     ) -> None:
         super().__init__()
         self.device = device
-        self.output_dim = int(np.prod(action_shape))
-        self.obs_dim = state_shape
+        self.obs_dim = state_shape + action_shape
         self.hidden_dim = hidden_layer_size
         self.env_num = 1
         self.flag = False
 
-
-        self.fc1 = nn.Linear(int(np.prod(state_shape)), hidden_layer_size)
+        self.fc1 = nn.Linear(int(np.prod(self.obs_dim)), hidden_layer_size)
         self.gru = nn.GRU(
             input_size=hidden_layer_size,
             hidden_size=hidden_layer_size,
             num_layers=layer_num,
             batch_first=True,
         )
-        self.fc2 = nn.Linear(hidden_layer_size, int(np.prod(action_shape)))
+        # self.fc2 = nn.Linear(hidden_layer_size, int(np.prod(action_shape)))
+        self.output_dim = hidden_layer_size
 
     def forward(                      # pylint: disable=arguments-differ
         self,
@@ -73,19 +72,7 @@ class RecurrentGRU(NetBase[RecurrentStateBatch]):
         info: dict[str, Any] | None = None,
     ) -> tuple[torch.Tensor, RecurrentStateBatch]:
 
-        if isinstance(obs, Batch):
-            obs = obs.obs  # or dict(obs)   (no copy of scalars)
-
-        # input -> [B, T, H] for training, [B, H] for eval
-        if not torch.is_tensor(obs):
-            obs = torch.from_numpy(obs).to(self.device)
-
-        if obs.ndim == 1:  # single env
-            obs = obs.unsqueeze(0)  # for eval, dim: [B, H]
-        elif obs.ndim == 2:
-            obs = obs.unsqueeze(-2)  # for training, dim: [B, T, H]
-
-        # 2. feed-forward + add time dim
+        # feed-forward + add time dim
         x = self.fc1(obs) # [B, H] or [B, T, H]
 
         if state is None or "hidden" not in state:
@@ -102,7 +89,7 @@ class RecurrentGRU(NetBase[RecurrentStateBatch]):
                 x,
                 h_in
             )  # for eval h: [B, H], for train: [T, B, H]
-        logits = self.fc2(y)  # [:,-1] if y.ndim == 3 else y)  # [B_alive, A]
+        # logits = self.fc2(y)  # [:,-1] if y.ndim == 3 else y)  # [B_alive, A]
 
         # return to [B, T, H] for storing
         next_hidden = cast(
@@ -116,7 +103,7 @@ class RecurrentGRU(NetBase[RecurrentStateBatch]):
             )
         )
 
-        return logits, next_hidden
+        return y, next_hidden
 
 
 class RecurrentLSTM(NetBase[RecurrentStateBatch]):
@@ -130,20 +117,20 @@ class RecurrentLSTM(NetBase[RecurrentStateBatch]):
     ) -> None:
         super().__init__()
         self.device = device
-        self.output_dim = int(np.prod(action_shape))
-        self.obs_dim = state_shape
+        self.obs_dim = state_shape + action_shape
         self.hidden_dim = hidden_layer_size
         self.env_num = 1
         self.flag = False
 
-        self.fc1 = nn.Linear(int(np.prod(state_shape)), hidden_layer_size)
+        self.fc1 = nn.Linear(int(np.prod(self.obs_dim)), hidden_layer_size)
         self.lstm = nn.LSTM(
             input_size=hidden_layer_size,
             hidden_size=hidden_layer_size,
             num_layers=layer_num,
             batch_first=True,
         )
-        self.fc2 = nn.Linear(hidden_layer_size, int(np.prod(action_shape)))
+        # self.fc2 = nn.Linear(hidden_layer_size, int(np.prod(action_shape)))
+        self.output_dim = hidden_layer_size
 
     def forward(  # pylint: disable=arguments-differ
             self,
@@ -152,19 +139,7 @@ class RecurrentLSTM(NetBase[RecurrentStateBatch]):
             info: dict[str, Any] | None = None,
     ) -> tuple[torch.Tensor, RecurrentStateBatch]:
 
-        if isinstance(obs, Batch):
-            obs = obs.obs  # or dict(obs)   (no copy of scalars)
-
-        # input -> [B, T, H] for training, [B, H] for eval
-        if not torch.is_tensor(obs):
-            obs = torch.from_numpy(obs).to(self.device)
-
-        if obs.ndim == 1:  # single env
-            obs = obs.unsqueeze(0)  # for eval, dim: [B, H]
-        elif obs.ndim == 2:
-            obs = obs.unsqueeze(-2)  # for training, dim: [B, T, H]
-
-        # 2. feed-forward + add time dim
+        # feed-forward + add time dim
         x = self.fc1(obs)  # [B, H] or [B, T, H]
 
         if state is None or "hidden" not in state:
@@ -184,7 +159,6 @@ class RecurrentLSTM(NetBase[RecurrentStateBatch]):
                 x,
                 h_in
             )  # for eval h: [B, H], for train: [T, B, H]
-        logits = self.fc2(y)  # [:,-1] if y.ndim == 3 else y)  # [B_alive, A]
 
         next_hidden = cast(
             RecurrentStateBatch,
@@ -196,7 +170,7 @@ class RecurrentLSTM(NetBase[RecurrentStateBatch]):
             ),
         )
 
-        return logits, next_hidden
+        return y, next_hidden
 
 
 class MaskedActor(Actor):
@@ -212,11 +186,35 @@ class MaskedActor(Actor):
         # grab vector
         obs.obs = obs.obs.astype(np.float32) if isinstance(obs.obs, np.ndarray) else obs.obs
 
+        if isinstance(obs, Batch):
+            x_in = obs.obs  # or dict(obs)   (no copy of scalars)
+
+        # input -> [B, T, H] for training, [B, H] for eval
+        if not torch.is_tensor(x_in):
+            x_in = torch.from_numpy(x_in).to(self.device)
+
+        if x_in.ndim == 1:  # single env
+            x_in = x_in.unsqueeze(0)  # for eval, dim: [B, H]
+        elif x_in.ndim == 2:
+            x_in = x_in.unsqueeze(-2)  # for training, dim: [B, T, H]
+
+        if isinstance(obs, Batch) and "mask" in obs:
+            mask_t = torch.as_tensor(obs.mask, device=self.device, dtype=torch.float32)
+            # Make shapes match: [B,T,A] or [B,A] → add time dim if needed
+            if mask_t.ndim == 1 and x_in.ndim > 1:
+                mask_t = mask_t.unsqueeze(0)
+                if x_in.ndim == 3:
+                    mask_t = mask_t.unsqueeze(-2)
+            if x_in.ndim == 3 and mask_t.ndim == 2:  # [B,H]
+                mask_t = mask_t.unsqueeze(-2) # → [B,1,A]
+            # Broadcast along T if needed, then concat on feature dim
+            x_in = torch.cat([x_in, mask_t], dim=-1)
+
         # preprocess obs (with GRU or anything else)
-        x, h = self.preprocess(obs, state, info)
+        features, h = self.preprocess(x_in, state, info)
 
         # generate logits from mlp
-        logits = self.last(x)
+        logits = self.last(features)
 
         if logits.ndim == 1:
             logits = logits.unsqueeze(0)
@@ -252,15 +250,25 @@ class StackedCritic(Critic):
     def forward(self, obs: np.ndarray | torch.Tensor, **kwargs: Any) -> torch.Tensor:
         """Mapping: s_B -> V(s)_B."""
         # TODO: don't use this mechanism for passing state
-        logits, _ = self.preprocess(obs, state=kwargs.get("state", None))
 
-        if logits.ndim == 3:
-            logits = logits.clone()
-            logits = logits[:, -1, :]
-            logits = logits.squeeze(-1)
+        if isinstance(obs, Batch):
+            x_in = obs.obs
 
-        return self.last(logits)
+        if isinstance(obs, Batch) and "mask" in obs:
+            mask_t = torch.as_tensor(obs.mask, device=self.device, dtype=torch.float32)
+            # Make shapes match: [B,T,A] or [B,A] → add time dim if needed
+            if mask_t.ndim == 1 and x_in.ndim > 1:
+                mask_t = mask_t.unsqueeze(0)
+                if x_in.ndim == 3:
+                    mask_t = mask_t.unsqueeze(-2)
+            if x_in.ndim == 3 and mask_t.ndim == 2:  # [B,H]
+                mask_t = mask_t.unsqueeze(-2) # → [B,1,A]
+            # Broadcast along T if needed, then concat on feature dim
+            x_in = torch.cat([x_in, mask_t], dim=-1)
 
+        y, _ = self.preprocess(x_in, state=kwargs.get("state", None))
+
+        return self.last(y)
 
 
 class ConstraintCritic(Critic):
@@ -283,14 +291,9 @@ class ConstraintCritic(Critic):
         elif obs.ndim == 3:
             obs = obs[:, :, self.constraint_indices]
 
-        logits, _ = self.preprocess(obs, state=kwargs.get("state", None))
+        y, _ = self.preprocess(obs, state=kwargs.get("state", None))
 
-        if logits.ndim == 3:
-            logits = logits.clone()
-            logits = logits[:, -1, :]
-            logits = logits.squeeze(-1)
-
-        return self.last(logits)
+        return self.last(y)
 
 
 class ObsMLP(MLP):
@@ -309,8 +312,6 @@ class ObsMLP(MLP):
         :param state: unused and returned as is
         :param info: unused
         """
-        if isinstance(obs, Batch):
-            obs = obs.obs
 
         obs = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
         x = self.model(obs)
