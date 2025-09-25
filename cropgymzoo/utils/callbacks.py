@@ -4,6 +4,10 @@ import glob
 import re
 from datetime import datetime
 
+import matplotlib
+matplotlib.use("Agg")  # non-interactive backend
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+
 from pathlib import Path
 
 import json
@@ -26,6 +30,7 @@ from cropgymzoo.agents.marl_algorithms_tianshou import IPPOPolicy
 from cropgymzoo.agents.nn_agp import SelectionInfo
 from cropgymzoo.envs.wrappers import MultiAgentVecNormObs
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
+from cropgymzoo.utils.plotters import plot_results
 
 def run_test_callback(
         epoch,
@@ -65,6 +70,25 @@ def run_test_callback(
             train_env.reset(options={"curriculum_stage": curriculum_manager.stage})
 
         writer.flush()
+
+def fig_to_chw_uint8(fig, keep_alpha=False, close=True):
+    """
+    Convert a Matplotlib Figure to a CHW uint8 array for TensorBoard.
+    - keep_alpha=False -> returns RGB (C=3)
+    - keep_alpha=True  -> returns RGBA (C=4). TensorBoard add_image expects 1 or 3 channels,
+      so only set True if your logger supports 4 channels.
+    """
+    canvas = FigureCanvas(fig)
+    canvas.draw()
+    # buffer_rgba gives a (H, W, 4) memoryview without DPI/retina surprises
+    buf = np.asarray(canvas.buffer_rgba())  # uint8, shape (H, W, 4)
+    if not keep_alpha:
+        buf = buf[..., :3]  # drop alpha -> (H, W, 3)
+    chw = np.moveaxis(buf, 2, 0)  # (C, H, W)
+    if close:
+        import matplotlib.pyplot as plt
+        plt.close(fig)
+    return chw
 
 def yearly_eval_test_fn(
         epoch,
@@ -173,12 +197,22 @@ def yearly_eval_test_fn(
                 writer.add_scalar(f"constrain/year:{year}/{a_id}/ConstraintFrequency", constraint_frequency, epoch)
                 writer.add_scalar(f"constrain/year:{year}/{a_id}/ConstraintDVS", constraint_dvs, epoch)
                 writer.add_scalar(f"constrain/year:{year}/{a_id}/ConstraintTotal", constraint_total, epoch)
+
             else:
                 ...
         else:
             across_years_reward[year].append(np.sum(reward_year))
             # Logging intermediate results
             if writer:
+                writer.add_image(
+                    f"image/plot_year:{year}",
+                    fig_to_chw_uint8(plot_results(
+                        agent_info,
+                        variable_list=['DVS', 'Profit', 'Action', 'Yield', 'BudgetLeft'],
+                        show=False,
+                    )),
+                    epoch,
+                )
                 writer.add_scalar(f"metrics/reward/year:{year}/total_reward", np.sum(reward_year), epoch)
     else:
         # Final aggregated logging

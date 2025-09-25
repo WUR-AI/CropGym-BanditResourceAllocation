@@ -30,6 +30,8 @@ def plot_results(
         variable_list: list = get_default_plot_vars(),
         cmap_str: str = "tab10",
         save_path: str = None,
+        dpi: int = 300,
+        show: bool = True,
 ):
     agents = list(infos.keys())
     agent_crops = [
@@ -101,6 +103,9 @@ def plot_results(
     if save_path is not None:
         if not save_path.endswith(".png"):
             save_path += ".png"
-        plt.savefig(save_path, dpi=300)
+        plt.savefig(save_path, dpi=dpi)
 
-    plt.show()
+    if show:
+        plt.show()
+
+    return fig
