@@ -254,6 +254,9 @@ class StackedCritic(Critic):
         if isinstance(obs, Batch):
             x_in = obs.obs
 
+        if not torch.is_tensor(x_in):
+            x_in = torch.from_numpy(x_in).to(self.device)
+
         if isinstance(obs, Batch) and "mask" in obs:
             mask_t = torch.as_tensor(obs.mask, device=self.device, dtype=torch.float32)
             # Make shapes match: [B,T,A] or [B,A] → add time dim if needed
