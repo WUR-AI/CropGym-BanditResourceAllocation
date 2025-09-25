@@ -148,6 +148,7 @@ def make_ppo_policy(
         )
         constraint_net = ObsMLP(
             input_dim=obs_constraint_dim,
+            action_dim=act_dim,
             hidden_sizes=hidden,
             activation=torch.nn.Tanh,
             device=device,
@@ -171,6 +172,7 @@ def make_ppo_policy(
         )
         constraint_net = ObsMLP(
             input_dim=obs_constraint_dim,
+            action_dim=act_dim,
             hidden_sizes=hidden,
             activation=torch.nn.Tanh,
             device=device,

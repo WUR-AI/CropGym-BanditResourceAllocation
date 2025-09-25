@@ -284,17 +284,32 @@ class ConstraintCritic(Critic):
     def forward(self, obs: np.ndarray | torch.Tensor, **kwargs: Any) -> torch.Tensor:
 
         if isinstance(obs, Batch):
-            obs = obs.obs
+            x_in = obs.obs
+
+        if not torch.is_tensor(x_in):
+            x_in = torch.from_numpy(x_in).to(self.device)
 
         # add checks?
-        if obs.ndim == 1:
-            obs = obs[self.constraint_indices]
-        elif obs.ndim == 2:
-            obs = obs[:, self.constraint_indices]
-        elif obs.ndim == 3:
-            obs = obs[:, :, self.constraint_indices]
+        if x_in.ndim == 1:
+            x_in = x_in[self.constraint_indices]
+        elif x_in.ndim == 2:
+            x_in = x_in[:, self.constraint_indices]
+        elif x_in.ndim == 3:
+            x_in = x_in[:, :, self.constraint_indices]
 
-        y, _ = self.preprocess(obs, state=kwargs.get("state", None))
+        if isinstance(obs, Batch) and "mask" in obs:
+            mask_t = torch.as_tensor(obs.mask, device=self.device, dtype=torch.float32)
+            # Make shapes match: [B,T,A] or [B,A] → add time dim if needed
+            if mask_t.ndim == 1 and x_in.ndim > 1:
+                mask_t = mask_t.unsqueeze(0)
+                if x_in.ndim == 3:
+                    mask_t = mask_t.unsqueeze(-2)
+            if x_in.ndim == 3 and mask_t.ndim == 2:  # [B,H]
+                mask_t = mask_t.unsqueeze(-2) # → [B,1,A]
+            # Broadcast along T if needed, then concat on feature dim
+            x_in = torch.cat([x_in, mask_t], dim=-1)
+
+        y, _ = self.preprocess(x_in, state=kwargs.get("state", None))
 
         return self.last(y)
 

@@ -768,7 +768,7 @@ class LagrangianIPPOPolicy(IPPOPolicy):
 
                     # Constraint critic similarly
                     if self.constraint_critic is not None and hasattr(mb, 'const_returns'):
-                        cv = self.constraint_critic(Batch(obs=flat_obs)).reshape(mb.const_returns.shape)
+                        cv = self.constraint_critic(Batch(obs=flat_obs, mask=mask_from_obs)).reshape(mb.const_returns.shape)
                         cfloss = (mb.const_returns - cv).pow(2)
                     else:
                         cfloss = None
