@@ -141,6 +141,7 @@ def make_ppo_policy(
     else:
         critic_net = ObsMLP(
             input_dim=obs_dim[0],
+            action_dim=act_dim,
             hidden_sizes=hidden,
             activation=torch.nn.Tanh,
             device=device,
@@ -155,6 +156,7 @@ def make_ppo_policy(
     if args.architecture == 'mlp':
         actor_net = ObsMLP(
             input_dim=obs_dim[0],
+            action_dim=act_dim,
             flatten_input=False,
             hidden_sizes=hidden,
             activation=torch.nn.Tanh,
@@ -162,6 +164,7 @@ def make_ppo_policy(
         )
         critic_net = ObsMLP(
             input_dim=obs_dim[0],
+            action_dim=act_dim,
             hidden_sizes=hidden,
             activation=torch.nn.Tanh,
             device=device,

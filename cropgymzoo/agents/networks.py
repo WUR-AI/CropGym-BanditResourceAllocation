@@ -301,6 +301,9 @@ class ConstraintCritic(Critic):
 
 class ObsMLP(MLP):
     def __init__(self, *args, **kwargs):
+        input_dim = kwargs.pop("input_dim")
+        self.action_dim = kwargs.pop("action_dim", 0)
+        kwargs['input_dim'] = input_dim + self.action_dim
         super().__init__(*args, **kwargs)
 
     def forward(

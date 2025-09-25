@@ -755,7 +755,8 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                     # Critic values: if critic is non-recurrent, flatten [b, T, ...] -> [b*T, ...]
                     # mb.obs.obs: [b, T, H]
                     flat_obs = mb.obs.obs.reshape(-1, mb.obs.obs.shape[-1])
-                    v = self.critic(Batch(obs=flat_obs)).reshape(mb.returns.shape)  # [b, T]
+                    mask_from_obs = mb.obs.mask.reshape(-1, mb.obs.mask.shape[-1])
+                    v = self.critic(Batch(obs=flat_obs, mask=mask_from_obs)).reshape(mb.returns.shape)  # [b, T]
 
                     if self.value_clip:
                         v_clip = mb.v_s + (v - mb.v_s).clamp(-self.eps_clip, self.eps_clip)
