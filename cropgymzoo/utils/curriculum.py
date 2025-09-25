@@ -56,7 +56,7 @@ class CurriculumCallbackManager:
         *,
         beta: float = 0.1,                 # EMA smoothing
         start_stage: int = 0,
-        min_epochs_per_stage: int = 250,   # gate for stages >= 1
+        min_epochs_per_stage: int = 500,   # gate for stages >= 1
         first_stage_reward: float = 2500,
         require_ema_and_inst: bool = True,  # "consistent": both EMA and instant > threshold
         max_stage: bool = 4,
