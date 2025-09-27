@@ -36,7 +36,8 @@ from cropgymzoo.agents.marl_algorithms_tianshou import (
     IPPOPolicy,
     IPPOCollector,
     LagrangianIPPOPolicy,
-    AECMultiAgentPolicyManager
+    AECMultiAgentPolicyManager,
+    ICMPolicyRNN
 )
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
@@ -244,12 +245,12 @@ def make_ppo_policy(
         hidden_sizes=[128],
     )
 
-    icm_optim = torch.optim.Adam(
+    icm_optim = torch.optim.AdamW(
         icm.parameters(),
         lr=args.lr if args is not None else 1e-4,
     )
 
-    icm_policy = ICMPolicy(
+    icm_policy = ICMPolicyRNN(
         policy=ppo_policy,
         model=icm,
         optim=icm_optim,
@@ -476,7 +477,7 @@ def train_gru_ppo(args: Namespace):
             # sample from sub-env attribute... Quite dirty this way.
             max_stage=dummy_env.get_field_env_with_idx(0).unwrapped.random_manager.get_max_stage()
         )
-    print(f'Curriculum learning activated!')
+        print(f'Curriculum learning activated!')
 
     # make trainer
     result = OnpolicyTrainer(

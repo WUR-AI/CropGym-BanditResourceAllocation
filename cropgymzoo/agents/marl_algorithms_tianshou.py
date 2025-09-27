@@ -6,14 +6,16 @@ import logging
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 
-from tianshou.data import to_torch_as, to_numpy, ReplayBuffer, Batch, SequenceSummaryStats
+from tianshou.data import to_torch_as, to_numpy, ReplayBuffer, Batch, SequenceSummaryStats, to_torch
 from tianshou.data.types import BatchWithAdvantagesProtocol
-from tianshou.policy import BasePolicy, MultiAgentPolicyManager
+from tianshou.policy import BasePolicy, MultiAgentPolicyManager, ICMPolicy
 from tianshou.policy.multiagent.mapolicy import MapTrainingStats
 from tianshou.policy.base import _gae_return
 from tianshou.policy.modelfree.ppo import PPOPolicy, TPPOTrainingStats, PPOTrainingStats
+from tianshou.policy.modelbased.icm import ICMTrainingStats
 from tianshou.data.types import LogpOldProtocol, RolloutBatchProtocol
 from tianshou.data.collector import (
     Collector,
@@ -29,6 +31,53 @@ from tianshou.utils.net.common import ActorCritic
 from tianshou.utils.statistics import RunningMeanStd
 
 from dataclasses import dataclass
+
+
+class ICMPolicyRNN(ICMPolicy):
+
+    def process_fn(
+        self,
+        batch: RolloutBatchProtocol,
+        buffer: ReplayBuffer,
+        indices: np.ndarray,
+    ) -> RolloutBatchProtocol:
+        """Pre-process the data from the provided replay buffer.
+
+        Used in :meth:`update`. Check out :ref:`process_fn` for more information.
+        """
+        mse_loss, act_hat = self.model(batch.obs, batch.act, batch.obs_next)
+        batch.policy.orig_rew = batch.rew
+        batch.policy.act_hat = act_hat
+        batch.policy.mse_loss = mse_loss
+        batch.rew += to_numpy(mse_loss * self.reward_scale)
+        return self.policy.process_fn(batch, buffer, indices)
+
+    def learn(
+        self,
+        batch: RolloutBatchProtocol,
+        *args: Any,
+        **kwargs: Any,
+    ) -> ICMTrainingStats:
+        training_stat = self.policy.learn(batch, **kwargs)
+        self.optim.zero_grad()
+        act_hat = batch.policy.act_hat
+        act = to_torch(batch.act, dtype=torch.long, device=act_hat.device)
+        if act.ndim > 1:
+            act = act.squeeze(-1)
+        inverse_loss = F.cross_entropy(act_hat, act).mean()
+        forward_loss = batch.policy.mse_loss.mean()
+        loss = (
+            (1 - self.forward_loss_weight) * inverse_loss + self.forward_loss_weight * forward_loss
+        ) * self.lr_scale
+        loss.backward()
+        self.optim.step()
+
+        return ICMTrainingStats(
+            training_stat,
+            icm_loss=loss.item(),
+            icm_forward_loss=forward_loss.item(),
+            icm_inverse_loss=inverse_loss.item(),
+        )
 
 
 class ActorCriticConstraint(nn.Module):

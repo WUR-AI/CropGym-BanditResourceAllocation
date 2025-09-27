@@ -23,6 +23,8 @@ class IntrinsicCuriosityModuleMARL(IntrinsicCuriosityModule):
             s1 = s1.obs
         if isinstance(s2, Batch):
             s2 = s2.obs
+        if act.ndim > 1:
+            act = act.squeeze(-1)
 
         r"""Mapping: s1, act, s2 -> mse_loss, act_hat."""
         s1 = to_torch(s1, dtype=torch.float32, device=self.device)
