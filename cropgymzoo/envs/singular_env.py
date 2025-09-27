@@ -469,6 +469,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         if isinstance(action, np.ndarray):
             action = action[0] if action.shape else action
 
+        self._update_budget_left()
+
         self.action: int = action
         if action > 0:
             self.n_action += action * 10
@@ -520,7 +522,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
     def _get_budget_constraint(self, terminated) -> float:
         # sort of quadratic penalty to encourage finishing the budget
         if terminated:
-            return (self.budget_left / self.budget_n) ** 2
+            return self.budget_left // 10
         else:
             return 0
 
@@ -547,14 +549,14 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         3. Budget constraint (if not using masked actions)
         4. Nue and Nsurp constraints (legacy)
         """
+        total_constraint = 0.0
+        total_constraint += self._get_frequency_constraint(terminated)
+        # total_constraint += self._get_dvs_constraint()
+        total_constraint += self._get_budget_constraint(terminated)
+        total_constraint += self._get_nue_constraint()
+        total_constraint += self._get_nsurp_constraint()
 
-        frequency_constraint = self._get_frequency_constraint(terminated)
-        dvs_constraint = self._get_dvs_constraint()
-        budget_constraint = self._get_budget_constraint(terminated)
-        nue_constraint = self._get_nue_constraint()
-        nsurp_constraint = self._get_nsurp_constraint()
-
-        return frequency_constraint + dvs_constraint + budget_constraint + nue_constraint + nsurp_constraint
+        return total_constraint
 
 
     def _process_output(self, action, output, terminated):
