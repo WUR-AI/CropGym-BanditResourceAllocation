@@ -148,7 +148,7 @@ def make_ppo_policy(
             device=device,
         )
         constraint_net = ObsMLP(
-            input_dim=obs_constraint_dim,
+            input_dim=obs_dim[0],
             action_dim=act_dim,
             hidden_sizes=hidden,
             activation=torch.nn.Tanh,
@@ -172,7 +172,7 @@ def make_ppo_policy(
             device=device,
         )
         constraint_net = ObsMLP(
-            input_dim=obs_constraint_dim,
+            input_dim=obs_dim[0],
             action_dim=act_dim,
             hidden_sizes=hidden,
             activation=torch.nn.Tanh,
@@ -181,16 +181,16 @@ def make_ppo_policy(
 
     actor = MaskedActor(preprocess_net=actor_net, action_dim=act_dim).to(device)
     critic = StackedCritic(preprocess_net=critic_net).to(device)
-    constraint_critic = ConstraintCritic(
+    constraint_critic = StackedCritic(
         preprocess_net=constraint_net,
-        constraint_indices=obs_constraint_idx,
+        # constraint_indices=obs_constraint_idx,
     ) if args.lagrangian_ppo else None
 
-    optim = AdamW(
+    optim = Adam(
         list(actor.parameters()) + list(critic.parameters()) + list(constraint_critic.parameters()),
         lr=args.lr if args is not None else 1e-3,
         ) if args.lagrangian_ppo else (
-        AdamW(
+        Adam(
             list(actor.parameters()) + list(critic.parameters()),
             lr=args.lr if args is not None else 1e-3,
         )
@@ -245,7 +245,7 @@ def make_ppo_policy(
         hidden_sizes=[128],
     )
 
-    icm_optim = torch.optim.AdamW(
+    icm_optim = torch.optim.Adam(
         icm.parameters(),
         lr=args.lr if args is not None else 1e-4,
     )
