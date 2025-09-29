@@ -18,6 +18,12 @@ from tianshou.policy.modelfree.ppo import PPOPolicy, TPPOTrainingStats, PPOTrain
 from tianshou.policy.modelbased.icm import ICMTrainingStats
 from tianshou.data.types import LogpOldProtocol, RolloutBatchProtocol
 from tianshou.data.collector import (
+    Protocol,
+    CollectActionBatchProtocol,
+    _HACKY_create_info_batch,
+    ObsBatchProtocol,
+    ActBatchProtocol,
+    DistBatchProtocol,
     Collector,
     TCollectStats,
     _nullable_slice,
@@ -143,34 +149,10 @@ class IPPOPolicy(PPOPolicy):
             self._buffer, self._indices = buffer, indices
         batch = self._compute_returns(batch, buffer, indices)
         batch.act = to_torch_as(batch.act, batch.v_s)
-        logp_old = []
-        self.eval()  # avoid dropout/bn noise during behavior log-prob recomputation
-        with torch.no_grad():
-            for minibatch in batch.split(self.max_batchsize, shuffle=False, merge_last=True):
-                # Prepare actions with correct shape/dtype for the distribution
-                act_mb = minibatch.act
-                if not torch.is_tensor(act_mb):
-                    act_mb = torch.as_tensor(act_mb, device=batch.v_s.device)
-
-                # Retrieve the per-row pre-action hidden state for this minibatch (RNN correctness)
-                try:
-                    hs_mb = self._get_hidden_state(minibatch)  # expected Batch({"hidden": [B, L, H]}) or None
-                except Exception:
-                    hs_mb = None
-
-                out = self(minibatch, state=hs_mb) if hs_mb is not None else self(minibatch)
-                dist = out.dist
-
-                lp = dist.log_prob(act_mb)
-                # If multi-branch (e.g., Independent of multiple Categoricals), reduce branch-wise
-                if lp.ndim > 1:
-                    lp = lp.sum(-1)
-
-                # Flatten per-minibatch and collect
-                logp_old.append(lp.reshape(-1))
-
-            batch.logp_old = torch.cat(logp_old, dim=0)
-        self.train()  # restore training mode
+        batch.logp_old = to_torch_as(
+            batch.policy.logp_old[batch.obs.agent_id[0]].astype(np.float32),
+            batch.v_s
+        )
         batch: LogpOldProtocol
         return batch
 
@@ -188,7 +170,6 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             recurrent: bool = False,
             unroll_len: int = 32,
             burn_in: int = 0,  # optional: use 0 to keep it simple
-            time_loop_actor: bool = False,  # if True, forward actor one time-step at a time during learn
             **kwargs,
     ):
         super().__init__(**kwargs)
@@ -209,7 +190,6 @@ class LagrangianIPPOPolicy(IPPOPolicy):
         self.recurrent = recurrent
         self.unroll_len = int(unroll_len)
         self.burn_in = int(burn_in)
-        self.time_loop_actor = bool(time_loop_actor)
 
         self.logger = logger
 
@@ -682,8 +662,20 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                     lagrangian_multiplier, losses, split_batch_size, vf_losses)
             else:
                 # Recurrent sequence path
+                # T = self.burn_in + self.unroll_len
+                # seq_batch, h0, valid_mask, learn_mask = self._as_sequences(batch, T)
                 T = self.burn_in + self.unroll_len
-                seq_batch, h0, valid_mask, learn_mask = self._as_sequences(batch, T)
+                seq_batch, h0_collected, valid_mask, learn_mask = self._as_sequences(batch, T)
+
+                # Zero-init h0 to avoid stale behavior-state; we will rebuild under *current* weights.
+                # Keep device/dtype from collected tensors.
+                h0_fields = {}
+                hid0 = h0_collected.hidden
+                h0_fields["hidden"] = torch.zeros_like(hid0)
+                if hasattr(h0_collected, "cell") and getattr(h0_collected, "cell") is not None:
+                    cel0 = h0_collected.cell
+                    h0_fields["cell"] = torch.zeros_like(cel0)
+                h0 = Batch(h0_fields)
 
                 B = seq_batch.adv.shape[0]
                 bs = batch_size or B
@@ -708,73 +700,45 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                         mb_h0_fields["cell"] = h0.cell[s:e]
                     mb_h0 = Batch(mb_h0_fields)
 
-                    # Forward sequence through your actor (MaskedActor with RecurrentGRU)
-                    # mb.obs is a Batch with .obs shaped [b, T, H]
-                    if self.time_loop_actor:
-                        # Unroll in Python over time, feeding one step at a time and carrying the hidden state
-                        bsz, tlen = mb.obs.obs.shape[0], mb.obs.obs.shape[1]
-                        state = mb_h0
-                        logp_list = []
-                        ent_list = []
-                        for t in range(tlen):
-                            # Build per-step observation Batch
-                            step_obs_fields = {"obs": mb.obs.obs[:, t]}
-                            if hasattr(mb.obs, "mask") and mb.obs.mask is not None:
-                                step_obs_fields["mask"] = mb.obs.mask[:, t]
-                            if hasattr(mb.obs, "agent_id") and mb.obs.agent_id is not None:
-                                # agent_id can be [B, T] or [B]; support both
-                                agent_ids = mb.obs.agent_id[:, t] if getattr(mb.obs.agent_id, "ndim", 1) > 1 else mb.obs.agent_id
-                                step_obs_fields["agent_id"] = agent_ids
-                            step_batch = Batch(obs=Batch(step_obs_fields))
-                            out_t = self(batch=step_batch, state=state)
-                            dist_t = out_t.dist
-                            state = out_t.state  # carry hidden
-                            # Actions at time t
-                            act_t = mb.act[:, t]
-                            if act_t.ndim == 2 and act_t.shape[-1] == 1:
-                                act_t = act_t.squeeze(-1)
-                            try:
-                                is_discrete = isinstance(self.action_space, gym.spaces.Discrete)
-                            except Exception:
-                                is_discrete = False
-                            if is_discrete:
-                                act_t = act_t.long()
-                            lp_t = dist_t.log_prob(act_t)
-                            if lp_t.ndim > 1:
-                                lp_t = lp_t.sum(-1)
-                            ent_t = dist_t.entropy()
-                            if ent_t.ndim > 1:
-                                ent_t = ent_t.sum(-1)
-                            logp_list.append(lp_t)
-                            ent_list.append(ent_t)
-                        logp = torch.stack(logp_list, dim=1)  # [B, T]
-                        ent = torch.stack(ent_list, dim=1)    # [B, T]
-                    else:
-                        # case for feeding in whole minibatch
-                        out = self(batch=mb, state=mb_h0)
-                        dist = out.dist  # should produce per-step distributions compatible with [b, T, ...]
-                        # Per-step log-prob
-                        act = mb.act
-                        # Make action shape compatible with distribution
-                        if act.ndim == 3 and act.shape[-1] == 1:
-                            act = act.squeeze(-1)
-                        # If discrete action space, cast to long indices
-                        try:
-                            is_discrete = isinstance(self.action_space, gym.spaces.Discrete)
-                        except Exception:
-                            is_discrete = False
-                        if is_discrete:
-                            act = act.long()
+                    # === Time-loop unroll with done-mask resets (CleanRL-style) ===
+                    bsz, tlen = mb.obs.obs.shape[0], mb.obs.obs.shape[1]
+                    state = mb_h0  # zeros or provided initial window state
+                    logp_steps, ent_steps = [], []
+                    for t in range(tlen):
+                        # reset state at episode boundaries
+                        if hasattr(mb, "done") and mb.done is not None:
+                            done_t = mb.done[:, t].float()  # [B]
+                            mask = (1.0 - done_t).view(1, -1, 1)
+                            if hasattr(state, "hidden") and state.hidden is not None:
+                                state.hidden = state.hidden * mask
+                            if hasattr(state, "cell") and getattr(state, "cell") is not None:
+                                state.cell = state.cell * mask
 
-                        logp = dist.log_prob(act)  # [B, T] for Categorical or [B, T] for Independent
+                        step_obs_fields = {"obs": mb.obs.obs[:, t]}
+                        if hasattr(mb.obs, "mask") and mb.obs.mask is not None:
+                            step_obs_fields["mask"] = mb.obs.mask[:, t]
+                        if hasattr(mb.obs, "agent_id") and mb.obs.agent_id is not None:
+                            step_obs_fields["agent_id"] = (
+                                mb.obs.agent_id[:, t] if getattr(mb.obs.agent_id, "ndim", 1) > 1 else mb.obs.agent_id
+                            )
+                        step_batch = Batch(obs=Batch(step_obs_fields), info=mb.info[:, t])
+                        out_t = self(batch=step_batch, state=state)
+                        dist_t = out_t.dist
+                        state = out_t.state  # carry hidden
 
-                        # For multi-branch (e.g., MultiDiscrete implemented as Independent of Categoricals),
-                        # log_prob may return [B, T, A]; in that case sum across branches.
-                        if logp.ndim > 2:
-                            logp = logp.sum(-1)
-                        ent = dist.entropy()
-                        if ent.ndim > 2:
-                            ent = ent.sum(-1)
+                        # per-step logprob/entropy against stored actions
+                        act_t = mb.act[:, t]
+                        # if act_t.ndim == 2 and act_t.shape[-1] == 1:
+                        #     act_t = act_t.squeeze(-1)
+                        # act_t = act_t.long()
+                        lp_t = dist_t.log_prob(act_t)
+                        if lp_t.ndim > 1: lp_t = lp_t.sum(-1)
+                        ent_t = dist_t.entropy()
+                        if ent_t.ndim > 1: ent_t = ent_t.sum(-1)
+                        logp_steps.append(lp_t)
+                        ent_steps.append(ent_t)
+                    logp = torch.stack(logp_steps, dim=1)  # [B,T]
+                    ent = torch.stack(ent_steps, dim=1)  # [B,T]
 
                     ratios = (logp - mb.logp_old).exp().float()  # [b, T]
 
@@ -1178,6 +1142,8 @@ class IPPOCollector(Collector):
             # to add the dist. One should not have arrays of dists but rather a single, batch-wise dist.
             # Tianshou already implements slicing of dists, but we don't yet implement merging multiple
             # dists into one, which would be necessary to make a buffer with dists work properly
+            for ag, l in current_step_batch_R.policy.logp_old.items():
+                current_step_batch_R.policy.logp_old[ag] = l.squeeze() if l is not None else None
             batch_to_add_R = copy(current_step_batch_R)
             batch_to_add_R.pop("dist")
             batch_to_add_R = cast(RolloutBatchProtocol, batch_to_add_R)
@@ -1430,6 +1396,73 @@ class IPPOCollector(Collector):
         return collect_stats
 
 
+    def _compute_action_policy_hidden(
+        self,
+        random: bool,
+        ready_env_ids_R: np.ndarray,
+        last_obs_RO: np.ndarray,
+        last_info_R: np.ndarray,
+        last_hidden_state_RH: np.ndarray | torch.Tensor | Batch | None = None,
+    ) -> CollectActionBatchProtocol:
+        """Returns the action, the normalized action, a "policy" entry, and the hidden state."""
+        if random:
+            try:
+                act_normalized_RA = np.array(
+                    [self._action_space[i].sample() for i in ready_env_ids_R],
+                )
+            # TODO: test whether envpool env explicitly
+            except TypeError:  # envpool's action space is not for per-env
+                act_normalized_RA = np.array([self._action_space.sample() for _ in ready_env_ids_R])
+            act_RA = self.policy.map_action_inverse(np.array(act_normalized_RA))
+            policy_R = Batch()
+            hidden_state_RH = None
+            # TODO: instead use a (uniform) Distribution instance that corresponds to sampling from action_space
+            action_dist_R = None
+
+        else:
+            info_batch = _HACKY_create_info_batch(last_info_R)
+            obs_batch_R = cast(ObsBatchProtocol, Batch(obs=last_obs_RO, info=info_batch))
+
+            act_batch_RA: ActBatchProtocol | DistBatchProtocol = self.policy(
+                obs_batch_R,
+                last_hidden_state_RH,
+            )
+
+            act_RA = to_numpy(act_batch_RA.act)
+            if self.exploration_noise:
+                act_RA = self.policy.exploration_noise(act_RA, obs_batch_R)
+            act_normalized_RA = self.policy.map_action(act_RA)
+
+            # TODO: cleanup the whole policy in batch thing
+            # todo policy_R can also be none, check
+            policy_R = act_batch_RA.get("policy", Batch())
+            if not isinstance(policy_R, Batch):
+                raise RuntimeError(
+                    f"The policy result should be a {Batch}, but got {type(policy_R)}",
+                )
+
+            hidden_state_RH = act_batch_RA.get("state", None)
+            # TODO: do we need the conditional? Would be better to just add hidden_state which could be None
+            if hidden_state_RH is not None:
+                policy_R.hidden_state = (
+                    hidden_state_RH  # save state into buffer through policy attr
+                )
+            # can't use act_batch_RA.dist directly as act_batch_RA might not have that attribute
+            policy_R.logp_old = act_batch_RA.logp_old
+
+        return cast(
+            CollectActionBatchProtocol,
+            Batch(
+                act=act_RA,
+                act_normalized=act_normalized_RA,
+                policy_entry=policy_R,
+                dist=None,
+                hidden_state=hidden_state_RH,
+            ),
+        )
+
+
+
     def _build_filtered_state_for_forward(
             self,
             ready_env_ids_R: np.ndarray,
@@ -1512,6 +1545,23 @@ class IPPOCollector(Collector):
                     self._hs_bank_by_agent_env[a][g]['cell'] = batched_state['cell'][j:j + 1, :, :]
 
 
+class CollectActionLogPBatchProtocol(Protocol):
+    """A protocol for results of computing actions from a batch of observations within a single collect step.
+
+    All fields all have length R (the dist is a Distribution of batch size R),
+    where R is the number of ready envs.
+    """
+
+    act: np.ndarray | torch.Tensor
+    act_normalized: np.ndarray | torch.Tensor
+    policy_entry: Batch
+    hidden_state: np.ndarray | torch.Tensor | Batch | None
+
+class CollectStepBatchLogPProtocol(CollectStepBatchProtocol):
+
+    logp_old: np.ndarray | torch.Tensor | Batch | None
+
+
 class AECMultiAgentPolicyManager(MultiAgentPolicyManager):
 
     @staticmethod
@@ -1552,6 +1602,89 @@ class AECMultiAgentPolicyManager(MultiAgentPolicyManager):
                 train_stats = policy.learn(batch=data, **kwargs)
                 agent_id_to_stats[agent_id] = train_stats
         return MapTrainingStats(agent_id_to_stats)
+
+
+    def forward(  # type: ignore
+        self,
+        batch: Batch,
+        state: dict | Batch | None = None,
+        **kwargs: Any,
+    ) -> Batch:
+        """Dispatch batch data from obs.agent_id to every policy's forward.
+
+        :param batch: TODO: document what is expected at input and make a BatchProtocol for it
+        :param state: if None, it means all agents have no state. If not
+            None, it should contain keys of "agent_1", "agent_2", ...
+
+        :return: a Batch with the following contents:
+            TODO: establish a BatcProtocol for this
+
+        ::
+
+            {
+                "act": actions corresponding to the input
+                "state": {
+                    "agent_1": output state of agent_1's policy for the state
+                    "agent_2": xxx
+                    ...
+                    "agent_n": xxx}
+                "out": {
+                    "agent_1": output of agent_1's policy for the input
+                    "agent_2": xxx
+                    ...
+                    "agent_n": xxx}
+            }
+        """
+        results: list[tuple[bool, np.ndarray, Batch, np.ndarray | Batch, Batch]] = []
+        for agent_id, policy in self.policies.items():
+            # This part of code is difficult to understand.
+            # Let's follow an example with two agents
+            # batch.obs.agent_id is [1, 2, 1, 2, 1, 2] (with batch_size == 6)
+            # each agent plays for three transitions
+            # agent_index for agent 1 is [0, 2, 4]
+            # agent_index for agent 2 is [1, 3, 5]
+            # we separate the transition of each agent according to agent_id
+            agent_index = np.nonzero(batch.obs.agent_id == agent_id)[0]
+            if len(agent_index) == 0:
+                # (has_data, agent_index, out, act, state)
+                results.append((False, np.array([-1]), Batch(), Batch(), Batch()))
+                continue
+            tmp_batch = batch[agent_index]
+            if "rew" in tmp_batch.get_keys() and isinstance(tmp_batch.rew, np.ndarray):
+                # reward can be empty Batch (after initial reset) or nparray.
+                tmp_batch.rew = tmp_batch.rew[:, self.agent_idx[agent_id]]
+            if not hasattr(tmp_batch.obs, "mask"):
+                if hasattr(tmp_batch.obs, "obs"):
+                    tmp_batch.obs = tmp_batch.obs.obs
+                if hasattr(tmp_batch.obs_next, "obs"):
+                    tmp_batch.obs_next = tmp_batch.obs_next.obs
+            out = policy(
+                batch=tmp_batch,
+                state=None if state is None else state[agent_id],
+                **kwargs,
+            )
+            act = out.act
+            each_state = out.state if (hasattr(out, "state") and out.state is not None) else Batch()
+            results.append((True, agent_index, out, act, each_state))
+        holder: Batch = Batch.cat(
+            [{"act": act} for (has_data, agent_index, out, act, each_state) in results if has_data],
+        )
+        state_dict, out_dict, logp_old_dict = {}, {}, {}
+        for (agent_id, _), (has_data, agent_index, out, act, state) in zip(
+            self.policies.items(),
+            results,
+            strict=True,
+        ):
+            if has_data:
+                holder.act[agent_index] = act
+            state_dict[agent_id] = state
+            out_dict[agent_id] = out
+            logp_old_dict[agent_id] = out.dist.log_prob(act).detach().cpu().numpy().astype(np.float32)\
+                if hasattr(out, "dist") else None
+        holder["out"] = out_dict
+        holder["state"] = state_dict
+        holder["logp_old"] = logp_old_dict
+        return holder
 
 
 # Lagrange class taken from https://github.com/PKU-Alignment/safety-gymnasium,
