@@ -138,8 +138,12 @@ class RecurrentLSTM(NetBase[RecurrentStateBatch]):
             self,
             obs: Batch,
             state: RecurrentStateBatch | None = None,
-            info: dict[str, Any] | None = None,
+            info: dict[str, Any] | Batch | None = None,
     ) -> tuple[torch.Tensor, RecurrentStateBatch]:
+
+        dones = ~info.Alive
+        if isinstance(dones, np.ndarray):
+            dones = torch.from_numpy(dones).to(self.device)
 
         # feed-forward + add time dim
         x = self.fc1(obs)  # [B, H] or [B, T, H]
@@ -155,6 +159,15 @@ class RecurrentLSTM(NetBase[RecurrentStateBatch]):
                 state["cell"].transpose(0, 1).contiguous()
                 if state["cell"].ndim == 3
                 else state["cell"].contiguous(),
+            )
+
+            h_in = (
+                torch.logical_not(dones).view(1, -1, 1) * h_in[0]
+                if h_in[0].ndim == 3
+                else torch.logical_not(dones).view(-1, 1) * h_in[0],
+                torch.logical_not(dones).view(1, -1, 1) * h_in[1]
+                if h_in[1].ndim == 3
+                else torch.logical_not(dones).view(-1, 1) * h_in[1]
             )
 
             y, (h, c) = self.lstm(
@@ -196,7 +209,7 @@ class MaskedActor(Actor):
             x_in = torch.from_numpy(x_in).to(self.device)
 
         if x_in.ndim == 1:  # single env
-            x_in = x_in.unsqueeze(0)  # for eval, dim: [B, H]
+            x_in = x_in.unsqueeze(0).unsqueeze(0)  # for eval, dim: [B, H]
         elif x_in.ndim == 2:
             x_in = x_in.unsqueeze(-2)  # for training, dim: [B, T, H]
 
