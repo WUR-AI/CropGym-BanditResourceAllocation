@@ -12,7 +12,7 @@ def reward_functions_without_baseline():
 
 
 def reward_functions_with_baseline():
-    return ['DEF', 'ANE', 'END']
+    return ['DEF', 'ANE', 'END', 'PNR']
 
 
 def reward_function_list():
@@ -461,6 +461,104 @@ class Rewards:
             r_max = self.beta_p * (1 - sigma0_p) + self.beta_y * (1 - sigma0_y) + self.beta_n
             return r_min, r_max
 
+    class PNR(Rew):
+        """
+        Relative profit and NUE reward function
+        """
+
+        def __init__(self, timestep, costs_nitrogen, fertilizer_price=None, crop_price=None, budget_left=None):
+            super().__init__(timestep, costs_nitrogen)
+            self.timestep = timestep
+            self.costs_nitrogen = costs_nitrogen
+            self.fertilizer_price = fertilizer_price
+            self.crop_price = crop_price
+
+            self.fertilizer_beta = 1
+            self.nsurp_beta = 7 * 5
+            self.nue_beta = 7 * 5
+            self.budget_beta = 0
+
+        def return_reward(
+                self,
+                output,
+                amount,
+                output_baseline=None,
+                multiplier=1,
+                obj=None,
+                price_crop=None,
+                price_fertilizer=None,
+                budget_left=None,
+                fresh_yield_fn=None,
+        ):
+            obj.calculate_amount(amount)
+
+            self.update_crop_price(price_crop)
+            self.update_fertilizer_price(price_fertilizer)
+            obj.update_fertilizer_price(price_fertilizer)
+            obj.update_crop_price(price_crop)
+
+            growth = process_pcse.compute_growth_storage_organ(output, self.timestep, multiplier)
+            growth_baseline = process_pcse.compute_growth_storage_organ(output_baseline, self.timestep, multiplier)
+            obj.calculate_positive_reward_cumulative(output, output_baseline, multiplier)
+
+            if fresh_yield_fn is not None:
+                growth = fresh_yield_fn(growth)
+                growth_baseline = fresh_yield_fn(growth_baseline)
+
+            # get profit
+            profit_now = obj.calculate_profit_term(
+                action=amount,
+                growth=growth,
+                price_crop=price_crop,
+                price_fertilizer=price_fertilizer
+            )
+
+            profit_baseline = obj.calculate_profit_term(
+                action=0,
+                growth=growth_baseline,
+                price_crop=price_crop,
+                price_fertilizer=price_fertilizer
+            )
+
+            profit = profit_now - profit_baseline
+
+            return profit, growth
+
+        def return_final_reward(
+                self,
+                obj=None,
+                n_fertilized=None,
+                n_output=None,
+                no3_depo=None,
+                nh4_depo=None,
+                budget_left=None,
+                crop_name=None,
+        ):
+            # Maybe give negative reward if did not act at all; soil mining most likely
+            # if obj.get_total_fertilization == 0:
+            #     return -obj.cum_profit - 100
+
+            n_surplus = get_surplus_n(n_input=n_fertilized, n_so=n_output, no3_depo=no3_depo, nh4_depo=nh4_depo,
+                                      crop_name=crop_name)
+
+            nue = calculate_nue(n_input=n_fertilized, n_so=n_output, no3_depo=no3_depo, nh4_depo=nh4_depo,
+                                crop_name=crop_name)
+
+            n_surplus_penalty = obj.n_surplus_penalty(n_surplus)
+            nue_penalty = obj.nue_penalty(nue)
+
+            budget_left_bonus = self.budget_beta * obj.budget_left_bonus(budget_left)
+
+            # End reward in three terms that describe profit
+            reward = budget_left_bonus - abs(self.nsurp_beta * n_surplus_penalty) - abs(self.nue_beta * nue_penalty)
+            return reward
+
+        def update_fertilizer_price(self, fertilizer_price):
+            self.fertilizer_price = fertilizer_price
+
+        def update_crop_price(self, crop_price):
+            self.crop_price = crop_price
+
     class DNE(Rew):
         """
         Dense reward based on calculated nitrogen use efficiency
@@ -645,7 +743,7 @@ class Rewards:
         def growth_storage_organ_wo_cost(self, output, multiplier=1):
             return process_pcse.compute_growth_storage_organ(output, self.timestep, multiplier)
 
-        def default_winterwheat_reward_wo_cost(self, output, output_baseline, multiplier=1):
+        def default_reward_wo_cost(self, output, output_baseline, multiplier=1):
             growth = process_pcse.compute_growth_storage_organ(output, self.timestep, multiplier)
             growth_baseline = process_pcse.compute_growth_storage_organ(output_baseline, self.timestep, multiplier)
             benefits = growth - growth_baseline
@@ -668,7 +766,7 @@ class Rewards:
             if not output_baseline:
                 benefits = self.growth_storage_organ_wo_cost(output, multiplier)
             else:
-                benefits = self.default_winterwheat_reward_wo_cost(output, output_baseline, multiplier)
+                benefits = self.default_reward_wo_cost(output, output_baseline, multiplier)
             self.cum_positive_reward += benefits
 
         def calculate_cost_n(self, amount):
