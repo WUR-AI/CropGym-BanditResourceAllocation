@@ -139,6 +139,8 @@ class RecurrentLSTM(NetBase[RecurrentStateBatch]):
             obs: Batch,
             state: RecurrentStateBatch | None = None,
             info: dict[str, Any] | Batch | None = None,
+            *,
+            detach_state: bool = True,
     ) -> tuple[torch.Tensor, RecurrentStateBatch]:
 
         dones = ~info.Alive
@@ -175,12 +177,19 @@ class RecurrentLSTM(NetBase[RecurrentStateBatch]):
                 h_in
             )  # for eval h: [B, H], for train: [T, B, H]
 
+        h = h.transpose(0, 1) if h.ndim == 3 else h
+        c = c.transpose(0, 1) if c.ndim == 3 else c
+
+        if detach_state:
+            h = h.detach()
+            c = c.detach()
+
         next_hidden = cast(
             RecurrentStateBatch,
             Batch(
                 {
-                    "hidden": h.transpose(0, 1).detach() if h.ndim == 3 else h.detach(),
-                    "cell": c.transpose(0, 1).detach() if c.ndim == 3 else c.detach(),
+                    "hidden": h,
+                    "cell": c,
                 }
             ),
         )
@@ -225,8 +234,12 @@ class MaskedActor(Actor):
             # Broadcast along T if needed, then concat on feature dim
             x_in = torch.cat([x_in, mask_t], dim=-1)
 
+        detach_state = True
+        if hasattr(obs, "detach_state"):
+            detach_state = False
+
         # preprocess obs (with GRU or anything else)
-        features, h = self.preprocess(x_in, state, info)
+        features, h = self.preprocess(x_in, state, info, detach_state=detach_state)
 
         # generate logits from mlp
         logits = self.last(features)

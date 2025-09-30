@@ -705,16 +705,7 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                     state = mb_h0  # zeros or provided initial window state
                     logp_steps, ent_steps = [], []
                     for t in range(tlen):
-                        # reset state at episode boundaries
-                        if hasattr(mb, "done") and mb.done is not None:
-                            done_t = mb.done[:, t].float()  # [B]
-                            mask = (1.0 - done_t).view(1, -1, 1)
-                            if hasattr(state, "hidden") and state.hidden is not None:
-                                state.hidden = state.hidden * mask
-                            if hasattr(state, "cell") and getattr(state, "cell") is not None:
-                                state.cell = state.cell * mask
-
-                        step_obs_fields = {"obs": mb.obs.obs[:, t]}
+                        step_obs_fields = {"obs": mb.obs.obs[:, t], "detach_state": False}
                         if hasattr(mb.obs, "mask") and mb.obs.mask is not None:
                             step_obs_fields["mask"] = mb.obs.mask[:, t]
                         if hasattr(mb.obs, "agent_id") and mb.obs.agent_id is not None:
