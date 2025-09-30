@@ -317,6 +317,10 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         # Only for invalid action masking
         # self.reset_non_zero_action_count()
+        # reset baseline
+        if self.reward_function in reward_functions_with_baseline() and self.original is True:
+            self.baseline_env.rng.bit_generator.state = self.rng.bit_generator.state
+            self.baseline_env.reset(seed=seed, options=options)
 
         # return the original agro management class shifts during randos
         self.agmt = deepcopy(self.original_agmt)
@@ -340,8 +344,6 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         options = self._randomise_domain(options)
 
         # reset PCSE
-        if self.reward_function in reward_functions_with_baseline() and self.original is True:
-            self.baseline_env.reset(seed=seed, options=options)
         obs = super().reset(seed=seed, options=options)
 
         self.day_of_planting = self.agmt.crop_start_date
@@ -569,15 +571,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         output_baseline = []
         if self.reward_function in reward_functions_with_baseline():
 
-            zero_nitrogen_results = self.zero_nitrogen_env_storage.get_episode_output(self.baseline_env)
-
-            # convert zero_nitrogen_results to pcse_output
-            var_name = process_pcse.get_name_storage_organ(zero_nitrogen_results.keys())
-            for (k, v) in zero_nitrogen_results[var_name].items():
-                if k <= output[-1]['day']:
-                    filtered_dict = {'day': k, var_name: v}
-                    output_baseline.append(filtered_dict)
-            assert len(output_baseline) != 0, f'OUTPUT BASELINE EMPTY'
+            _, _, _, _, _ = self.baseline_env.step(0)
+            output_baseline = self.baseline_env.model.get_output()
 
         self.rewards_obj.update_profit(output, amount, year=self.date.year)
 
@@ -592,7 +587,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             output_baseline=output_baseline,
             obj=self.reward_container,
             **prices
-            if self.reward_function in ['PNY', 'PNB']
+            if self.reward_function in ['PNY', 'PNB', 'PNR']
             else {},
             fresh_yield_fn=self._get_fresh_weight
             if self.crop in ['winterwheat', 'sugarbeet', 'potato']
@@ -1222,17 +1217,17 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             self._env_baseline = ParcelEnv(
                 crop_features=self.crop_features,
                 weather_features=self.weather_features,
-                location=self.loc,
+                action_features=self.action_features,
+                location=self.location,
                 year=self.year,
-                timestep=self._timestep,
                 reward=self.reward_function,
                 training=self.training,
-                action_space=self.action_space,
                 crop=self.crop,
-                model_config=self._model_config,
-                agro_config=self.agro_config,
+                name=self.name,
                 seed=self.seed,
-                original=False,
+                original=False,  # important!
+                flatten_obs=True,
+                type=self.soil_type,
                 **kwargs,
             )
             self.zero_nitrogen_env_storage = ZeroNitrogenEnvStorage()
