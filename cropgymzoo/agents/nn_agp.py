@@ -102,7 +102,7 @@ class FeatureNet(nn.Module):
 # --------------------------- Collaborative multi-output GP K(x,x') ---------------------------
 # p(x) = [p_1(x),...,p_m(x)]ᵀ with covariance:
 #   K(x,x') = Σ_q A_q k_q(x,x') + Diag( k~_1(x,x'),...,k~_m(x,x') )
-# where A_q = L_q L_qᵀ ensures PSD. (Eq. (4))   [oai_citation:5‡9244_Contextual_Gaussian_Proce.pdf](file-service://file-TsvLCc4k6gDpym1pL6Qi5r)
+# where A_q = L_q L_qᵀ ensures PSD. (Eq. (4))
 
 class CollaborativeMOGP(nn.Module):
     def __init__(
@@ -134,7 +134,7 @@ class CollaborativeMOGP(nn.Module):
         L = torch.tril(L)
         return L @ L.T + 1e-5 * torch.eye(self.m, device=L.device, dtype=L.dtype)
 
-    # Build K̃((X,Θ),(X',Θ')) = g(Θ)ᵀ K(X,X') g(Θ')  (Prop. 1)   [oai_citation:6‡9244_Contextual_Gaussian_Proce.pdf](file-service://file-TsvLCc4k6gDpym1pL6Qi5r)
+    # Build K̃((X,Θ),(X',Θ')) = g(Θ)ᵀ K(X,X') g(Θ')  (Prop. 1)
     def K_tilde(
         self,
         X: torch.Tensor, Theta: torch.Tensor,
@@ -236,7 +236,7 @@ class NNAGP(nn.Module):
         K_psd = (V * w) @ V.T
         return torch.linalg.cholesky(K_psd + (self.noise ** 2 + jitter) * eye)
 
-    # ---- training objective: negative log-marginal likelihood (Eq. (5))   [oai_citation:7‡9244_Contextual_Gaussian_Proce.pdf](file-service://file-TsvLCc4k6gDpym1pL6Qi5r)
+    # ---- training objective: negative log-marginal likelihood (Eq. (5))
     def nll(self, act: torch.Tensor, context_in: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         act, context_in, y = act.to(self.device), context_in.to(self.device), y.to(self.device)
         G = self.g_net(context_in)                        # (n,m)
@@ -256,7 +256,7 @@ class NNAGP(nn.Module):
         self._train_cache = {"Theta": context_in, "X": act, "y": y, "L": L.detach(), "alpha": alpha.detach(), "G": G.detach()}
         return nll
 
-    # ---- exact posterior μ, σ at batch of (X*,Θ*) (Eq. (2))   [oai_citation:8‡9244_Contextual_Gaussian_Proce.pdf](file-service://file-TsvLCc4k6gDpym1pL6Qi5r)
+    # ---- exact posterior μ, σ at batch of (X*,Θ*) (Eq. (2))
     @torch.no_grad()
     def predict(self, X_star: torch.Tensor, Theta_star: torch.Tensor,
                 train_X: torch.Tensor, train_Theta: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -329,7 +329,7 @@ class NNAGP(nn.Module):
 
 def beta_finite_candidates(t: int, M: int, delta: float = 0.1) -> float:
     # Finite-arm CGP-UCB schedule (cf. paper’s finite set analysis): β_t = 2 log(|X_t| t^2 π^2 / (6 δ))
-    # Safe, increasing, and practical for candidate sets.   [oai_citation:9‡9244_Contextual_Gaussian_Proce.pdf](file-service://file-TsvLCc4k6gDpym1pL6Qi5r)
+    # Safe, increasing, and practical for candidate sets.
     return 2.0 * math.log((M * (t**2) * (math.pi**2)) / (6.0 * delta))
 
 
@@ -370,7 +370,7 @@ class NNAGPBandit:
 
         self.opt = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=1e-4)
 
-    # ---- training step: maximize log marginal likelihood (Eq. (5))   [oai_citation:10‡9244_Contextual_Gaussian_Proce.pdf](file-service://file-TsvLCc4k6gDpym1pL6Qi5r)
+    # ---- training step: maximize log marginal likelihood (Eq. (5))
     def train_step(self, steps: int = 200, lr: float = 3e-3) -> float:
         if len(self.y_hist) == 0:
             return 0.0
@@ -391,7 +391,7 @@ class NNAGPBandit:
             loss_val = float(loss.detach().cpu())
         return loss_val
 
-    # ---- choose x_t by UCB over a finite candidate set for current θ_t (Eq. (3))   [oai_citation:11‡9244_Contextual_Gaussian_Proce.pdf](file-service://file-TsvLCc4k6gDpym1pL6Qi5r)
+    # ---- choose x_t by UCB over a finite candidate set for current θ_t (Eq. (3))
     @torch.no_grad()
     def select_ucb(
             self,
@@ -470,7 +470,7 @@ class NNAGPBandit:
 
         return best_x, {"best_ucb": best_ucb, "beta_t": beta_t}
 
-    # ---- choose x_t by Thompson Sampling over candidates (supp §6.1)   [oai_citation:12‡9244_Contextual_Gaussian_Proce_Supplementary Material.pdf](file-service://file-VVr9GXm9MSGcjuonPbh1BE)
+    # ---- choose x_t by Thompson Sampling over candidates (supp §6.1)
     @torch.no_grad()
     def select_ts(self, theta_t: torch.Tensor, X_candidates: torch.Tensor) -> Tuple[torch.Tensor, SelectionInfo]:
         if len(self.y_hist) == 0:
