@@ -84,13 +84,13 @@ class Matern32(nn.Module):
 
 class FeatureNet(nn.Module):
     """Small MLP: θ -> g(θ) in R^m."""
-    def __init__(self, d_theta: int, m: int, hidden: int = 256, depth: int = 2):
+    def __init__(self, d_theta: int, m: int, hidden: int = 64, depth: int = 2):
         super().__init__()
         layers: List[nn.Module] = []
         in_dim = d_theta
-        for _ in range(depth):
-            layers += [nn.Linear(in_dim, hidden), nn.ReLU()]
-            in_dim = hidden
+        for d in range(depth):
+            layers += [nn.Linear(in_dim, hidden - 32 if d == 1 else hidden), nn.ReLU()]
+            in_dim = hidden - 32 if d == 1 else hidden
         layers += [nn.Linear(in_dim, m)]
         self.net = nn.Sequential(*layers)
 
@@ -132,7 +132,7 @@ class CollaborativeMOGP(nn.Module):
         L = self.raw_L[q]
         # force lower-triangular for stability
         L = torch.tril(L)
-        return L @ L.T + 1e-6 * torch.eye(self.m, device=L.device, dtype=L.dtype)
+        return L @ L.T + 1e-5 * torch.eye(self.m, device=L.device, dtype=L.dtype)
 
     # Build K̃((X,Θ),(X',Θ')) = g(Θ)ᵀ K(X,X') g(Θ')  (Prop. 1)   [oai_citation:6‡9244_Contextual_Gaussian_Proce.pdf](file-service://file-TsvLCc4k6gDpym1pL6Qi5r)
     def K_tilde(
@@ -201,7 +201,7 @@ class NNAGP(nn.Module):
         self.g_net = FeatureNet(d_theta, m)
         self.mogp = CollaborativeMOGP(d_x, m, Q=Q)
         self.raw_noise = nn.Parameter(torch.tensor(-2.0))  # σ_ε ≈ 0.12
-        self.jitter = 1e-4
+        self.jitter = 1e-3
         self.device = device or torch.device("cpu")
         self.to(self.device)
 
@@ -211,10 +211,30 @@ class NNAGP(nn.Module):
     @property
     def noise(self) -> torch.Tensor:
         sigma = positive_param(self.raw_noise)
-        return torch.clamp(sigma, min=1e-3)  # floor the noise
+        return torch.clamp(sigma, min=3e-3)  # floor the noise
 
     def _clear_cache(self):
         self._train_cache.clear()
+
+    def _robust_cholesky(self, K: torch.Tensor, base_jitter: float | None = None):
+        """Symmetrize + escalating jitter + eigen fallback to get a stable Cholesky."""
+        K = 0.5 * (K + K.T)  # enforce symmetry
+        n = K.shape[0]
+        eye = torch.eye(n, device=K.device, dtype=K.dtype)
+
+        jitter = self.jitter if base_jitter is None else base_jitter
+        # try escalating jitter a few times
+        for _ in range(7):
+            try:
+                return torch.linalg.cholesky(K + (self.noise ** 2) * eye + jitter * eye)
+            except RuntimeError:
+                jitter *= 10.0
+
+        # final fallback: eig cleanup (make PSD), then Cholesky
+        w, V = torch.linalg.eigh(K)
+        w = w.clamp_min(1e-12)  # push any tiny negatives to 0+
+        K_psd = (V * w) @ V.T
+        return torch.linalg.cholesky(K_psd + (self.noise ** 2 + jitter) * eye)
 
     # ---- training objective: negative log-marginal likelihood (Eq. (5))   [oai_citation:7‡9244_Contextual_Gaussian_Proce.pdf](file-service://file-TsvLCc4k6gDpym1pL6Qi5r)
     def nll(self, act: torch.Tensor, context_in: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
@@ -222,8 +242,9 @@ class NNAGP(nn.Module):
         G = self.g_net(context_in)                        # (n,m)
         Kt = self.mogp.K_tilde(act, context_in, act, context_in, G, G)  # (n,n)
         Kt = 0.5 * (Kt + Kt.T)
-        Kn = add_jitter(Kt, self.jitter) + self.noise**2 * torch.eye(act.shape[0], device=act.device)
-        L = torch.linalg.cholesky(Kn)
+        # Kn = add_jitter(Kt, self.jitter) + self.noise**2 * torch.eye(act.shape[0], device=act.device)
+        # L = torch.linalg.cholesky(Kn)
+        L = self._robust_cholesky(Kt)
         alpha = torch.cholesky_solve(y.unsqueeze(1), L).squeeze(1)  # (n,)
 
         log_det = 2.0 * torch.log(torch.diag(L)).sum()
@@ -254,8 +275,9 @@ class NNAGP(nn.Module):
         if need_refit:
             G_tr = self.g_net(train_Theta)
             Kt = self.mogp.K_tilde(train_X, train_Theta, train_X, train_Theta, G_tr, G_tr)
-            Kn = add_jitter(Kt, self.jitter) + self.noise**2 * torch.eye(train_X.shape[0], device=device)
-            L = torch.linalg.cholesky(Kn)
+            # Kn = add_jitter(Kt, self.jitter) + self.noise**2 * torch.eye(train_X.shape[0], device=device)
+            # L = torch.linalg.cholesky(Kn)
+            L = self._robust_cholesky(Kt)
             alpha = torch.cholesky_solve(y.unsqueeze(1), L).squeeze(1)
             self._train_cache = {"Theta": train_Theta, "X": train_X, "y": y, "L": L, "alpha": alpha, "G": G_tr}
         else:
@@ -339,7 +361,7 @@ def ucb_components(mu: torch.Tensor, std: torch.Tensor, beta_t: float):
 
 
 class NNAGPBandit:
-    def __init__(self, d_theta: int, d_x: int, m: int = 8, Q: int = 1, lr: float = 3e-3, device: Optional[torch.device] = None):
+    def __init__(self, d_theta: int, d_x: int, m: int = 8, Q: int = 1, lr: float = 1e-4, device: Optional[torch.device] = None):
         self.model = NNAGP(d_theta, d_x, m=m, Q=Q, device=device or torch.device("cpu"))
         self.theta_hist: List[torch.Tensor] = []
         self.x_hist: List[torch.Tensor] = []
