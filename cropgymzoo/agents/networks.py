@@ -67,42 +67,55 @@ class RecurrentGRU(NetBase[RecurrentStateBatch]):
         # self.fc2 = nn.Linear(hidden_layer_size, int(np.prod(action_shape)))
         self.output_dim = hidden_layer_size
 
-    def forward(                      # pylint: disable=arguments-differ
-        self,
-        obs: Batch,
-        state: RecurrentStateBatch | None = None,
-        info: dict[str, Any] | None = None,
+    def forward(  # pylint: disable=arguments-differ
+            self,
+            obs: Batch,
+            state: RecurrentStateBatch | None = None,
+            info: dict[str, Any] | Batch | None = None,
+            *,
+            detach_state: bool = True,
     ) -> tuple[torch.Tensor, RecurrentStateBatch]:
 
-        # feed-forward + add time dim
-        x = self.fc1(obs) # [B, H] or [B, T, H]
+        dones = ~info.Alive
+        if isinstance(dones, np.ndarray):
+            dones = torch.from_numpy(dones).to(self.device)
+
+        # feed-forward
+        x = self.fc1(obs)  # [B, H] or [B, T, H]
 
         if state is None or "hidden" not in state:
-            y, h = self.gru(x)            # hidden output: [T, B, H]
+            y, h = self.gru(x)  # hidden output: [T, B, H]
         else:
-            # input to GRU should be [B, T, H]
+            # input to gru should be [B, T, H]
             h_in = (
                 state["hidden"].transpose(0, 1).contiguous()
                 if state["hidden"].ndim == 3
                 else state["hidden"].contiguous()
             )
 
+            h_in = (
+                torch.logical_not(dones).view(1, -1, 1) * h_in
+                if h_in.ndim == 3
+                else torch.logical_not(dones).view(-1, 1) * h_in
+            )
+
             y, h = self.gru(
                 x,
                 h_in
             )  # for eval h: [B, H], for train: [T, B, H]
-        # logits = self.fc2(y)  # [:,-1] if y.ndim == 3 else y)  # [B_alive, A]
 
-        # return to [B, T, H] for storing
+        h = h.transpose(0, 1) if h.ndim == 3 else h
+
+        if detach_state:
+            h = h.detach()
+
         next_hidden = cast(
             RecurrentStateBatch,
             Batch(
                 {
-                    "hidden": h.transpose(0, 1).detach()
-                    if h.ndim == 3
-                    else h.detach(),
+                    "hidden": h,
                 }
-            )
+            ),
         )
 
         return y, next_hidden
