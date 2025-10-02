@@ -245,7 +245,8 @@ def marl_save_checkpoint_fn(
 ) -> None | str:
     # copy running statistics into the frozen eval envs *once per epoch*
     test_envs.set_obs_rms(train_envs.get_obs_rms())
-    if epoch % 20 == 0:
+    if epoch % 5 == 0:
+        save_path = os.path.join(args.logdir, run_name, "checkpoints", f"check_{epoch:04d}.pth")
         torch.save(
             {
                 "models": {
@@ -255,8 +256,10 @@ def marl_save_checkpoint_fn(
                 "obs_rms": train_envs.get_obs_rms(),
                 "args": args,
             },
-            os.path.join(args.logdir, run_name, "checkpoints", f"check_{epoch:04d}.pth")
+            save_path
         )
+        if experiment is not None:
+            experiment.log_asset(save_path, f"checkpoint", step=epoch)
 
     if experiment is not None and epoch % log_every_epochs == 0:
         log_weights_and_grads_marl(experiment, policy_mgr, step=grad_step, log_grads=False, args=args)
