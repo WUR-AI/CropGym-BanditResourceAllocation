@@ -6,7 +6,7 @@ class RandomiseStage:
     """
     Manager for environment randomisation. Designed to used with curriculum learning.
     """
-    stages: list[dict[str, bool]]
+    stages: list[dict[str, bool | int]]
     stage: int = 0  # current stage index
 
     def set_stage(self, i: int) -> None:
@@ -42,11 +42,14 @@ def make_default_stage_manager():
 
 def make_default_stages():
     return [
-        {'sowing': False, 'weather': False, 'budget': False, 'co2': False, 'initial_n': False, 'parameters': False},
-        {'sowing': True, 'weather': False, 'budget': False, 'co2': False, 'initial_n': False, 'parameters': False},
-        {'sowing': True, 'weather': True, 'budget': False, 'co2': False, 'initial_n': False, 'parameters': False},
-        {'sowing': True, 'weather': True, 'budget': False, 'co2': True, 'initial_n': False, 'parameters': False},
-        {'sowing': True, 'weather': True, 'budget': True, 'co2': True, 'initial_n': False, 'parameters': False},
+        {'sowing': False, 'weather': False, 'budget': 0, 'co2': False, 'initial_n': False, 'parameters': False},
+        {'sowing': True, 'weather': False, 'budget': 0, 'co2': False, 'initial_n': False, 'parameters': False},
+        {'sowing': True, 'weather': True, 'budget': 0, 'co2': True, 'initial_n': False, 'parameters': False},
+        {'sowing': True, 'weather': True, 'budget': 1, 'co2': True, 'initial_n': False, 'parameters': False},
+        {'sowing': True, 'weather': True, 'budget': 2, 'co2': True, 'initial_n': False, 'parameters': False},
+        {'sowing': True, 'weather': True, 'budget': 3, 'co2': True, 'initial_n': False, 'parameters': False},
+        {'sowing': True, 'weather': True, 'budget': 4, 'co2': True, 'initial_n': False, 'parameters': False},
+        {'sowing': True, 'weather': True, 'budget': 5, 'co2': True, 'initial_n': False, 'parameters': False},
     ]
 
 
@@ -56,7 +59,7 @@ class CurriculumCallbackManager:
         *,
         beta: float = 0.1,                 # EMA smoothing
         start_stage: int = 0,
-        min_epochs_per_stage: int = 500,   # gate for stages >= 1
+        min_epochs_per_stage: int = 400,   # gate for stages >= 1
         first_stage_reward: float = 2500,
         require_ema_and_inst: bool = True,  # "consistent": both EMA and instant > threshold
         max_stage: bool = 4,

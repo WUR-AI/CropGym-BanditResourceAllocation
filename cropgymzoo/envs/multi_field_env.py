@@ -313,7 +313,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
         for agent in self.possible_agents:
             self.fields[agent].unwrapped.random_manager.set_stage(stage)
         self.stage = stage
-        self.random_budget = self.fields[self.possible_agents[-1]].unwrapped.random_manager.budget
+        self.random_budget = True if self.fields[self.possible_agents[-1]].unwrapped.random_manager.budget > 0 else False
 
     def observation_space(self, _agent):
         return self.observation_spaces[_agent]
@@ -393,11 +393,15 @@ class MultiFieldEnv(AECEnv, EzPickle):
         return {a: self.fields[a].unwrapped.infos['NAVAIL'][0] for a in self.possible_agents}
 
     def _get_global_random_budget(self):
+        level = self.get_field_env_with_idx(0).random_manager.budget
+
         # get dict of default max budget
         parcel_budgets = {a: self.get_per_parcel_max_budget(a) for a in self.possible_agents}
 
+        percentage = 1 - (level * 0.1)
+
         lowest_budgets = {
-            a: float(np.ceil(parcel_budgets[a] * 0.6 / 10) * 10)
+            a: float(np.ceil(parcel_budgets[a] * percentage / 10) * 10)
             for a in self.possible_agents
         }
 
