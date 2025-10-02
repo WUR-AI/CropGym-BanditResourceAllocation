@@ -633,7 +633,8 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             *args: Any,
             **kwargs: Any,
     ) -> TPPOTrainingStats:
-        losses, clip_losses, vf_losses, ent_losses, cf_losses = [], [], [], [], []
+        (losses, clip_losses, vf_losses, ent_losses, cf_losses, clipfracs, approx_kls,
+         explained_variances, constraint_predictions) = [], [], [], [], [], [], [], [], []
         gradient_steps = 0
         split_batch_size = batch_size or -1
 
@@ -731,7 +732,14 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                     logp = torch.stack(logp_steps, dim=1)  # [B,T]
                     ent = torch.stack(ent_steps, dim=1)  # [B,T]
 
-                    ratios = (logp - mb.logp_old).exp().float()  # [b, T]
+                    logratio = logp - mb.logp_old
+                    ratios = logratio.exp().float()  # [b, T]
+
+                    with torch.no_grad():
+                        # calculate approx_kl http://joschu.net/blog/kl-approx.html
+                        # old_approx_kl = (-logratio).mean()
+                        approx_kl = ((ratios - 1) - logratio).mean()
+                        clipfracs += [((ratios - 1.0).abs() > self.eps_clip).float().mean().item()]
 
                     adv = mb.adv
                     if self.norm_adv:
@@ -777,6 +785,15 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                     else:
                         cfloss = None
 
+                    def get_critic_prediction(true, pred) -> float | int | Any:
+                        y_pred, y_true = pred.detach().cpu().numpy(), true.detach().cpu().numpy()
+                        var_y = np.var(y_true)
+                        explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
+                        return explained_var
+
+                    explained_var = get_critic_prediction(mb.returns, v)
+                    constraint_prediction = get_critic_prediction(mb.const_returns, cv)
+
                     # Masked reductions
                     def masked_mean(x):
                         m = mb_learn
@@ -787,6 +804,9 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                     ent_loss = masked_mean(ent)
                     cf_loss = masked_mean(cfloss) if isinstance(cfloss, torch.Tensor) else torch.tensor(0.0,
                                                                                                         device=ent.device)
+                    approx_kl = masked_mean(approx_kl)
+                    explained_vars = masked_mean(explained_var)
+                    constraint_prediction = masked_mean(constraint_prediction)
 
                     loss = clip_loss + self.vf_coef * vf_loss + self.cf_coef * cf_loss - self.ent_coef * ent_loss
                     self.optim.zero_grad()
@@ -798,6 +818,9 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                     vf_losses.append(vf_loss.item())
                     ent_losses.append(ent_loss.item())
                     cf_losses.append(cf_loss.item())
+                    approx_kls.append(approx_kl.item())
+                    explained_variances.append(explained_vars.item())
+                    constraint_predictions.append(constraint_prediction.item())
                     losses.append(loss.item())
 
         self.lagrange.update_lagrange_multiplier(mean_ep_constraint_values)
@@ -808,6 +831,10 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             vf_losses=vf_losses,
             cf_losses=cf_losses,
             ent_losses=ent_losses,
+            approx_kl=approx_kls,
+            clipfrac=clipfracs,
+            explained_variance=explained_variances,
+            constraint_prediction=constraint_predictions,
             gradient_steps=gradient_steps,
         )
 
@@ -1767,6 +1794,10 @@ class Lagrange:
 @dataclass(kw_only=True)
 class IPPOTrainingStats(PPOTrainingStats):
     cf_loss: SequenceSummaryStats
+    approx_kl: SequenceSummaryStats
+    clipfrac: SequenceSummaryStats
+    explained_variance: SequenceSummaryStats
+    constraint_prediction: SequenceSummaryStats
 
     @classmethod
     def from_sequence(
@@ -1777,6 +1808,10 @@ class IPPOTrainingStats(PPOTrainingStats):
         vf_losses: Sequence[float],
         cf_losses: Sequence[float],
         ent_losses: Sequence[float],
+        approx_kl: Sequence[float],
+        clipfrac: Sequence[float],
+        explained_variance: Sequence[float],
+        constraint_prediction: Sequence[float],
         gradient_steps: int = 0,
     ) -> Self:
         return cls(
@@ -1785,5 +1820,9 @@ class IPPOTrainingStats(PPOTrainingStats):
             vf_loss=SequenceSummaryStats.from_sequence(vf_losses),
             cf_loss=SequenceSummaryStats.from_sequence(cf_losses),
             ent_loss=SequenceSummaryStats.from_sequence(ent_losses),
+            approx_kl=SequenceSummaryStats.from_sequence(approx_kl),
+            clipfrac=SequenceSummaryStats.from_sequence(clipfrac),
+            explained_variance=SequenceSummaryStats.from_sequence(explained_variance),
+            constraint_prediction=SequenceSummaryStats.from_sequence(constraint_prediction),
             gradient_steps=gradient_steps,
         )
