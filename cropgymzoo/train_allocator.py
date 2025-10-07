@@ -89,9 +89,11 @@ def train_allocator(args):
 
         # train the surrogate a bit on accumulated data
         loss_val = bandit.train_step(steps=args.bandit_epochs, lr=args.bandit_lr)
-        print(f"round {t}, loss: {loss_val}")
+        n = len(bandit.y_hist)
+        loss_per_sample = loss_val / max(n, 1)
+        print(f"round {t}, loss: {loss_per_sample}")
         if comet_experiment:
-            comet_experiment.log_metric("loss", loss_val, step=t)
+            comet_experiment.log_metric("loss", loss_per_sample, step=t)
 
             log_model_histograms(
                 comet_experiment,
