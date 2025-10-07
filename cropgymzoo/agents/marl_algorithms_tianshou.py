@@ -658,9 +658,10 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             if self.recompute_adv and step > 0:
                 batch = self._compute_returns(batch, self._buffer, self._indices)
             if not self.recurrent:
-                gradient_steps, clip_losses, vf_losses, ent_losses, cf_losses, losses = self.flat_learn_ppo(
+                gradient_steps, clip_losses, vf_losses, ent_losses, cf_losses, approx_kls, explained_variances, constraint_predictions, losses = self.flat_learn_ppo(
                     batch, cf_losses, clip_losses, ent_losses, gradient_steps,
-                    lagrangian_multiplier, losses, split_batch_size, vf_losses)
+                    lagrangian_multiplier, losses, split_batch_size, vf_losses, clipfracs, approx_kls, explained_variances,
+                constraint_predictions)
             else:
                 # Recurrent sequence path
                 # T = self.burn_in + self.unroll_len
@@ -840,7 +841,8 @@ class LagrangianIPPOPolicy(IPPOPolicy):
 
     def flat_learn_ppo(self, batch: RolloutBatchProtocol | BatchWithAdvantagesProtocol, cf_losses: list[Any],
                        clip_losses: list[Any], ent_losses: list[Any], gradient_steps: int, lagrangian_multiplier: float,
-                       losses: list[Any], split_batch_size: int | None, vf_losses: list[Any]) -> int:
+                       losses: list[Any], split_batch_size: int | None, vf_losses: list[Any], clipfracs: list, approx_kls: list,
+                       explained_variances: list, constraint_predictions: list) -> tuple:
         for minibatch in batch.split(split_batch_size, merge_last=True, shuffle=True if self.recurrent else False):
             gradient_steps += 1
             # calculate loss for actor
@@ -867,8 +869,20 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             # start lagrangian constraint
             combined_advantages = advantages - lagrangian_multiplier * constraint_advantages
 
-            ratios = (dist.log_prob(minibatch.act) - minibatch.logp_old).exp().float()
-            ratios = ratios.reshape(ratios.size(0), -1).transpose(0, 1)
+            act = minibatch.act
+            logp = dist.log_prob(act)
+            if logp.ndim > 1: logp = logp.sum(-1)
+
+            logratio = logp - minibatch.logp_old
+            ratios = logratio.exp().float()  # [b, T]
+
+            # ratios = ratios.reshape(ratios.size(0), -1).transpose(0, 1)
+
+            with torch.no_grad():
+                # calculate approx_kl http://joschu.net/blog/kl-approx.html
+                # old_approx_kl = (-logratio).mean()
+                approx_kl = ((ratios - 1) - logratio).mean()
+                clipfracs += [((ratios - 1.0).abs() > self.eps_clip).float().mean().item()]
 
             surr1 = ratios * combined_advantages
             surr2 = ratios.clamp(1.0 - self.eps_clip, 1.0 + self.eps_clip) * combined_advantages
@@ -897,6 +911,15 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             # calculate constraint returns
             cf_loss = (minibatch.const_returns - constraint_value).pow(2).mean()
 
+            def get_critic_prediction(true, pred) -> float | int | Any:
+                y_pred, y_true = pred.detach().cpu().numpy(), true.detach().cpu().numpy()
+                var_y = np.var(y_true)
+                explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
+                return explained_var
+
+            explained_vars = get_critic_prediction(minibatch.returns, value)
+            constraint_prediction = get_critic_prediction(minibatch.const_returns, constraint_value)
+
             # calculate regularization and overall loss
             ent_loss = dist.entropy().mean()
             loss = clip_loss + self.vf_coef * vf_loss + self.cf_coef * cf_loss - self.ent_coef * ent_loss
@@ -912,8 +935,11 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             vf_losses.append(vf_loss.item())
             ent_losses.append(ent_loss.item())
             cf_losses.append(cf_loss.item())
+            approx_kls.append(approx_kl.item())
+            explained_variances.append(explained_vars.item())
+            constraint_predictions.append(constraint_prediction.item())
             losses.append(loss.item())
-        return gradient_steps, clip_losses, vf_losses, ent_losses, cf_losses, losses
+        return gradient_steps, clip_losses, vf_losses, ent_losses, cf_losses, approx_kls, explained_variances, constraint_predictions, losses
 
 
 log = logging.getLogger(__name__)
