@@ -367,6 +367,7 @@ class ObsMLP(MLP):
         obs: Batch,
         state: RecurrentStateBatch | None = None,
         info: dict[str, Any] | None = None,
+        detach_state: bool = True,
     ) -> (torch.Tensor, None):
         """Mapping: obs -> flatten (inside MLP)-> logits.
 
