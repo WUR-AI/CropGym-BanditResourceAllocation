@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from cropgymzoo import _DEFAULT_MODEL_DIR, _DEFAULT_LOGDIR
 
 
-# --------------------------- Utilities ---------------------------
+#  Utilities
 
 def positive_param(raw: torch.Tensor) -> torch.Tensor:
     # Softplus with small beta for stable gradients
@@ -22,7 +22,7 @@ def add_jitter(K: torch.Tensor, jitter: float = 1e-6) -> torch.Tensor:
     return K + jitter * torch.eye(K.shape[-1], device=K.device, dtype=K.dtype)
 
 
-# --------------------------- Kernels (scalar) ---------------------------
+#  Kernels (scalar)
 
 class RBF(nn.Module):
     """
@@ -83,14 +83,14 @@ class Matern32(nn.Module):
 # --------------------------- Neural feature map g(θ) ---------------------------
 
 class FeatureNet(nn.Module):
-    """Small MLP: θ -> g(θ) in R^m."""
-    def __init__(self, d_theta: int, m: int, hidden: int = 64, depth: int = 2):
+
+    def __init__(self, d_theta: int, m: int, hidden: int = 256, depth: int = 2):
         super().__init__()
         layers: List[nn.Module] = []
         in_dim = d_theta
         for d in range(depth):
-            layers += [nn.Linear(in_dim, hidden - 32 if d == 1 else hidden), nn.ReLU()]
-            in_dim = hidden - 32 if d == 1 else hidden
+            layers += [nn.Linear(in_dim, hidden), nn.ReLU()]
+            in_dim = hidden
         layers += [nn.Linear(in_dim, m)]
         self.net = nn.Sequential(*layers)
 
@@ -98,11 +98,52 @@ class FeatureNet(nn.Module):
         # (n,d_theta) -> (n,m)
         return self.net(Theta)
 
+class LSTMFeatureNet(nn.Module):
+
+    def __init__(
+        self,
+        d_theta: int,
+        m: int,
+        hidden: int = 128,
+        num_layers: int = 1,
+        bidirectional: bool = False,
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+        self.hidden = hidden
+        self.num_layers = num_layers
+        self.num_directions = 2 if bidirectional else 1
+
+        self.lstm = nn.LSTM(
+            input_size=d_theta,
+            hidden_size=hidden,
+            num_layers=num_layers,
+            batch_first=True,
+            bidirectional=bidirectional,
+            dropout=dropout if num_layers > 1 else 0.0,
+        )
+        out_dim = hidden * self.num_directions
+        self.proj = nn.Linear(out_dim, m)
+
+    def forward(self, Theta: torch.Tensor) -> torch.Tensor:
+        """
+        Theta: (N, dθ) or (N, T, dθ)
+        Returns: g ∈ (N, m), using the last time step (or last hidden).
+        """
+        if Theta.dim() == 2:
+            Theta = Theta.unsqueeze(1)  # (N, 1, dθ)
+
+        # LSTM
+        _, (hn, _) = self.lstm(Theta)  # hn: (layers*dirs, N, hidden)
+        layers = self.num_layers * self.num_directions
+        hn = hn.view(layers, Theta.size(0), self.hidden)
+        last = hn[-1]  # (N, hidden) -> top layer, forward (if bidir, torch uses concat internally in hn)
+        return self.proj(last)
 
 # --------------------------- Collaborative multi-output GP K(x,x') ---------------------------
-# p(x) = [p_1(x),...,p_m(x)]ᵀ with covariance:
+# p(x) = [p_1(x),...,p_m(x)]^T with covariance:
 #   K(x,x') = Σ_q A_q k_q(x,x') + Diag( k~_1(x,x'),...,k~_m(x,x') )
-# where A_q = L_q L_qᵀ ensures PSD. (Eq. (4))
+# where A_q = L_q L_q^T ensures PSD. (Eq. (4))
 
 class CollaborativeMOGP(nn.Module):
     def __init__(
@@ -192,9 +233,9 @@ class CollaborativeMOGP(nn.Module):
 class NNAGP(nn.Module):
     """
     End-to-end NN-AGP:
-      - g(θ) via FeatureNet
+      - g(θ)
       - collaborative MOGP for K(x,x')
-      - exact GP posterior over f(x;θ) using K̃
+      - exact GP posterior over f(x;theta) using K̃
     """
     def __init__(self, d_theta: int, d_x: int, m: int, Q: int = 1, device: Optional[torch.device] = None):
         super().__init__()
@@ -242,9 +283,9 @@ class NNAGP(nn.Module):
         G = self.g_net(context_in)                        # (n,m)
         Kt = self.mogp.K_tilde(act, context_in, act, context_in, G, G)  # (n,n)
         Kt = 0.5 * (Kt + Kt.T)
-        # Kn = add_jitter(Kt, self.jitter) + self.noise**2 * torch.eye(act.shape[0], device=act.device)
-        # L = torch.linalg.cholesky(Kn)
-        L = self._robust_cholesky(Kt)
+        Kn = add_jitter(Kt, self.jitter) + self.noise**2 * torch.eye(act.shape[0], device=act.device)
+        L = torch.linalg.cholesky(Kn)
+        # L = self._robust_cholesky(Kt)
         alpha = torch.cholesky_solve(y.unsqueeze(1), L).squeeze(1)  # (n,)
 
         log_det = 2.0 * torch.log(torch.diag(L)).sum()
@@ -267,7 +308,7 @@ class NNAGP(nn.Module):
         train_Theta = train_Theta.to(device)
         y = y.to(device)
 
-        # reuse cached Cholesky if consistent with latest parameters/inputs
+        # reuse cached Cholesky based on a few flags
         need_refit = not self._train_cache or \
                      self._train_cache["X"].data_ptr() != train_X.data_ptr() or \
                      self._train_cache["Theta"].data_ptr() != train_Theta.data_ptr()
@@ -275,9 +316,9 @@ class NNAGP(nn.Module):
         if need_refit:
             G_tr = self.g_net(train_Theta)
             Kt = self.mogp.K_tilde(train_X, train_Theta, train_X, train_Theta, G_tr, G_tr)
-            # Kn = add_jitter(Kt, self.jitter) + self.noise**2 * torch.eye(train_X.shape[0], device=device)
-            # L = torch.linalg.cholesky(Kn)
-            L = self._robust_cholesky(Kt)
+            Kn = add_jitter(Kt, self.jitter) + self.noise**2 * torch.eye(train_X.shape[0], device=device)
+            L = torch.linalg.cholesky(Kn)
+            # L = self._robust_cholesky(Kt)
             alpha = torch.cholesky_solve(y.unsqueeze(1), L).squeeze(1)
             self._train_cache = {"Theta": train_Theta, "X": train_X, "y": y, "L": L, "alpha": alpha, "G": G_tr}
         else:
@@ -296,7 +337,7 @@ class NNAGP(nn.Module):
         var = (prior_diag - (K_star * v).sum(dim=0)).clamp_min(0.0)
         return mu, var.sqrt()
 
-    # ---- posterior over a finite candidate set for one context θ_t (UCB, TS use this)
+    # posterior over a candidate set for one context theta_t (UCB and TS)
     @torch.no_grad()
     def posterior_on_candidates(
             self,
@@ -311,7 +352,7 @@ class NNAGP(nn.Module):
         mu, std = self.predict(Xc, theta.expand(Xc.shape[0], -1), train_X, train_Theta, y)
         if not calculate_covariance:
             return mu, std, None
-        # Build covariance only when needed (e.g., TS)
+        # Build covariance only when needed (used for TS)
         # Σ = K_cand - K_*^T (K+σ^2I)^{-1} K_*
         G_tr = self._train_cache["G"]
         G_c = self.g_net(theta.expand(Xc.shape[0], -1))
@@ -325,11 +366,10 @@ class NNAGP(nn.Module):
         return mu, std, cov
 
 
-# --------------------------- Acquisition rules ---------------------------
+#  Acquisition rules
 
 def beta_finite_candidates(t: int, M: int, delta: float = 0.1) -> float:
-    # Finite-arm CGP-UCB schedule (cf. paper’s finite set analysis): β_t = 2 log(|X_t| t^2 π^2 / (6 δ))
-    # Safe, increasing, and practical for candidate sets.
+    # Finite-arm NNAGP-UCB schedule
     return 2.0 * math.log((M * (t**2) * (math.pi**2)) / (6.0 * delta))
 
 
@@ -368,7 +408,11 @@ class NNAGPBandit:
         self.y_hist: List[torch.Tensor] = []
         self.t = 1
 
-        self.opt = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=1e-4)
+        self.opt = torch.optim.AdamW(
+            self.model.parameters(),
+            lr=lr,
+            weight_decay=1e-4,
+        )
 
     # ---- training step: maximize log marginal likelihood (Eq. (5))
     def train_step(self, steps: int = 200, lr: float = 3e-3) -> float:
@@ -427,6 +471,7 @@ class NNAGPBandit:
         idx = int(torch.argmax(ucb).item())
         return X_candidates[idx], SelectionInfo(mu=mu.cpu(), std=std.cpu(), ucb=ucb.cpu(), beta_t=beta_t, rule="ucb")
 
+    # Use sparsely!
     @torch.no_grad()
     def select_ucb_streaming(
             self,
@@ -470,7 +515,7 @@ class NNAGPBandit:
 
         return best_x, {"best_ucb": best_ucb, "beta_t": beta_t}
 
-    # ---- choose x_t by Thompson Sampling over candidates (supp §6.1)
+    # choose x_t by Thompson Sampling over candidates
     @torch.no_grad()
     def select_ts(self, theta_t: torch.Tensor, X_candidates: torch.Tensor) -> Tuple[torch.Tensor, SelectionInfo]:
         if len(self.y_hist) == 0:
@@ -536,6 +581,7 @@ class NNAGPBandit:
                 "G": c["G"].to(map_location),
             }
 
+    # Save and load learned bandits
     def save(
             self,
             seed: int = None,
