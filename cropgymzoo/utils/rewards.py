@@ -321,12 +321,16 @@ class Rewards:
                 growth = fresh_yield_fn(growth)
 
             # get profit
-            profit_now = obj.calculate_profit_term(
+            profit = obj.calculate_profit_term(
                 action=amount,
                 growth=growth,
                 price_crop=price_crop,
                 price_fertilizer=price_fertilizer
             )
+
+            labor_cost = 30 if amount > 0 else 0
+
+            profit_now = profit - labor_cost
 
             return profit_now, growth
 
