@@ -164,7 +164,7 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             initial_lagrangian_multiplier: float = 0.001,
             lagrangian_learning_rate: float = 0.0005,
             lagrangian_upper_bound: float = 3.0,
-            const_norm: bool = False,
+            const_norm: bool = True,
             norm_const_adv: bool = False,
             logger = None,
             recurrent: bool = False,
