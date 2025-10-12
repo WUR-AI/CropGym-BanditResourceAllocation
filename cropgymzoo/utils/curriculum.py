@@ -37,13 +37,24 @@ class RandomiseStage:
 
 def make_default_stage_manager():
     return RandomiseStage(
-        stages=make_default_stages()
+        stages=make_budget_stages()
     )
 
 def make_default_stages():
     return [
         {'sowing': False, 'weather': False, 'budget': 0, 'co2': False, 'initial_n': False, 'parameters': False},
         {'sowing': True, 'weather': False, 'budget': 0, 'co2': False, 'initial_n': False, 'parameters': False},
+        {'sowing': True, 'weather': True, 'budget': 0, 'co2': True, 'initial_n': False, 'parameters': False},
+        {'sowing': True, 'weather': True, 'budget': 1, 'co2': True, 'initial_n': False, 'parameters': False},
+        {'sowing': True, 'weather': True, 'budget': 2, 'co2': True, 'initial_n': False, 'parameters': False},
+        {'sowing': True, 'weather': True, 'budget': 3, 'co2': True, 'initial_n': False, 'parameters': False},
+        {'sowing': True, 'weather': True, 'budget': 4, 'co2': True, 'initial_n': False, 'parameters': False},
+        {'sowing': True, 'weather': True, 'budget': 5, 'co2': True, 'initial_n': False, 'parameters': False},
+    ]
+
+
+def make_budget_stages():
+    return [
         {'sowing': True, 'weather': True, 'budget': 0, 'co2': True, 'initial_n': False, 'parameters': False},
         {'sowing': True, 'weather': True, 'budget': 1, 'co2': True, 'initial_n': False, 'parameters': False},
         {'sowing': True, 'weather': True, 'budget': 2, 'co2': True, 'initial_n': False, 'parameters': False},
