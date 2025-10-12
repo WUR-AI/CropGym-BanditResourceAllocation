@@ -15,4 +15,5 @@ potato:
   crop_name: potato
   variety_name: Innovator
   crop_start_date: 1999-5-1
-  crop_end_type: maturity
+  crop_end_date: 1999-10-1
+  crop_end_type: harvest

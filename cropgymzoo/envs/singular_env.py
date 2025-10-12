@@ -1080,8 +1080,11 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         shift = self.rng.normal(loc=0, scale=5)
         shifted_date = self.agmt.crop_start_date + datetime.timedelta(days=shift)
         # shift sowing date and also campaign date proportionally by the random sowing
+        end_shift = {"crop_end_date": self.agmt.crop_end_date + datetime.timedelta(days=shift)}\
+            if self.agmt.crop_end_type == "harvest" else {}
         self.agro_management = self.agmt.update_attributes(crop_start_date=shifted_date,
-                                                            campaign_date=shifted_date - datetime.timedelta(weeks=8))
+                                                            campaign_date=shifted_date - datetime.timedelta(weeks=8),
+                                                           **end_shift)
 
     '''
     Init helpers
