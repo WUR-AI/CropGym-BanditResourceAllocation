@@ -41,14 +41,14 @@ def generate_soil_file(longitude, latitude):
 def main():
     if len(sys.argv) == 1:
         print("No arguments provided!")
-        print("Usage: python generate_soil_file.py <longitude> <latitude>")
+        print("Usage: python generate_soil_file.py --lon <longitude> --lat <latitude>")
         print("Example: python generate_soil_file.py 6.656 52.966")
         sys.exit(1)
 
 
     parser = argparse.ArgumentParser(description="Generate a YAML soil file for a given longitude and latitude.")
-    parser.add_argument("longitude", type=float, help="Longitude for the soil data.")
-    parser.add_argument("latitude", type=float, help="Latitude for the soil data.")
+    parser.add_argument("-lon", "--longitude", dest="longitude", type=float, help="Longitude for the soil data.")
+    parser.add_argument("-lat", "--latitude", dest="latitude", type=float, help="Latitude for the soil data.")
 
     args = parser.parse_args()
 
