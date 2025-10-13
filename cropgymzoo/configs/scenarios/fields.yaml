@@ -1,34 +1,34 @@
-field-sugarbeet-n:  # 29.7% clay, 28.2% sand, 42.1 silt
+field-sb-n:  # 29.7% clay, 28.2% sand, 42.1 silt
   soil_lon: 7.0966
-  soil_lat: 53.2470
+  soil_lat: 53.247
   crop: sugarbeet
   area: 24.67
   type: 'silt'
-field-winterwheat-n:  # 45% clay, 5 sand, 50 silt
+field-ww-n:  # 45% clay, 5 sand, 50 silt
   soil_lon: 7.1584
   soil_lat: 53.2188
   crop: winterwheat
   area: 12.44
   type: 'silt'
-field-potato-n:  # 29.0% clay, 23.8% sand, 47.2% silt
+field-pt-n:  # 29.0% clay, 23.8% sand, 47.2% silt
   soil_lon: 6.7784
-  soil_lat: 53.521
+  soil_lat: 53.4327
   crop: potato
   area: 14.83
   type: 'silt'
-field-sugarbeet-s:  # 28.3% clay, 27.7% sand, 44.0 silt
+field-sb-s:  # 28.3% clay, 27.7% sand, 44.0 silt
   soil_lon: 3.9186
   soil_lat: 51.7127
   crop: sugarbeet
   area: 18.11
   type: 'clay'
-field-winterwheat-s: # 31.3% clay, 23.9% sand, 45.0 silt
+field-ww-s: # 31.3% clay, 23.9% sand, 45.0 silt
   soil_lon: 4.1332
   soil_lat: 51.6229
   crop: winterwheat
   area: 20.69
   type: 'clay'
-field-potato-s:  # 28.6 clay, 21.7 sand, 49.7 silt
+field-pt-s:  # 28.6 clay, 21.7 sand, 49.7 silt
   soil_lon: 3.5666
   soil_lat: 51.3544
   crop: potato
