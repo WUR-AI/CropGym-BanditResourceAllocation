@@ -709,8 +709,8 @@ class MultiFieldEnv(AECEnv, EzPickle):
 
         header = f"Farm status; sowing year {self.year} – budget left: {self.global_budget_left} / {self.global_budget} kg N"
         cols = ("Field (area[ha])", "Crop", "Date", "N applied", "Yield[t/ha]", "NUE", "Nsurp", "Profit")
-        fmt_header = "{:18} {:12} {:10} {:>10} {:>15} {:>7} {:>7} {:>10}"
-        lines = [header, fmt_header.format(*cols), "-" * 95]
+        fmt_header = "{:20} {:12} {:10} {:>10} {:>15} {:>7} {:>7} {:>10}"
+        lines = [header, fmt_header.format(*cols), "-" * 100]
 
         # build one row per parcel
         crop_counts = Counter()
@@ -735,7 +735,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
             ]
 
             line = (
-                f"{vals[0]:18} {vals[1]:12} {vals[2]:10} "
+                f"{vals[0]:20} {vals[1]:12} {vals[2]:10} "
                 f"{format_val(vals[3], 10)} "
                 f"{format_val(vals[4], 15)} "
                 f"{format_val(vals[5], 7)} "
