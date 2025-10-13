@@ -377,11 +377,14 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
     def overwrite_year(self, year):
         self.year = year
+        end_date = {'crop_end_date': lambda d: d.replace(year=year)} if self.agmt.crop_end_type == "harvest" else {}
         self.agro_management = self.agmt.update_attributes(crop_start_date=lambda d: d.replace(year=year),
-                                                           campaign_date=lambda d: self._safe_replace_year(d, year),)
+                                                           campaign_date=lambda d: self._safe_replace_year(d, year),
+                                                           **end_date)
         if self.reward_function in reward_functions_with_baseline() and self.original is True:
             self.baseline_env.agro_management = self.agmt.update_attributes(crop_start_date=lambda d: d.replace(year=year),
-                                                                            campaign_date=lambda d: self._safe_replace_year(d, year),)
+                                                                            campaign_date=lambda d: self._safe_replace_year(d, year),
+                                                                            **end_date)
 
     def render(self, mode="human"):
         pass
@@ -522,7 +525,6 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         return 0.0
 
     def _get_budget_constraint(self, terminated) -> float:
-        # sort of quadratic penalty to encourage finishing the budget
         if terminated:
             return self.budget_left // 10
         else:
@@ -549,12 +551,13 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         1. Action constraint
         2. Development stage constraint
         3. Budget constraint (if not using masked actions)
-        4. Nue and Nsurp constraints (legacy)
+        4. Nue and Nsurp constraints
+        Commented out some constraints to not let the agents use them
         """
         total_constraint = 0.0
         total_constraint += self._get_frequency_constraint(terminated)
         # total_constraint += self._get_dvs_constraint()
-        total_constraint += self._get_budget_constraint(terminated)
+        # total_constraint += self._get_budget_constraint(terminated)
         total_constraint += self._get_nue_constraint()
         total_constraint += self._get_nsurp_constraint()
 
