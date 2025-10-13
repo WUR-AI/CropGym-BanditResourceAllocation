@@ -314,7 +314,7 @@ def grab_spaces(seed):
     dummy_env = get_dummy_env()
     dummy_env.reset(seed=seed)
     sample_obs, _, _, _, _ = dummy_env.unwrapped.last()
-    first_agent = 'field-1'
+    first_agent = dummy_env.get_field_env_with_idx(0).name
     observation_space = dummy_env.sample_observation_space_agent()
     # flat_space, key_order = flatten_dict_space(observation_space)
     obs_dim = observation_space.shape
