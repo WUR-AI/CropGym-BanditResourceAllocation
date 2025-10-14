@@ -155,10 +155,11 @@ def yearly_eval_test_fn(
 
             if raw_env.terminations[agent]:
                 info_dict[year][agent] = info  # grab info before agent dies
-                print(raw_env)
                 raw_env.step(None)
             else:
                 raw_env.step(action)
+        else:
+            print(raw_env)
 
     # log results to tensorboard
     across_years_reward = {}
