@@ -122,23 +122,26 @@ def make_ppo_policy(
     actor_net = network_fn(
         layer_num=len(hidden),
         hidden_layer_size=hidden[0],
-        state_shape=obs_dim,
+        state_shape=obs_dim[0],
         action_shape=act_dim,
+        concat_mask=args.concat_mask,
         device=device,
     )
     if not mlp_critics:
         critic_net = network_fn(
             layer_num=len(hidden),
             hidden_layer_size=hidden[0],
-            state_shape=obs_dim,
+            state_shape=obs_dim[0],
             action_shape=act_dim,
+            concat_mask=args.concat_mask,
             device=device,
         )
         constraint_net = network_fn(
             layer_num=len(hidden),
             hidden_layer_size=hidden[0],
-            state_shape=obs_constraint_dim,
+            state_shape=obs_dim[0],
             action_shape=act_dim,
+            concat_mask=args.concat_mask,
             device=device,
         ) if args.lagrangian_ppo else None
     else:
@@ -146,6 +149,7 @@ def make_ppo_policy(
             input_dim=obs_dim[0],
             action_dim=act_dim,
             hidden_sizes=hidden,
+            concat_mask=args.concat_mask,
             activation=torch.nn.Tanh,
             device=device,
         )
@@ -153,6 +157,7 @@ def make_ppo_policy(
             input_dim=obs_dim[0],
             action_dim=act_dim,
             hidden_sizes=hidden,
+            concat_mask=args.concat_mask,
             activation=torch.nn.Tanh,
             device=device,
         ) if args.lagrangian_ppo else None
@@ -164,6 +169,7 @@ def make_ppo_policy(
             flatten_input=False,
             hidden_sizes=hidden,
             activation=torch.nn.Tanh,
+            concat_mask=args.concat_mask,
             device=device,
         )
         critic_net = ObsMLP(
@@ -171,6 +177,7 @@ def make_ppo_policy(
             action_dim=act_dim,
             hidden_sizes=hidden,
             activation=torch.nn.Tanh,
+            concat_mask=args.concat_mask,
             device=device,
         )
         constraint_net = ObsMLP(
@@ -178,6 +185,7 @@ def make_ppo_policy(
             action_dim=act_dim,
             hidden_sizes=hidden,
             activation=torch.nn.Tanh,
+            concat_mask=args.concat_mask,
             device=device,
         ) if args.lagrangian_ppo else None
 
@@ -185,12 +193,17 @@ def make_ppo_policy(
         preprocess_net=actor_net,
         action_dim=act_dim,
         last_hidden_dim=hidden[-1],
-        use_film=args.use_film
+        use_film=args.use_film,
+        concat_mask = args.concat_mask,
     ).to(device)
-    critic = StackedCritic(preprocess_net=critic_net).to(device)
+    critic = StackedCritic(
+        preprocess_net=critic_net,
+        concat_mask=args.concat_mask,
+    ).to(device)
     constraint_critic = StackedCritic(
         preprocess_net=constraint_net,
         # constraint_indices=obs_constraint_idx,
+        concat_mask=args.concat_mask,
     ) if args.lagrangian_ppo else None
 
     optim = Adam(

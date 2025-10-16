@@ -157,16 +157,17 @@ class RecurrentGRU(NetBase[RecurrentStateBatch]):
     """Tianshou-compatible GRU network (same API as common.Recurrent)."""
 
     def __init__(
-        self,
-        layer_num: int,
-        state_shape: int | Sequence[int],
-        action_shape: int | Sequence[int],
-        hidden_layer_size: int = 128,
-        device: str | int | torch.device = "cpu",
+            self,
+            layer_num: int,
+            state_shape: int | Sequence[int],
+            action_shape: int | Sequence[int],
+            concat_mask: bool = False,
+            hidden_layer_size: int = 128,
+            device: str | int | torch.device = "cpu",
     ) -> None:
         super().__init__()
         self.device = device
-        self.obs_dim = state_shape + action_shape
+        self.obs_dim = state_shape + (action_shape if concat_mask else 0)
         self.hidden_dim = hidden_layer_size
         self.env_num = 1
         self.flag = False
@@ -241,12 +242,13 @@ class RecurrentLSTM(NetBase[RecurrentStateBatch]):
             layer_num: int,
             state_shape: int | Sequence[int],
             action_shape: int | Sequence[int],
+            concat_mask: bool = False,
             hidden_layer_size: int = 128,
             device: str | int | torch.device = "cpu",
     ) -> None:
         super().__init__()
         self.device = device
-        self.obs_dim = state_shape + action_shape
+        self.obs_dim = state_shape + (action_shape if concat_mask else 0)
         self.hidden_dim = hidden_layer_size
         self.env_num = 1
         self.flag = False
@@ -331,6 +333,7 @@ class MaskedActor(Actor):
             self,
             preprocess_net,
             action_dim,
+            concat_mask=False,
             last_hidden_dim=None,
             use_film: bool = True,
             device='cpu'
@@ -344,6 +347,7 @@ class MaskedActor(Actor):
         cont_in = int(2)
         self.last.flatten_input = False
         self.film = use_film
+        self.concat_mask = concat_mask
         if self.film :
             self.build_cond = BudgetCond(self.n_bins, 1)
             self.last = FiLMHead(
@@ -370,7 +374,7 @@ class MaskedActor(Actor):
         elif x_in.ndim == 2:
             x_in = x_in.unsqueeze(-2)  # for training, dim: [B, T, H]
 
-        if isinstance(obs, Batch) and "mask" in obs:
+        if isinstance(obs, Batch) and "mask" in obs and self.concat_mask:
             mask_t = torch.as_tensor(obs.mask, device=self.device, dtype=torch.float32)
             # Make shapes match: [B,T,A] or [B,A] → add time dim if needed
             if mask_t.ndim == 1 and x_in.ndim > 1:
@@ -430,12 +434,13 @@ class MaskedActor(Actor):
 
 
 class StackedCritic(Critic):
-    def __init__(self, preprocess_net, device='cpu', **kwargs):
+    def __init__(self, preprocess_net, concat_mask=False, device='cpu', **kwargs):
         super().__init__(
             preprocess_net=preprocess_net,
             device=device,
             **kwargs
         )
+        self.concat_mask = concat_mask
 
     def forward(self, obs: np.ndarray | torch.Tensor, **kwargs: Any) -> torch.Tensor:
         """Mapping: s_B -> V(s)_B."""
@@ -447,7 +452,7 @@ class StackedCritic(Critic):
         if not torch.is_tensor(x_in):
             x_in = torch.from_numpy(x_in).to(self.device)
 
-        if isinstance(obs, Batch) and "mask" in obs:
+        if isinstance(obs, Batch) and "mask" in obs and self.concat_mask:
             mask_t = torch.as_tensor(obs.mask, device=self.device, dtype=torch.float32)
             # Make shapes match: [B,T,A] or [B,A] → add time dim if needed
             if mask_t.ndim == 1 and x_in.ndim > 1:
@@ -465,11 +470,12 @@ class StackedCritic(Critic):
 
 
 class ConstraintCritic(Critic):
-    def __init__(self, preprocess_net, constraint_indices, device='cpu'):
+    def __init__(self, preprocess_net, constraint_indices, concat_mask=False, device='cpu'):
         super().__init__(
             preprocess_net=preprocess_net,
         )
         self.constraint_indices = torch.as_tensor(constraint_indices, device=device)
+        self.concat_mask = concat_mask
 
     def forward(self, obs: np.ndarray | torch.Tensor, **kwargs: Any) -> torch.Tensor:
 
@@ -487,7 +493,7 @@ class ConstraintCritic(Critic):
         elif x_in.ndim == 3:
             x_in = x_in[:, :, self.constraint_indices]
 
-        if isinstance(obs, Batch) and "mask" in obs:
+        if isinstance(obs, Batch) and "mask" in obs and self.concat_mask:
             mask_t = torch.as_tensor(obs.mask, device=self.device, dtype=torch.float32)
             # Make shapes match: [B,T,A] or [B,A] → add time dim if needed
             if mask_t.ndim == 1 and x_in.ndim > 1:
@@ -508,7 +514,8 @@ class ObsMLP(MLP):
     def __init__(self, *args, **kwargs):
         self.input_dim = kwargs.pop("input_dim")
         self.action_dim = kwargs.pop("action_dim", 0)
-        kwargs['input_dim'] = self.input_dim + self.action_dim
+        concat_mask = kwargs.pop("concat_mask", False)
+        kwargs['input_dim'] = self.input_dim + (self.action_dim if concat_mask else 0)
         super().__init__(*args, **kwargs)
 
     def forward(

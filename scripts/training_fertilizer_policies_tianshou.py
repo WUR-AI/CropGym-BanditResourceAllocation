@@ -54,6 +54,9 @@ if __name__ == "__main__":
                         help="Input space separated layer sizes", default=[64, 64])
     parser.add_argument("--seq_len", type=int, default=32)  # For RNNs
 
+    # feature space
+    parser.add_argument("--concat_mask", action='store_true', dest='concat_mask')
+
     # Use curriculum learning?
     parser.add_argument("--curriculum", action='store_true', dest='curriculum')
     parser.add_argument("--advance_steps", type=int, dest='advance_steps', default=200)
@@ -86,6 +89,7 @@ if __name__ == "__main__":
         lagrangian_ppo=False,
         no_comet=False,
         use_film=True,
+        concat_mask=False,
     )
     hyperparams = parser.parse_args()
 
