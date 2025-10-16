@@ -56,9 +56,15 @@ if __name__ == "__main__":
 
     # Use curriculum learning?
     parser.add_argument("--curriculum", action='store_true', dest='curriculum')
+    parser.add_argument("--advance_steps", type=int, dest='advance_steps', default=200)
+    parser.add_argument("--start_stage", type=int, dest='start_stage', default=0)
 
     # Use intrinsic curiosity module
     parser.add_argument("--use_icm", action='store_true', dest='use_icm')
+
+    # Use feature-wise linear modulation
+    parser.add_argument("--use_film", action='store_true', dest='use_film')
+    parser.add_argument("--not_use_film", action='store_false', dest='use_film')
 
     # resume model
     parser.add_argument("--resume", action="store_true", dest='resume')
@@ -79,6 +85,7 @@ if __name__ == "__main__":
         use_icm=False,
         lagrangian_ppo=False,
         no_comet=False,
+        use_film=True,
     )
     hyperparams = parser.parse_args()
 
