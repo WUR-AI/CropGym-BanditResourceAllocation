@@ -857,7 +857,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             total_inorganic_n = self.rng.normal(self.mean_total_N, self.std_dev_total_N)
             total_inorganic_n = np.clip(total_inorganic_n, 0, 100)
         else:
-            total_inorganic_n = 40
+            total_inorganic_n = 90
 
         # Split total inorganic N into NO3 and NH4
         total_no3 = total_inorganic_n * self.percentage_NO3
