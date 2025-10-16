@@ -206,7 +206,7 @@ def yearly_eval_test_fn(
                     f"image/plot_year:{year}",
                     fig_to_chw_uint8(plot_results(
                         agent_info,
-                        variable_list=['DVS', 'Profit', 'NAVAIL', 'Reward', 'Action', 'Yield', 'BudgetLeft'],
+                        variable_list=['DVS', 'Profit', 'Reward', 'Action', 'Yield', 'BudgetLeft'],
                         show=False,
                     )),
                     epoch,

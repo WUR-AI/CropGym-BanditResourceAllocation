@@ -3,19 +3,19 @@ field-sb-n:  # 29.7% clay, 28.2% sand, 42.1 silt
   soil_lat: 53.247
   crop: sugarbeet
   area: 24.67
-  type: 'clay'
+  type: 'silt'
 field-ww-n:  # 45% clay, 5 sand, 50 silt
   soil_lon: 7.1584
   soil_lat: 53.2188
   crop: winterwheat
   area: 12.44
-  type: 'clay'
+  type: 'silt'
 field-pt-n:  # 29.0% clay, 23.8% sand, 47.2% silt
   soil_lon: 6.7784
   soil_lat: 53.4327
   crop: potato
   area: 14.83
-  type: 'clay'
+  type: 'silt'
 field-sb-s:  # 28.3% clay, 27.7% sand, 44.0 silt
   soil_lon: 3.9186
   soil_lat: 51.7127
