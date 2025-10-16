@@ -486,10 +486,10 @@ class LagrangianIPPOPolicy(IPPOPolicy):
         c_s, c_s_ = [], []
         with torch.no_grad():
             for minibatch in batch.split(self.max_batchsize, shuffle=False, merge_last=True):
-                v_s.append(self.critic(minibatch.obs))
-                v_s_.append(self.critic(minibatch.obs_next))
-                c_s.append(self.constraint_critic(minibatch.obs))
-                c_s_.append(self.constraint_critic(minibatch.obs_next))
+                v_s.append(self.critic(minibatch.obs, info=minibatch.info))
+                v_s_.append(self.critic(minibatch.obs_next, info=minibatch.info))
+                c_s.append(self.constraint_critic(minibatch.obs, info=minibatch.info))
+                c_s_.append(self.constraint_critic(minibatch.obs_next, info=minibatch.info))
         batch.v_s = torch.cat(v_s, dim=0).flatten()  # old value
         batch.c_s = torch.cat(c_s, dim=0).flatten()
 
@@ -769,7 +769,8 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                     # mb.obs.obs: [b, T, H]
                     flat_obs = mb.obs.obs.reshape(-1, mb.obs.obs.shape[-1])
                     mask_from_obs = mb.obs.mask.reshape(-1, mb.obs.mask.shape[-1])
-                    v = self.critic(Batch(obs=flat_obs, mask=mask_from_obs)).reshape(mb.returns.shape)  # [b, T]
+                    flat_info = mb.info.reshape(-1, mb.info.shape[-1])
+                    v = self.critic(Batch(obs=flat_obs, mask=mask_from_obs), info=Batch(info=flat_info)).reshape(mb.returns.shape)  # [b, T]
 
                     if self.value_clip:
                         v_clip = mb.v_s + (v - mb.v_s).clamp(-self.eps_clip, self.eps_clip)
@@ -781,7 +782,7 @@ class LagrangianIPPOPolicy(IPPOPolicy):
 
                     # Constraint critic similarly
                     if self.constraint_critic is not None and hasattr(mb, 'const_returns'):
-                        cv = self.constraint_critic(Batch(obs=flat_obs, mask=mask_from_obs)).reshape(mb.const_returns.shape)
+                        cv = self.constraint_critic(Batch(obs=flat_obs, mask=mask_from_obs), info=Batch(info=flat_info)).reshape(mb.const_returns.shape)
                         cfloss = (mb.const_returns - cv).pow(2)
                     else:
                         cfloss = None
@@ -894,8 +895,8 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                 clip_loss = -torch.min(surr1, surr2).mean()
 
             # calculate loss for critic
-            value = self.critic(minibatch.obs).flatten()
-            constraint_value = self.constraint_critic(minibatch.obs).flatten()
+            value = self.critic(minibatch.obs, info=minibatch.info).flatten()
+            constraint_value = self.constraint_critic(minibatch.obs, info=minibatch.info).flatten()
 
             if self.value_clip:
                 v_clip = minibatch.v_s + (value - minibatch.v_s).clamp(

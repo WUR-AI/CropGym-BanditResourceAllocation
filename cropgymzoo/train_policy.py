@@ -199,11 +199,14 @@ def make_ppo_policy(
     critic = StackedCritic(
         preprocess_net=critic_net,
         concat_mask=args.concat_mask,
+        last_hidden_dim=hidden[-1],
+        use_film=args.use_film,
     ).to(device)
     constraint_critic = StackedCritic(
         preprocess_net=constraint_net,
-        # constraint_indices=obs_constraint_idx,
         concat_mask=args.concat_mask,
+        last_hidden_dim=hidden[-1],
+        use_film=args.use_film,
     ) if args.lagrangian_ppo else None
 
     optim = Adam(

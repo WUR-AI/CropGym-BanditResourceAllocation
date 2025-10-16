@@ -67,24 +67,6 @@ class FiLMHead(nn.Module):
         return self.out(h)                    # logits
 
 
-# class BudgetCond(nn.Module):
-#     def __init__(self, n_bins, emb_dim=8):
-#         super().__init__()
-#         self.n_bins = n_bins
-#         # self.emb = nn.Embedding(n_bins, emb_dim)
-#         self.out_dim = 2 + emb_dim   # rem_frac, tot_frac, bin_emb
-#
-#     def forward(self, rem, tot, budget_bin):
-#         rem_frac = (rem / tot.clamp_min(1e-8)).clamp(0, 1.0)
-#         tot_frac = torch.ones_like(rem_frac)  # or use (rem/tot); keep it simple
-#         z = torch.stack(
-#             [
-#                 rem_frac,
-#                 tot_frac,
-#                 (budget_bin / self.n_bins)
-#             ], dim=-1).float()  # [B,T,2+emb]
-#         return z
-
 class BudgetCond(nn.Module):
     """
     Creates a conditioning vector from budget information using a proper
@@ -151,6 +133,34 @@ class ActorFiLM(nn.Module):
         g = self.gamma(h)
         b = self.beta(h)
         return g, b
+
+
+class ObsMLP(MLP):
+    def __init__(self, *args, **kwargs):
+        self.input_dim = kwargs.pop("input_dim")
+        self.action_dim = kwargs.pop("action_dim", 0)
+        concat_mask = kwargs.pop("concat_mask", False)
+        kwargs['input_dim'] = self.input_dim + (self.action_dim if concat_mask else 0)
+        super().__init__(*args, **kwargs)
+
+    def forward(
+        self,
+        obs: Batch,
+        state: RecurrentStateBatch | None = None,
+        info: dict[str, Any] | None = None,
+        detach_state: bool = True,
+    ) -> (torch.Tensor, None):
+        """Mapping: obs -> flatten (inside MLP)-> logits.
+
+        :param obs:
+        :param state: unused and returned as is
+        :param info: unused
+        """
+
+        obs = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
+        x = self.model(obs)
+
+        return x, state
 
 
 class RecurrentGRU(NetBase[RecurrentStateBatch]):
@@ -342,12 +352,12 @@ class MaskedActor(Actor):
                          softmax_output=False, device=device)  # remember for logits
         self.feature_dim = getattr(self.preprocess, "input_dim", getattr(self.preprocess, "state_shape", None))
         # self.feature_dim = self.feature_dim - action_dim if self.feature_dim is not None else None
+        self.concat_mask = concat_mask
+        self.last.flatten_input = False
+
         self.n_bins = 5
         self.edges = torch.linspace(0, 1, self.n_bins + 1, device=self.device)[1:-1]
-        cont_in = int(2)
-        self.last.flatten_input = False
         self.film = use_film
-        self.concat_mask = concat_mask
         if self.film :
             self.build_cond = BudgetCond(self.n_bins, 1)
             self.last = FiLMHead(
@@ -434,7 +444,15 @@ class MaskedActor(Actor):
 
 
 class StackedCritic(Critic):
-    def __init__(self, preprocess_net, concat_mask=False, device='cpu', **kwargs):
+    def __init__(
+            self,
+            preprocess_net,
+            concat_mask=False,
+            last_hidden_dim=None,
+            use_film=True,
+            device='cpu',
+            **kwargs
+    ):
         super().__init__(
             preprocess_net=preprocess_net,
             device=device,
@@ -442,9 +460,22 @@ class StackedCritic(Critic):
         )
         self.concat_mask = concat_mask
 
+        self.n_bins = 5
+        self.edges = torch.linspace(0, 1, self.n_bins + 1, device=self.device)[1:-1]
+        self.film = use_film
+        if self.film:
+            self.build_cond = BudgetCond(self.n_bins, 1)
+            self.last = FiLMHead(
+                in_dim=last_hidden_dim,
+                hidden_dim=32,
+                out_dim=1,
+                cond_dim=self.build_cond.out_dim,
+            )
+
     def forward(self, obs: np.ndarray | torch.Tensor, **kwargs: Any) -> torch.Tensor:
         """Mapping: s_B -> V(s)_B."""
         # TODO: don't use this mechanism for passing state
+        info = kwargs.get("info")
 
         if isinstance(obs, Batch):
             x_in = obs.obs
@@ -466,16 +497,54 @@ class StackedCritic(Critic):
 
         y, _ = self.preprocess(x_in, state=kwargs.get("state", None))
 
-        return self.last(y)
+        if y.ndim == 2:
+            y = y.unsqueeze(1)
+
+        # FiLM section
+        if self.film and info is not None:
+            rem_budget = torch.from_numpy(info.BudgetLeft).to(self.device)
+            tot_budget = torch.from_numpy(info.BudgetTotal).to(self.device)
+
+            # compute bins
+            fraction = (rem_budget / (tot_budget.clamp_min(1e-8))).clamp(0, 1.0)
+            budget_bin = torch.bucketize(fraction, self.edges)
+
+            # gamma, beta = self.film(rem_budget, tot_budget, budget_bin)
+            # features = (1.0 + gamma) * features + beta
+            cond = self.build_cond(rem_budget, tot_budget, budget_bin)
+            return self.last(y, cond=cond)
+        else:
+            # generate logits from mlp
+            return self.last(y)
 
 
 class ConstraintCritic(Critic):
-    def __init__(self, preprocess_net, constraint_indices, concat_mask=False, device='cpu'):
+    def __init__(
+            self,
+            preprocess_net,
+            constraint_indices,
+            last_hidden_dim=None,
+            use_film=True,
+            concat_mask=False,
+            device='cpu'
+    ):
         super().__init__(
             preprocess_net=preprocess_net,
         )
         self.constraint_indices = torch.as_tensor(constraint_indices, device=device)
         self.concat_mask = concat_mask
+
+        self.n_bins = 5
+        self.edges = torch.linspace(0, 1, self.n_bins + 1, device=self.device)[1:-1]
+        self.film = use_film
+        if self.film:
+            self.build_cond = BudgetCond(self.n_bins, 1)
+            self.last = FiLMHead(
+                in_dim=last_hidden_dim,
+                hidden_dim=32,
+                out_dim=1,
+                cond_dim=self.build_cond.out_dim,
+            )
 
     def forward(self, obs: np.ndarray | torch.Tensor, **kwargs: Any) -> torch.Tensor:
 
@@ -508,34 +577,6 @@ class ConstraintCritic(Critic):
         y, _ = self.preprocess(x_in, state=kwargs.get("state", None))
 
         return self.last(y)
-
-
-class ObsMLP(MLP):
-    def __init__(self, *args, **kwargs):
-        self.input_dim = kwargs.pop("input_dim")
-        self.action_dim = kwargs.pop("action_dim", 0)
-        concat_mask = kwargs.pop("concat_mask", False)
-        kwargs['input_dim'] = self.input_dim + (self.action_dim if concat_mask else 0)
-        super().__init__(*args, **kwargs)
-
-    def forward(
-        self,
-        obs: Batch,
-        state: RecurrentStateBatch | None = None,
-        info: dict[str, Any] | None = None,
-        detach_state: bool = True,
-    ) -> (torch.Tensor, None):
-        """Mapping: obs -> flatten (inside MLP)-> logits.
-
-        :param obs:
-        :param state: unused and returned as is
-        :param info: unused
-        """
-
-        obs = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
-        x = self.model(obs)
-
-        return x, state
 
 
 class UCBNetwork(nn.Module):
