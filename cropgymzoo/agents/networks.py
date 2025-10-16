@@ -58,43 +58,56 @@ class FiLMHead(nn.Module):
         h = self.lin1(x)                      # [B,T,H]
         gamma = self.gam1(cond)
         beta = self.bet1(cond)
-        if gamma.ndim == 2:
-            gamma = gamma.unsqueeze(1)
-        if beta.ndim == 2:
-            beta = beta.unsqueeze(1)
         h = (1 + gamma) * h + beta   # FiLM on hidden pre-activation
         h = self.act(h)
         return self.out(h)                    # logits
 
 
-class BudgetCond(nn.Module):
-    """
-    Creates a conditioning vector from budget information using a proper
-    embedding layer for the discretized budget bin.
-    """
+# class BudgetCond(nn.Module):
+#     """
+#     Creates a conditioning vector from budget information using a proper
+#     embedding layer for the discretized budget bin.
+#     """
+#
+#     def __init__(self, n_bins, emb_dim=8):
+#         super().__init__()
+#         # Use a real embedding layer for the categorical bin information
+#         # n_bins + 1 because bucketize can output values from 0 to n_bins inclusive
+#         self.bin_embedding = nn.Embedding(n_bins + 1, emb_dim)
+#
+#         # The output dimension will be the embedding dim + 1 continuous feature
+#         self.out_dim = emb_dim + 1
+#
+#     def forward(self, rem, tot, budget_bin):
+#         # 1. Calculate the continuous budget fraction
+#         rem_frac = (rem / tot.clamp_min(1e-8)).clamp(0, 1.0).unsqueeze(-1)  # Shape: [B, 1] or [B, T, 1]
+#
+#         # 2. Get the learned embedding for the budget bin
+#         # .long() is required for the embedding layer lookup
+#         bin_emb = self.bin_embedding(budget_bin.long())  # Shape: [B, emb_dim] or [B, T, emb_dim]
+#
+#         # 3. Concatenate the continuous feature and the learned categorical feature
+#         # This provides a much richer signal to the FiLM layers
+#         cond = torch.cat([rem_frac, bin_emb], dim=-1)
+#
+#         return cond.float()
 
+class BudgetCond(nn.Module):
     def __init__(self, n_bins, emb_dim=8):
         super().__init__()
-        # Use a real embedding layer for the categorical bin information
-        # n_bins + 1 because bucketize can output values from 0 to n_bins inclusive
-        self.bin_embedding = nn.Embedding(n_bins + 1, emb_dim)
-
-        # The output dimension will be the embedding dim + 1 continuous feature
-        self.out_dim = emb_dim + 1
+        self.n_bins = n_bins
+        # self.emb = nn.Embedding(n_bins, emb_dim)
+        self.out_dim = 2 + emb_dim   # rem_frac, tot_frac, bin_emb
 
     def forward(self, rem, tot, budget_bin):
-        # 1. Calculate the continuous budget fraction
-        rem_frac = (rem / tot.clamp_min(1e-8)).clamp(0, 1.0).unsqueeze(-1)  # Shape: [B, 1] or [B, T, 1]
-
-        # 2. Get the learned embedding for the budget bin
-        # .long() is required for the embedding layer lookup
-        bin_emb = self.bin_embedding(budget_bin.long())  # Shape: [B, emb_dim] or [B, T, emb_dim]
-
-        # 3. Concatenate the continuous feature and the learned categorical feature
-        # This provides a much richer signal to the FiLM layers
-        cond = torch.cat([rem_frac, bin_emb], dim=-1)
-
-        return cond.float()
+        rem_frac = (rem / tot.clamp_min(1e-8)).clamp(0, 1.0)
+        # tot_frac = torch.ones_like(rem_frac)  # or use (rem/tot); keep it simple
+        z = torch.stack(
+            [
+                rem_frac,
+                (budget_bin / self.n_bins)
+            ], dim=-1).float()  # [B,T,2+emb]
+        return z
 
 
 class ActorFiLM(nn.Module):
@@ -380,9 +393,9 @@ class MaskedActor(Actor):
             x_in = torch.from_numpy(x_in).to(self.device)
 
         if x_in.ndim == 1:  # single env
-            x_in = x_in.unsqueeze(0).unsqueeze(0)  # for eval, dim: [B, H]
-        elif x_in.ndim == 2:
-            x_in = x_in.unsqueeze(-2)  # for training, dim: [B, T, H]
+            x_in = x_in.unsqueeze(0)  # for eval, dim: [B, H]
+        # if x_in.ndim == 2:
+        #     x_in = x_in.unsqueeze(-2)  # for training, dim: [B, T, H]
 
         if isinstance(obs, Batch) and "mask" in obs and self.concat_mask:
             mask_t = torch.as_tensor(obs.mask, device=self.device, dtype=torch.float32)
@@ -496,9 +509,6 @@ class StackedCritic(Critic):
             x_in = torch.cat([x_in, mask_t], dim=-1)
 
         y, _ = self.preprocess(x_in, state=kwargs.get("state", None))
-
-        if y.ndim == 2:
-            y = y.unsqueeze(1)
 
         # FiLM section
         if self.film and info is not None:
