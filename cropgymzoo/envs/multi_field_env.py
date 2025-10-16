@@ -392,6 +392,9 @@ class MultiFieldEnv(AECEnv, EzPickle):
     def get_initial_n(self):
         return {a: self.fields[a].unwrapped.infos['NAVAIL'][0] for a in self.possible_agents}
 
+    def get_cumulative_reward(self):
+        return np.sum([np.cumsum(self.fields[a].unwrapped.infos['Reward'])[-1] for a in self.possible_agents])
+
     def _get_global_random_budget(self):
         level = self.get_field_env_with_idx(0).random_manager.budget
 
@@ -707,10 +710,10 @@ class MultiFieldEnv(AECEnv, EzPickle):
         def format_val(val, width, prec=2):
             return f"{val:>{width}.{prec}f}" if isinstance(val, (int, float)) else f"{val:>{width}}"
 
-        header = f"Farm status; sowing year {self.year} – budget left: {self.global_budget_left} / {self.global_budget} kg N"
-        cols = ("Field (area[ha])", "Crop", "Date", "N applied", "Yield[t/ha]", "NUE", "Nsurp", "Profit")
-        fmt_header = "{:20} {:12} {:10} {:>10} {:>15} {:>7} {:>7} {:>10}"
-        lines = [header, fmt_header.format(*cols), "-" * 100]
+        header = f"Farm status; sowing year {self.year} – budget left: {self.global_budget_left} / {self.global_budget} kg N | Cumulative Reward: {self.get_cumulative_reward():.1f}"
+        cols = ("Field (area[ha])", "Crop", "Date", "N applied", "Yield[t/ha]", "NUE", "Nsurp", "Profit", "Reward")
+        fmt_header = "{:20} {:12} {:10} {:>10} {:>15} {:>7} {:>7} {:>10} {:>10}"
+        lines = [header, fmt_header.format(*cols), "-" * 110]
 
         # build one row per parcel
         crop_counts = Counter()
@@ -732,6 +735,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
                 safe(env, "Nue"),
                 safe(env, "Nsurp"),
                 safe(env, "Profit"),
+                np.cumsum(env.infos["Reward"])[-1],
             ]
 
             line = (
@@ -741,6 +745,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
                 f"{format_val(vals[5], 7)} "
                 f"{format_val(vals[6], 7)} "
                 f"{format_val(vals[7], 10)} "
+                f"{format_val(vals[8], 10)}"
             )
             lines.append(line)
 
