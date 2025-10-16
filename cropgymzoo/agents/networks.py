@@ -67,23 +67,52 @@ class FiLMHead(nn.Module):
         return self.out(h)                    # logits
 
 
+# class BudgetCond(nn.Module):
+#     def __init__(self, n_bins, emb_dim=8):
+#         super().__init__()
+#         self.n_bins = n_bins
+#         # self.emb = nn.Embedding(n_bins, emb_dim)
+#         self.out_dim = 2 + emb_dim   # rem_frac, tot_frac, bin_emb
+#
+#     def forward(self, rem, tot, budget_bin):
+#         rem_frac = (rem / tot.clamp_min(1e-8)).clamp(0, 1.0)
+#         tot_frac = torch.ones_like(rem_frac)  # or use (rem/tot); keep it simple
+#         z = torch.stack(
+#             [
+#                 rem_frac,
+#                 tot_frac,
+#                 (budget_bin / self.n_bins)
+#             ], dim=-1).float()  # [B,T,2+emb]
+#         return z
+
 class BudgetCond(nn.Module):
+    """
+    Creates a conditioning vector from budget information using a proper
+    embedding layer for the discretized budget bin.
+    """
+
     def __init__(self, n_bins, emb_dim=8):
         super().__init__()
-        self.n_bins = n_bins
-        # self.emb = nn.Embedding(n_bins, emb_dim)
-        self.out_dim = 2 + emb_dim   # rem_frac, tot_frac, bin_emb
+        # Use a real embedding layer for the categorical bin information
+        # n_bins + 1 because bucketize can output values from 0 to n_bins inclusive
+        self.bin_embedding = nn.Embedding(n_bins + 1, emb_dim)
+
+        # The output dimension will be the embedding dim + 1 continuous feature
+        self.out_dim = emb_dim + 1
 
     def forward(self, rem, tot, budget_bin):
-        rem_frac = (rem / tot.clamp_min(1e-8)).clamp(0, 1.0)
-        tot_frac = torch.ones_like(rem_frac)  # or use (rem/tot); keep it simple
-        z = torch.stack(
-            [
-                rem_frac,
-                tot_frac,
-                (budget_bin / self.n_bins)
-            ], dim=-1).float()  # [B,T,2+emb]
-        return z
+        # 1. Calculate the continuous budget fraction
+        rem_frac = (rem / tot.clamp_min(1e-8)).clamp(0, 1.0).unsqueeze(-1)  # Shape: [B, 1] or [B, T, 1]
+
+        # 2. Get the learned embedding for the budget bin
+        # .long() is required for the embedding layer lookup
+        bin_emb = self.bin_embedding(budget_bin.long())  # Shape: [B, emb_dim] or [B, T, emb_dim]
+
+        # 3. Concatenate the continuous feature and the learned categorical feature
+        # This provides a much richer signal to the FiLM layers
+        cond = torch.cat([rem_frac, bin_emb], dim=-1)
+
+        return cond.float()
 
 
 class ActorFiLM(nn.Module):
@@ -323,13 +352,6 @@ class MaskedActor(Actor):
                 out_dim=action_dim,
                 cond_dim=self.build_cond.out_dim,
             )
-        # self.film = ActorFiLM(
-        #     feat_dim=last_hidden_dim,
-        #     cont_in=cont_in,
-        #     n_bins=self.n_bins,
-        #     emb_dim=4,
-        #     hidden=32
-        # ) if use_film else None
 
     def forward(self, obs: torch.Tensor, state: torch.Tensor | None = None, info: dict | Batch = None):
 
