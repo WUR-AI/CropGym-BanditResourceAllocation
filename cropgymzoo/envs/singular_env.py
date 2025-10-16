@@ -411,6 +411,11 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
     def obs_constraint_features():
         return ['DVS', 'NonZeroActionCount', 'Nue', 'Nsurp']
 
+    @staticmethod
+    def obs_budget_features():
+        return ['BudgetLeft', 'BudgetTotal']
+
+
     '''
     Helper functions for various things
     '''
