@@ -101,9 +101,6 @@ def yearly_eval_test_fn(
 ):
     # shift to eval mode
     policy_mgr.eval()
-    for policy in policy_mgr.policies:
-        if isinstance(policy, IPPOPolicy):
-            policy.deterministic_eval = True
 
     reset_options_list = [
         2000, 2010,
@@ -125,7 +122,7 @@ def yearly_eval_test_fn(
             ag: None for ag in agents
         }
 
-        raw_env.reset(year)
+        raw_env.reset(options={'year': year})
 
         for agent in raw_env.agent_iter():
             obs, rew, term, trunc, info = raw_env.last()
@@ -209,7 +206,7 @@ def yearly_eval_test_fn(
                     f"image/plot_year:{year}",
                     fig_to_chw_uint8(plot_results(
                         agent_info,
-                        variable_list=['DVS', 'Profit', 'Action', 'Yield', 'BudgetLeft'],
+                        variable_list=['DVS', 'Profit', 'NAVAIL', 'NamountSO', 'Action', 'Yield', 'BudgetLeft'],
                         show=False,
                     )),
                     epoch,
@@ -226,9 +223,6 @@ def yearly_eval_test_fn(
 
     # put back to train mode
     policy_mgr.train()
-    for policy in policy_mgr.policies:
-        if isinstance(policy, IPPOPolicy):
-            policy.deterministic_eval = True
 
     return mean_reward
 

@@ -249,6 +249,7 @@ def make_ppo_policy(
         action_scaling=False,
         advantage_normalization=True,
         reward_normalization=True,
+        deterministic_eval=True,
     ).to(device)
 
     if not use_icm:
