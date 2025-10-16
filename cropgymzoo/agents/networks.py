@@ -3,6 +3,7 @@ from typing import Sequence, Any, cast
 import numpy as np
 import torch
 import torch.nn.functional as F
+from numpy import dtype
 from tianshou.data import Batch, to_torch
 from tianshou.data.types import RecurrentStateBatch
 from tianshou.utils.net.common import NetBase, Recurrent, MLP
@@ -37,6 +38,90 @@ class IntrinsicCuriosityModuleMARL(IntrinsicCuriosityModule):
         mse_loss = 0.5 * F.mse_loss(phi2_hat, phi2, reduction="none").sum(1)
         act_hat = self.inverse_model(torch.cat([phi1, phi2], dim=1))
         return mse_loss, act_hat
+
+
+class FiLMHead(nn.Module):
+    def __init__(self, in_dim, hidden_dim, out_dim, cond_dim):
+        super().__init__()
+        self.lin1 = nn.Linear(in_dim, hidden_dim)
+        self.gam1 = nn.Linear(cond_dim, hidden_dim)
+        self.bet1 = nn.Linear(cond_dim, hidden_dim)
+        self.act  = nn.ReLU()
+        self.out  = nn.Linear(hidden_dim, out_dim)
+        # identity init for (1+gamma)*h + beta at start
+        nn.init.zeros_(self.gam1.weight)
+        nn.init.zeros_(self.gam1.bias)
+        nn.init.zeros_(self.bet1.weight)
+        nn.init.zeros_(self.bet1.bias)
+
+    def forward(self, x, cond):
+        h = self.lin1(x)                      # [B,T,H]
+        gamma = self.gam1(cond)
+        beta = self.bet1(cond)
+        if gamma.ndim == 2:
+            gamma = gamma.unsqueeze(1)
+        if beta.ndim == 2:
+            beta = beta.unsqueeze(1)
+        h = (1 + gamma) * h + beta   # FiLM on hidden pre-activation
+        h = self.act(h)
+        return self.out(h)                    # logits
+
+
+class BudgetCond(nn.Module):
+    def __init__(self, n_bins, emb_dim=8):
+        super().__init__()
+        self.n_bins = n_bins
+        # self.emb = nn.Embedding(n_bins, emb_dim)
+        self.out_dim = 2 + emb_dim   # rem_frac, tot_frac, bin_emb
+
+    def forward(self, rem, tot, budget_bin):
+        rem_frac = (rem / tot.clamp_min(1e-8)).clamp(0, 1.0)
+        tot_frac = torch.ones_like(rem_frac)  # or use (rem/tot); keep it simple
+        z = torch.stack(
+            [
+                rem_frac,
+                tot_frac,
+                (budget_bin / self.n_bins)
+            ], dim=-1).float()  # [B,T,2+emb]
+        return z
+
+
+class ActorFiLM(nn.Module):
+    """Condition budget features for actor"""
+    def __init__(self, feat_dim, cont_in=2, n_bins=0, emb_dim=16, hidden=32):
+        super().__init__()
+        self.has_bins = n_bins > 0
+        if self.has_bins:
+            self.bin_emb = nn.Embedding(n_bins, emb_dim)
+            comb_in = emb_dim + cont_in
+        else:
+            self.bin_emb = None
+            comb_in = cont_in
+
+        self.mlp = nn.Sequential(
+            nn.Linear(comb_in, hidden), nn.ReLU(),
+            nn.Linear(hidden, hidden), nn.ReLU()
+        )
+        # produce FiLM params matching feature width
+        self.gamma = nn.Linear(hidden, feat_dim)   # scale
+        self.beta  = nn.Linear(hidden, feat_dim)   # shift
+
+    def forward(self, rem_budget, tot_budget, budget_bin=None):
+        # rem & tot are tensors with shape [B,T] or [B] → we’ll produce [B,T,H]
+        # build continuous block: [rem, frac]
+        frac = (rem_budget / (tot_budget.clamp_min(1e-8))).clamp(0, 10)  # safe
+        cont = torch.stack([rem_budget, frac], dim=-1)  # [..., 2]
+
+        if self.has_bins:
+            z_bin = self.bin_emb(budget_bin)     # [..., emb_dim]
+            z = torch.cat([cont, z_bin], dim=-1)
+        else:
+            z = cont
+        z = z.float()
+        h = self.mlp(z)
+        g = self.gamma(h)
+        b = self.beta(h)
+        return g, b
 
 
 class RecurrentGRU(NetBase[RecurrentStateBatch]):
@@ -213,10 +298,38 @@ class RecurrentLSTM(NetBase[RecurrentStateBatch]):
 class MaskedActor(Actor):
     """Actor that zeroes logits for illegal actions via provided mask."""
 
-    def __init__(self, preprocess_net, action_dim, device='cpu'):
+    def __init__(
+            self,
+            preprocess_net,
+            action_dim,
+            last_hidden_dim=None,
+            use_film: bool = True,
+            device='cpu'
+    ):
         super().__init__(preprocess_net=preprocess_net, action_shape=action_dim,
                          softmax_output=False, device=device)  # remember for logits
+        self.feature_dim = getattr(self.preprocess, "input_dim", getattr(self.preprocess, "state_shape", None))
+        # self.feature_dim = self.feature_dim - action_dim if self.feature_dim is not None else None
+        self.n_bins = 5
+        self.edges = torch.linspace(0, 1, self.n_bins + 1, device=self.device)[1:-1]
+        cont_in = int(2)
         self.last.flatten_input = False
+        self.film = use_film
+        if self.film :
+            self.build_cond = BudgetCond(self.n_bins, 1)
+            self.last = FiLMHead(
+                in_dim=last_hidden_dim,
+                hidden_dim=32,
+                out_dim=action_dim,
+                cond_dim=self.build_cond.out_dim,
+            )
+        # self.film = ActorFiLM(
+        #     feat_dim=last_hidden_dim,
+        #     cont_in=cont_in,
+        #     n_bins=self.n_bins,
+        #     emb_dim=4,
+        #     hidden=32
+        # ) if use_film else None
 
     def forward(self, obs: torch.Tensor, state: torch.Tensor | None = None, info: dict | Batch = None):
 
@@ -254,8 +367,22 @@ class MaskedActor(Actor):
         # preprocess obs (with GRU or anything else)
         features, h = self.preprocess(x_in, state, info, detach_state=detach_state)
 
-        # generate logits from mlp
-        logits = self.last(features)
+        # FiLM section
+        if self.film:
+            rem_budget = torch.from_numpy(info.BudgetLeft).to(self.device)
+            tot_budget = torch.from_numpy(info.BudgetTotal).to(self.device)
+
+            # compute bins
+            fraction = (rem_budget / (tot_budget.clamp_min(1e-8))).clamp(0, 1.0)
+            budget_bin = torch.bucketize(fraction, self.edges)
+
+            # gamma, beta = self.film(rem_budget, tot_budget, budget_bin)
+            # features = (1.0 + gamma) * features + beta
+            cond = self.build_cond(rem_budget, tot_budget, budget_bin)
+            logits = self.last(features, cond=cond)
+        else:
+            # generate logits from mlp
+            logits = self.last(features)
 
         if logits.ndim == 1:
             logits = logits.unsqueeze(0)
@@ -357,9 +484,9 @@ class ConstraintCritic(Critic):
 
 class ObsMLP(MLP):
     def __init__(self, *args, **kwargs):
-        input_dim = kwargs.pop("input_dim")
+        self.input_dim = kwargs.pop("input_dim")
         self.action_dim = kwargs.pop("action_dim", 0)
-        kwargs['input_dim'] = input_dim + self.action_dim
+        kwargs['input_dim'] = self.input_dim + self.action_dim
         super().__init__(*args, **kwargs)
 
     def forward(

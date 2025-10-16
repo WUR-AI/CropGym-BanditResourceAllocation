@@ -113,6 +113,8 @@ def make_ppo_policy(
         obs_constraint_dim = args.obs_constraint_dim
         obs_constraint_idx = args.constraint_indices
 
+    idx_budget_features = args.idx_budget_features
+
     if args.architecture == 'lstm':
         network_fn = RecurrentLSTM
     else:
@@ -179,7 +181,12 @@ def make_ppo_policy(
             device=device,
         ) if args.lagrangian_ppo else None
 
-    actor = MaskedActor(preprocess_net=actor_net, action_dim=act_dim).to(device)
+    actor = MaskedActor(
+        preprocess_net=actor_net,
+        action_dim=act_dim,
+        last_hidden_dim=hidden[-1],
+        use_film=args.use_film
+    ).to(device)
     critic = StackedCritic(preprocess_net=critic_net).to(device)
     constraint_critic = StackedCritic(
         preprocess_net=constraint_net,
@@ -426,6 +433,10 @@ def train_gru_ppo(args: Namespace):
     args.obs_constraint_dim = len(obs_features)
     args.constraint_indices = dummy_env.get_field_env_with_idx(0).unwrapped.get_idx_features(obs_features)
 
+    # For FiLM
+    obs_budget_features = dummy_env.get_field_env_with_idx(0).unwrapped.obs_budget_features()
+    args.idx_budget_features = dummy_env.get_field_env_with_idx(0).unwrapped.get_idx_features(obs_budget_features)
+
     # Build policies
     # if args.independent:
     policies = {
@@ -474,6 +485,8 @@ def train_gru_ppo(args: Namespace):
     curriculum_manager = None
     if args.curriculum:
         curriculum_manager = CurriculumCallbackManager(
+            start_stage=args.start_stage,
+            min_epochs_per_stage=args.advance_steps,
             # sample from sub-env attribute... Quite dirty this way.
             max_stage=dummy_env.get_field_env_with_idx(0).unwrapped.random_manager.get_max_stage()
         )
