@@ -69,6 +69,8 @@ def plot_results(
                 plot_function = axes[j].scatter
                 axes[j].set_ylim(10, 110)  # <-- set Y limit for Action
                 axes[j].set_yticks(range(10, 100, 20))
+            if variable in ['Reward']:
+                infos[agent][variable] = np.cumsum(infos[agent][variable])
             else:
                 plot_function = axes[j].plot
             plot_function(
