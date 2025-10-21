@@ -97,6 +97,7 @@ def get_default_misc_features():
         "CO2",
         'Nue',
         'Nsurp',
+        'area'
     ]
 
 

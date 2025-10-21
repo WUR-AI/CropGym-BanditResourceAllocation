@@ -205,6 +205,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.budget_n = self.max_budget_n
         self.budget_left = self.budget_n
         self.area = float(area)
+        self.area_orig = float(area)
         self.day_of_planting: datetime.date | None = None
 
         # back to PCSE stuff
@@ -324,6 +325,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         # return the original agro management class shifts during randos
         self.agmt = deepcopy(self.original_agmt)
+        self.area = self.area_orig
 
         # reset reward runners
         self.reward_container.reset()
@@ -1050,7 +1052,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                     no3_depo=get_no3_deposition_pcse(pcse_output),
                     crop_name=self.crop,
                 )
-            )
+            ),
+            'area': lambda: self.area,
         }
 
         return {k: misc_process[k]() for k in self.misc_features if k in misc_process}
@@ -1069,7 +1072,12 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                 options['site_params']['CO2'] = self._perturb_carbon_dioxide(self._get_carbon_dioxide_levels())
             if self.random_manager.weather:
                 options['weather'] = True
+            if self.random_manager.area:
+                self._randomise_area()
         return options
+
+    def _randomise_area(self):
+        self.area = self.rng.uniform(low=0.0, high=20.0)
 
     def _perturb_parameters(self):
         # get and filter relevant crop params

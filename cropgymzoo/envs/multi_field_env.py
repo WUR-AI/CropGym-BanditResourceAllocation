@@ -383,6 +383,9 @@ class MultiFieldEnv(AECEnv, EzPickle):
     def get_per_field_fertilizer_price(self):
         return {a: self.fields[a].unwrapped.fertilizer_price for a in self.possible_agents}
 
+    def get_per_field_area(self):
+        return {a: self.fields[a].unwrapped.area for a in self.possible_agents}
+
     def get_initial_no3(self):
         return {a: self.fields[a].unwrapped.infos['NO3'][0] for a in self.possible_agents}
 

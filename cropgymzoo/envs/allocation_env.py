@@ -124,6 +124,7 @@ class AllocationBandit(gym.Env):
             "CropPrice",
             "CropCode",
             "FertilizerPrice",
+            "Area",
             "HistoricalCropPrices",
             "HistoricalFertilizerPrices",
             "HistoricalProfit",
@@ -140,7 +141,7 @@ class AllocationBandit(gym.Env):
         ]
 
     def _get_historical_context_keys(self):
-        return self._get_context_keys()[4:]
+        return self._get_context_keys()[5:]
 
     def _get_max_budgets(self) -> list:
         max_budgets = []
@@ -212,6 +213,7 @@ class AllocationBandit(gym.Env):
             "CropPrice": list(self.farm.get_per_field_crop_price().values()),
             "CropCode": list(self.farm.get_per_field_crop_code().values()),
             "FertilizerPrice": list(self.farm.get_per_field_fertilizer_price().values()),  # sample from year
+            "Area": list(self.farm.get_per_field_area().values()),
             "HistoricalCropPrices": self._get_historical_end_season_features('CropPrice'),
             "HistoricalFertilizerPrices": self._get_historical_end_season_features('FertilizerPrice'),
             "HistoricalProfit": self._get_historical_end_season_features('Profit'),
