@@ -1,0 +1,18 @@
+field-1:
+  soil_lon: 5.3348
+  soil_lat: 51.8881
+  crop: winterwheat
+  area: 5.184249574611716
+  type: sand
+field-2:
+  soil_lon: 5.3525
+  soil_lat: 51.8811
+  crop: winterwheat
+  area: 3.445519955555844
+  type: sand
+field-3:
+  soil_lon: 5.3229
+  soil_lat: 51.8848
+  crop: winterwheat
+  area: 2.048479327591042
+  type: sand

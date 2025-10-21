@@ -1,0 +1,24 @@
+field-1:
+  soil_lon: 6.1009
+  soil_lat: 51.9023
+  crop: sugarbeet
+  area: 4.940288426622889
+  type: sand
+field-2:
+  soil_lon: 6.0995
+  soil_lat: 51.9041
+  crop: sugarbeet
+  area: 7.01625892904209
+  type: sand
+field-3:
+  soil_lon: 6.1014
+  soil_lat: 51.9035
+  crop: sugarbeet
+  area: 2.405533374972944
+  type: sand
+field-4:
+  soil_lon: 6.0959
+  soil_lat: 51.9076
+  crop: winterwheat
+  area: 4.274956325994719
+  type: sand

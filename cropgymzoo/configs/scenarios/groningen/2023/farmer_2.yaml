@@ -1,0 +1,36 @@
+field-1:
+  soil_lon: 6.8384
+  soil_lat: 53.3179
+  crop: sugarbeet
+  area: 2.7860910322433687
+  type: clay
+field-2:
+  soil_lon: 6.8406
+  soil_lat: 53.3173
+  crop: sugarbeet
+  area: 3.093921984316234
+  type: clay
+field-3:
+  soil_lon: 6.8369
+  soil_lat: 53.3179
+  crop: winterwheat
+  area: 1.7385829335071723
+  type: clay
+field-4:
+  soil_lon: 6.8415
+  soil_lat: 53.3071
+  crop: winterwheat
+  area: 3.676116247107633
+  type: clay
+field-5:
+  soil_lon: 6.8359
+  soil_lat: 53.318
+  crop: winterwheat
+  area: 1.886265618329636
+  type: clay
+field-6:
+  soil_lon: 6.8552
+  soil_lat: 53.298
+  crop: winterwheat
+  area: 8.305193237688595
+  type: clay

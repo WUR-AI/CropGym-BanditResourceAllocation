@@ -1,0 +1,30 @@
+field-1:
+  soil_lon: 7.1524
+  soil_lat: 53.2157
+  crop: winterwheat
+  area: 11.890198849933231
+  type: clay
+field-2:
+  soil_lon: 7.1382
+  soil_lat: 53.2105
+  crop: winterwheat
+  area: 5.687529920103281
+  type: clay
+field-3:
+  soil_lon: 7.1608
+  soil_lat: 53.2223
+  crop: winterwheat
+  area: 5.35861490912542
+  type: clay
+field-4:
+  soil_lon: 7.1652
+  soil_lat: 53.2179
+  crop: winterwheat
+  area: 4.32074516111692
+  type: clay
+field-5:
+  soil_lon: 7.1585
+  soil_lat: 53.2189
+  crop: winterwheat
+  area: 12.44421108719139
+  type: clay
