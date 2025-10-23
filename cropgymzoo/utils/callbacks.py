@@ -103,7 +103,7 @@ def yearly_eval_test_fn(
     policy_mgr.eval()
 
     reset_options_list = [
-        2000, 2010,
+        2000, 2010, 2020
     ]
     # get writer
     if hasattr(logger, 'writer'):
