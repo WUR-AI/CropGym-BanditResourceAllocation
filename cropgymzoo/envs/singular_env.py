@@ -52,7 +52,7 @@ from cropgymzoo.utils.defaults import (
     get_default_action_features,
     get_default_misc_features
 )
-from cropgymzoo.utils.curriculum import make_default_stage_manager
+from cropgymzoo.utils.curriculum import make_default_stage_manager, get_coords_for_soil
 
 import torch as th
 import torch.nn as nn
@@ -247,6 +247,9 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         # Training stuff
         self.random_manager = make_default_stage_manager()
+
+        # get coords for soil
+        self.soil_coords = get_coords_for_soil(self._get_scenario_based_on_name())
 
         # prices of crops and fertilizers
         self._init_prices()
@@ -1074,6 +1077,10 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                 options['weather'] = True
             if self.random_manager.area:
                 self._randomise_area()
+            if self.random_manager.soil:
+                coor = self.rng.choice(self.soil_coords)
+                with open(os.path.join(_SOILGRIDS_PATH, f'soil_{coor[0]}_{coor[1]}.yaml'), 'r') as f:
+                    options['soil_params'] = yaml.safe_load(f)
         return options
 
     def _randomise_area(self):
@@ -1261,6 +1268,16 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                 for t in range(self.timestep)
             )
         )
+
+    def _get_scenario_based_on_name(self):
+        if '-s' in self.name:
+            return 'zeeland'
+        elif '-e' in self.name:
+            return 'gelderland'
+        elif '-n' in self.name:
+            return 'groningen'
+        else:
+            return 'no_scenario'
 
     def get_harvest_year(self):
         return self.agmt.crop_start_date

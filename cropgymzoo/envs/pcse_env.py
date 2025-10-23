@@ -472,7 +472,8 @@ class PCSEEnv(gym.Env):
             if 'NH4ConcR' in options['site_params']:
                 self._site_params['NH4ConcR'] = options['site_params']['NH4ConcR']
                 self._site_params['NO3ConcR'] = options['site_params']['NO3ConcR']
-
+        if 'soil_params' in options:
+            self._soil_params = options['soil_params']
         # Combine the config files in a single PCSE ParameterProvider object
         self._parameter_provider = pcse.base.ParameterProvider(cropdata=self._crop_params,
                                                                sitedata=self._site_params,

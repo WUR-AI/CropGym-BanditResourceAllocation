@@ -1,5 +1,20 @@
+import os
+import yaml
 from dataclasses import dataclass
+from cropgymzoo import _SCENARIO_PATH
 
+
+def get_coords_for_soil(scenario):
+    with open(os.path.join(_SCENARIO_PATH, "scenario_coords.yaml")) as f:
+        dict_coords = yaml.load(f, Loader=yaml.SafeLoader)
+    if 'gelderland' in scenario:
+        return dict_coords['gelderland']
+    elif 'groningen' in scenario:
+        return dict_coords['groningen']
+    elif 'zeeland' in scenario:
+        return dict_coords['zeeland']
+    else:
+        raise KeyError(f"Scenario {scenario} not found")
 
 @dataclass
 class RandomiseStage:
@@ -55,12 +70,14 @@ def make_default_stages():
 
 def make_budget_stages():
     return [
-        {'sowing': True, 'weather': True, 'budget': 0, 'co2': True, 'initial_n': False, 'parameters': False, 'area': False},
-        {'sowing': True, 'weather': True, 'budget': 1, 'co2': True, 'initial_n': False, 'parameters': False, 'area': True},
-        {'sowing': True, 'weather': True, 'budget': 2, 'co2': True, 'initial_n': False, 'parameters': False, 'area': True},
-        {'sowing': True, 'weather': True, 'budget': 3, 'co2': True, 'initial_n': False, 'parameters': False, 'area': True},
-        {'sowing': True, 'weather': True, 'budget': 4, 'co2': True, 'initial_n': False, 'parameters': False, 'area': True},
-        {'sowing': True, 'weather': True, 'budget': 5, 'co2': True, 'initial_n': False, 'parameters': False, 'area': True},
+        {'sowing': True, 'weather': True, 'budget': 0, 'co2': True, 'initial_n': False, 'parameters': False, 'area': False, 'soil': False},
+        {'sowing': True, 'weather': True, 'budget': 0, 'co2': True, 'initial_n': False, 'parameters': False, 'area': True, 'soil': True},
+        {'sowing': True, 'weather': True, 'budget': 1, 'co2': True, 'initial_n': False, 'parameters': False, 'area': True, 'soil': True},
+        {'sowing': True, 'weather': True, 'budget': 2, 'co2': True, 'initial_n': False, 'parameters': False, 'area': True, 'soil': True},
+        {'sowing': True, 'weather': True, 'budget': 3, 'co2': True, 'initial_n': False, 'parameters': False, 'area': True, 'soil': True},
+        {'sowing': True, 'weather': True, 'budget': 4, 'co2': True, 'initial_n': False, 'parameters': False, 'area': True, 'soil': True},
+        {'sowing': True, 'weather': True, 'budget': 5, 'co2': True, 'initial_n': False, 'parameters': False,
+         'area': True, 'soil': True},
     ]
 
 
