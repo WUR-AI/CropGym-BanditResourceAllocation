@@ -87,11 +87,14 @@ class MultiFieldEnv(AECEnv, EzPickle):
             self,
             seed=seed,
             warm_up=warm_up,
+            use_rl_warm_up_actions=use_rl_warm_up_actions,
             years=years,
             training=training,
             random_budget=random_budget,
+            dict_obs=dict_obs,
             shared_obs=shared_obs,
             render=render,
+            stage=stage,
         )
         super().__init__()
         self.render_mode = None if not render else 'human'
