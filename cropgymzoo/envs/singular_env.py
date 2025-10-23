@@ -45,12 +45,14 @@ from cropgymzoo.utils.nitrogen_helpers import (
     co2_levels
 )
 from cropgymzoo.utils.curriculum import RandomiseStage
+from cropgymzoo.utils_soil.env_soil_functions import soil_to_latent_pca
 import cropgymzoo.envs.pcse_env as pcse_env
 from cropgymzoo.utils.defaults import (
     get_wofost_default_crop_features,
     get_default_weather_features,
     get_default_action_features,
-    get_default_misc_features
+    get_default_misc_features,
+    get_default_soil_pc_features
 )
 from cropgymzoo.utils.curriculum import make_default_stage_manager, get_coords_for_soil
 
@@ -130,6 +132,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                  weather_features: list = get_default_weather_features(),
                  action_features: list = get_default_action_features(),
                  misc_features: list = get_default_misc_features(),
+                 soil_features: list = get_default_soil_pc_features(),
                  location: list | tuple = None,
                  year: int = None,
                  year_list: list = None,
@@ -159,6 +162,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             weather_features=weather_features,
             action_features=action_features,
             misc_features=misc_features,
+            soil_features=soil_features,
             location = location,
             year = year,
             year_list = year_list,
@@ -196,6 +200,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.weather_features = weather_features
         self.action_features = action_features
         self.misc_features = misc_features
+        self.soil_features = soil_features
         self.year = year
         self.location = location
         self.year_list = year_list
@@ -716,6 +721,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         act = self._action_features_mapper()
         weather = observation["weather"]
         misc = self._misc_features_mapper(terminated)
+        soil = self._soil_features_mapper()
 
         # perform some transformations
         crop_values = [
@@ -726,6 +732,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         action_values = [act[a] for a in self.action_features]
 
         misc_values = [misc[m] for m in self.misc_features]
+
+        soil_values = [soil[m] for m in self.soil_features]
 
         weather_matrix = np.vstack(
             [
@@ -738,12 +746,16 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         weather_values = weather_matrix.ravel()
 
         if self.flatten_obs:
-            return np.array(crop_values + action_values + misc_values + list(weather_values), dtype=np.float32)
+            return np.array(
+                crop_values + action_values + misc_values + soil_values + list(weather_values),
+                dtype=np.float32
+            )
 
         obs = {
             **{k: float(v) for k, v in zip(self.crop_features, crop_values)},
             **{k: float(v) for k, v in zip(self.action_features, action_values)},
             **{k: float(v) for k, v in zip(self.misc_features, misc_values)},
+            **{k: float(v) for k, v in zip(self.soil_features, soil_values)},
             **{
                 f"{var_name}_{t}": float(weather_matrix[t, var_idx])
                 for var_idx, var_name in enumerate(self.weather_features)
@@ -764,7 +776,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
     @functools.lru_cache(maxsize=None)
     def _get_obs_len(self):
-        nvars = (len(self.crop_features) + len(self.action_features) +
+        nvars = (len(self.crop_features) + len(self.action_features) + len(self.soil_features) +
                  len(self.misc_features) + len(self.weather_features) * self.timestep)
         return nvars
 
@@ -1029,6 +1041,22 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         }
         return {k: act_mapper[k] for k in self.action_features if k in act_mapper}
 
+    def _soil_features_mapper(self):
+        pcas = soil_to_latent_pca(
+            self._soil_params,
+            self._get_scenario_based_on_name()
+            if self.training
+            else self._get_scenario_based_on_loc()
+        )
+        soil_mapper = {
+            'pc1': pcas[0],
+            'pc2': pcas[1],
+            'pc3': pcas[2],
+            'pc4': pcas[3],
+            'pc5': pcas[4],
+        }
+        return {k: soil_mapper[k] for k in self.soil_features if k in soil_mapper}
+
     def _misc_features_mapper(self, terminated = False):
         pcse_output = self.model.get_output() if terminated else None
         misc_process = {
@@ -1278,6 +1306,16 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             return 'groningen'
         else:
             return 'no_scenario'
+
+    def _get_scenario_based_on_loc(self):
+        if self.location[0] >= 53.0:
+            return "groningen"
+        elif self.location[0] <= 51.7:
+            return "zeeland"
+        elif 51.7 <= self.location[0] <= 53.0:
+            return "gelderland"
+        else:
+            return "no_scenario"
 
     def get_harvest_year(self):
         return self.agmt.crop_start_date

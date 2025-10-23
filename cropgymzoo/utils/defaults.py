@@ -100,6 +100,15 @@ def get_default_misc_features():
         'area'
     ]
 
+def get_default_soil_pc_features():
+    return [
+        'pc1',
+        'pc2',
+        'pc3',
+        'pc4',
+        'pc5',
+    ]
+
 
 def get_default_location():
     return (52, 5.5)

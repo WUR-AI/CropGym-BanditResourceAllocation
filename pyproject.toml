@@ -24,6 +24,7 @@ dependencies = [
     "ipython-genutils>=0.2.0",
     "comet-ml>=3.50.0",
     "pcse",
+    "scikit-learn>=1.7.2",
 ]
 
 [project.optional-dependencies]
