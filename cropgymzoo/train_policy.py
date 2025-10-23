@@ -301,7 +301,7 @@ def make_vec_env(
             get_petting_zoo_env(indep, tr)
             for _ in range(num_envs)
         ]
-        env = SubprocVectorEnv(env_fns, context='fork')
+        env = SubprocVectorEnv(env_fns, context='spawn')
         # env = ShmemVectorEnv(env_fns)
     else:
         env_fns = [partial(get_petting_zoo_env, independent, train) for _ in range(1)]
@@ -324,7 +324,7 @@ def make_env(independent_learning=True, training=True): # type: ignore
     env = MultiFieldEnv(
         warm_up=0,
         shared_obs=False if independent_learning else True,
-        training=False, # training,
+        training=training,
         random_budget=False,
     )
     return env
