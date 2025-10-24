@@ -149,10 +149,16 @@ class IPPOPolicy(PPOPolicy):
             self._buffer, self._indices = buffer, indices
         batch = self._compute_returns(batch, buffer, indices)
         batch.act = to_torch_as(batch.act, batch.v_s)
-        batch.logp_old = to_torch_as(
-            batch.policy.logp_old[batch.obs.agent_id[0]].astype(np.float32),
-            batch.v_s
-        )
+        # batch.logp_old = to_torch_as(
+        #     batch.policy.logp_old[batch.obs.agent_id[0]].astype(np.float32),
+        #     batch.v_s
+        # )
+        # batch: LogpOldProtocol
+        logp_old = []
+        with torch.no_grad():
+            for minibatch in batch.split(self.max_batchsize, shuffle=False, merge_last=True):
+                logp_old.append(self(minibatch).dist.log_prob(minibatch.act))
+            batch.logp_old = torch.cat(logp_old, dim=0).flatten()
         batch: LogpOldProtocol
         return batch
 
@@ -1187,8 +1193,8 @@ class IPPOCollector(Collector):
             # to add the dist. One should not have arrays of dists but rather a single, batch-wise dist.
             # Tianshou already implements slicing of dists, but we don't yet implement merging multiple
             # dists into one, which would be necessary to make a buffer with dists work properly
-            for ag, l in current_step_batch_R.policy.logp_old.items():
-                current_step_batch_R.policy.logp_old[ag] = l.squeeze() if l is not None else None
+            # for ag, l in current_step_batch_R.policy.logp_old.items():
+            #     current_step_batch_R.policy.logp_old[ag] = l.squeeze() if l is not None else None
             batch_to_add_R = copy(current_step_batch_R)
             batch_to_add_R.pop("dist")
             batch_to_add_R = cast(RolloutBatchProtocol, batch_to_add_R)
@@ -1493,7 +1499,9 @@ class IPPOCollector(Collector):
                     hidden_state_RH  # save state into buffer through policy attr
                 )
             # can't use act_batch_RA.dist directly as act_batch_RA might not have that attribute
-            policy_R.logp_old = act_batch_RA.logp_old
+            # policy_R.logp_old = act_batch_RA.logp_old
+            # for logp_old_val in policy_R.logp_old.values():
+            #     assert logp_old_val.size == 1
 
         return cast(
             CollectActionBatchProtocol,
