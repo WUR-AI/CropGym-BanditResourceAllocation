@@ -214,6 +214,9 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.area_orig = float(area)
         self.day_of_planting: datetime.date | None = None
 
+        # random generator
+        self.rng, self.seed = gym.utils.seeding.np_random(seed=seed)
+
         # back to PCSE stuff
 
         self.agro_config = agro_config
@@ -248,8 +251,6 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.action_space = action_space
         self._timestep = timestep
         self.reward_function = reward
-
-        self.rng, self.seed = gym.utils.seeding.np_random(seed=seed)
 
         # Training stuff
         self.random_manager = make_default_stage_manager()

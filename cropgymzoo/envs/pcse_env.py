@@ -207,17 +207,18 @@ class AgroManagementContainer:
 
 def get_weather_data_provider(location: tuple,
                               wpo: str='openmeteo',
-                              random_weather: bool =False) ->(
+                              random_weather: bool =False,
+                              rng = None) ->(
         pcse.input.NASAPowerWeatherDataProvider or pcse.input.OpenMeteoWeatherDataProvider or pcse.fileinput.CSVWeatherDataProvider):
     if random_weather:
         wdp = get_random_weather_provider(location)
     else:
         if wpo == 'openmeteo':
-            wdp = get_openmeteo_provider(location)
+            wdp = get_openmeteo_provider(location, rng=rng)
         elif wpo == 'nasapower':
             wdp = get_nasapower_provider(location)
         else:
-            wdp = get_openmeteo_provider(location)
+            wdp = get_openmeteo_provider(location, rng=rng)
     return wdp
 
 
@@ -230,12 +231,17 @@ def get_nasapower_provider(location):
     return pcse.input.NASAPowerWeatherDataProvider(*location)
 
 
-def get_openmeteo_provider(location, training=False, random_manager=None):
+def get_openmeteo_provider(location, rng=None, training=False, random_manager=None):
     from cropgymzoo.utils.domain_randomizer import NoisyOpenMeteo
+    from cropgymzoo import _BASE_PATH
+    api_key = None
+    if os.path.exists(os.path.join(_BASE_PATH, "openmeteo_api")):
+        with open(os.path.join(_BASE_PATH, "openmeteo_api", "api"), "r") as f:
+            api_key = f.readline()
     if training and random_manager is not None:
-        return NoisyOpenMeteo(*location) if random_manager.weather is True else pcse.input.OpenMeteoWeatherDataProvider(*location)
+        return NoisyOpenMeteo(*location, rng=rng, api_key=api_key) if random_manager.weather is True else pcse.input.OpenMeteoWeatherDataProvider(*location, api_key=api_key,)
     else:
-        return pcse.input.OpenMeteoWeatherDataProvider(*location)
+        return pcse.input.OpenMeteoWeatherDataProvider(*location, api_key=api_key)
 
 
 @functools.cache
@@ -443,7 +449,8 @@ class PCSEEnv(gym.Env):
         # Get the weather data source
         self._weather_data_provider = get_openmeteo_provider(
             self._location,
-            self.training,
+            rng=self.rng,
+            training=self.training,
         )
 
         # Create a PCSE engine / crop growth model
