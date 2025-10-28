@@ -54,7 +54,8 @@ from cropgymzoo.utils.defaults import (
     get_default_misc_features,
     get_default_soil_pc_features
 )
-from cropgymzoo.utils.curriculum import make_default_stage_manager, get_coords_for_soil
+from cropgymzoo.utils.curriculum import make_default_stage_manager
+from cropgymzoo.utils.scenario_utils import get_scenario_based_on_name, get_scenario_based_on_loc, get_coords_for_soil
 
 import torch as th
 import torch.nn as nn
@@ -254,7 +255,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.random_manager = make_default_stage_manager()
 
         # get coords for soil
-        self.soil_coords = get_coords_for_soil(self._get_scenario_based_on_name())
+        self.soil_coords = get_coords_for_soil(get_scenario_based_on_name(self.name))
 
         # prices of crops and fertilizers
         self._init_prices()
@@ -1044,9 +1045,9 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
     def _soil_features_mapper(self):
         pcas = soil_to_latent_pca(
             self._soil_params,
-            self._get_scenario_based_on_name()
+            get_scenario_based_on_name(self.name)
             if self.training
-            else self._get_scenario_based_on_loc()
+            else get_scenario_based_on_loc(self.location)
         )
         soil_mapper = {
             'pc1': pcas[0],
@@ -1297,25 +1298,6 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             )
         )
 
-    def _get_scenario_based_on_name(self):
-        if '-s' in self.name:
-            return 'zeeland'
-        elif '-e' in self.name:
-            return 'gelderland'
-        elif '-n' in self.name:
-            return 'groningen'
-        else:
-            return 'no_scenario'
-
-    def _get_scenario_based_on_loc(self):
-        if self.location[0] >= 53.0:
-            return "groningen"
-        elif self.location[0] <= 51.7:
-            return "zeeland"
-        elif 51.7 <= self.location[0] <= 53.0:
-            return "gelderland"
-        else:
-            return "no_scenario"
 
     def get_harvest_year(self):
         return self.agmt.crop_start_date

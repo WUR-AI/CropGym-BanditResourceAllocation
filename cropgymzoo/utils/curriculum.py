@@ -1,20 +1,6 @@
 import os
 import yaml
 from dataclasses import dataclass
-from cropgymzoo import _SCENARIO_PATH
-
-
-def get_coords_for_soil(scenario):
-    with open(os.path.join(_SCENARIO_PATH, "scenario_coords.yaml")) as f:
-        dict_coords = yaml.load(f, Loader=yaml.SafeLoader)
-    if 'gelderland' in scenario:
-        return dict_coords['gelderland']
-    elif 'groningen' in scenario:
-        return dict_coords['groningen']
-    elif 'zeeland' in scenario:
-        return dict_coords['zeeland']
-    else:
-        raise KeyError(f"Scenario {scenario} not found")
 
 @dataclass
 class RandomiseStage:

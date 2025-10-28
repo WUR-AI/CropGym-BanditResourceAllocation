@@ -19,7 +19,12 @@ except ImportError:
 from cropgymzoo import _FIELDS_CONFIG, _CONFIG_PATH
 
 from cropgymzoo.envs.singular_env import ParcelEnv
-from cropgymzoo.utils.defaults import get_default_years
+from cropgymzoo.utils.defaults import (
+    get_default_years,
+    get_wofost_default_crop_features,
+    get_default_weather_features,
+    get_default_action_features
+)
 from cropgymzoo.utils.curriculum import make_default_stage_manager
 
 
@@ -82,6 +87,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
             shared_obs: bool = False,
             render: bool = False,
             stage: int = 0,
+            farm_dict: dict | str = None,
     ):
         EzPickle.__init__(
             self,
@@ -95,6 +101,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
             shared_obs=shared_obs,
             render=render,
             stage=stage,
+            farm_dict=farm_dict,
         )
         super().__init__()
         self.render_mode = None if not render else 'human'
@@ -108,8 +115,11 @@ class MultiFieldEnv(AECEnv, EzPickle):
 
         self.has_reset = False
 
-        with open(_FIELDS_CONFIG) as f:
-            dict_fields = yaml.load(f, Loader=yaml.SafeLoader)
+        if farm_dict is None:
+            with open(_FIELDS_CONFIG) as f:
+                dict_fields = yaml.load(f, Loader=yaml.SafeLoader)
+        else:
+            dict_fields = farm_dict
 
         self.n_agents = len(dict_fields)
         self.agents = [i for i in dict_fields.keys()]
@@ -123,7 +133,10 @@ class MultiFieldEnv(AECEnv, EzPickle):
         self.current_obs = {agent: {} for agent in self.possible_agents}
 
         # init important stuff
-        self._init_fields()
+        if isinstance(farm_dict, str):
+            with open(farm_dict) as f:
+                farm_dict = yaml.load(f, Loader=yaml.SafeLoader)
+        self._init_fields(farm_dict=farm_dict)
         self._init_spaces()
         self._init_farm_variables()
         self._init_infos()
@@ -445,22 +458,41 @@ class MultiFieldEnv(AECEnv, EzPickle):
     def _init_farm_variables(self):
         self._emergence_doy = {ag: None for ag in self.agents}
 
-    def _init_fields(self):
+    def _init_fields(self, seed: int = None, farm_dict: dict = None):
         """
         This is where we initialize the sub-environments where each agent will work.
         :return: a dict called "fields", filled with different CropGym envs
         """
         self.fields: dict[str, ParcelEnv] = {}
-        # create each gymnasium cropgym env
-        for n in self.agents:
-            env = gym.make(
-                n,
-                seed=self.seed,  # set same seed for each parcel. Change?
-                training=self.training,
-                random_manager=make_default_stage_manager()
-            )
-            self.fields[n] : ParcelEnv = env
-        print("Parcels initialized!")
+        if farm_dict is None:
+            # create each gymnasium cropgym env
+            for n in self.agents:
+                env = gym.make(
+                    n,
+                    seed=seed or self.seed,  # set same seed for each parcel. Change?
+                    training=self.training,
+                    random_manager=make_default_stage_manager()
+                )
+                self.fields[n] : ParcelEnv = env
+            print("Fields initialized!")
+        else:
+            for key, field in farm_dict.items():
+                self.fields[key] = ParcelEnv(
+                    crop_features=get_wofost_default_crop_features(),
+                    weather_features=get_default_weather_features(),
+                    action_features=get_default_action_features(),
+                    location=(field['soil_lat'], field['soil_lon']),
+                    crop=field['crop'],
+                    year=2000,
+                    name=key,
+                    area=field['area'],
+                    reward='PNB',
+                    original=True,
+                    training=False,
+                    flatten_obs=True,
+                    type=field['type'],
+                )
+            print("Scenario fields initialized!")
 
     def _init_infos(self):
         self.infos = {ag: {} for ag in self.possible_agents}
