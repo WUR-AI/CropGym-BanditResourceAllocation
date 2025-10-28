@@ -136,7 +136,9 @@ def yearly_eval_test_fn(
                     batch = Batch(
                         {
                             'obs': {
-                                'obs': obs_rms.norm(obs['observation']),
+                                'obs': obs_rms.norm(obs['observation'])
+                                if not isinstance(obs_rms, dict)
+                                else obs_rms[agent].norm(obs['observation']),
                                 'mask': raw_env._get_mask(agent),
                             },
                             'info': processed_info,
@@ -240,7 +242,7 @@ def marl_save_checkpoint_fn(
 ) -> None | str:
     # copy running statistics into the frozen eval envs *once per epoch*
     test_envs.set_obs_rms(train_envs.get_obs_rms())
-    if epoch % 5 == 0:
+    if epoch % 2 == 0:
         save_path = os.path.join(args.logdir, run_name, "checkpoints", f"check_{epoch:04d}.pth")
         torch.save(
             {
@@ -254,7 +256,7 @@ def marl_save_checkpoint_fn(
             save_path
         )
         if experiment is not None:
-            experiment.log_asset(save_path, f"checkpoint", step=epoch)
+            experiment.log_asset(save_path, f"checkpoint_{epoch:04d}", step=epoch)
 
     if experiment is not None and epoch % log_every_epochs == 0:
         log_weights_and_grads_marl(experiment, policy_mgr, step=grad_step, log_grads=False, args=args)
@@ -430,11 +432,11 @@ class CometTianshouLogger(BaseLogger):
                 for p in sorted(self.log_dir.glob(self.checkpoint_glob)):
                     self.experiment.log_asset(str(p), file_name=p.name)
 
-        if self.dir_best:
-            self.experiment.log_asset(
-                os.path.join(self.dir_best, "best.pth"),
-                file_name=f'best_epoch_{epoch}.pth',
-            )
+        # if self.dir_best:
+        #     self.experiment.log_asset(
+        #         os.path.join(self.dir_best, "best.pth"),
+        #         file_name=f'best_epoch_{epoch}.pth',
+        #     )
 
         # Also log these as metrics so they’re visible in the UI at this moment
         self.experiment.log_metrics(
