@@ -310,7 +310,9 @@ def make_vec_env(
         env = MultiAgentVecNormObs(
             env,
             agents=agents,
-            update_obs_rms=train)
+            update_obs_rms=train,
+            shared=False,
+        )
     return env
 
 

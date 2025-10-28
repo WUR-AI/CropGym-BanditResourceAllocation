@@ -84,19 +84,20 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
             obs_extracted = self._norm_obs(obs_extracted)
             obs_extracted = obs_extracted.astype(np.float32)
         else:
-            for i, agent_id in enumerate(agent_ids):
-                if self.obs_rms[agent_id] and self.update_obs_rms:
-                    self.obs_rms[agent_id].update(obs_extracted)
+            # for i, agent_id in enumerate(agent_ids):
+            #     if self.obs_rms[agent_id] and self.update_obs_rms:
+            #         self.obs_rms[agent_id].update(obs_extracted[i])
             if env_id is not None:
                 for i, (e, agent_id) in enumerate(zip(env_id, agent_ids)):
-                    if self.obs_rms[agent_id]:
-                        normed_obs = self.obs_rms[agent_id].norm([obs_extracted[e]])  # notice wrapped obs
-                        obs_extracted[e] = normed_obs[0]
+                    if self.obs_rms[agent_id] and self.update_obs_rms:
+                        self.obs_rms[agent_id].update(obs_extracted[i])
+                    obs_extracted[i] = self.obs_rms[agent_id].norm(obs_extracted[i])  # notice wrapped obs
             else:
-                for agent_id in self.agents:
-                    if self.obs_rms[agent_id]:
-                        self.obs_rms[agent_id].update(obs_extracted)
-                obs_extracted = obs_extracted.astype(np.float32)
+                for i, agent_id in enumerate(agent_ids):
+                    if self.obs_rms[agent_id] and self.update_obs_rms:
+                        self.obs_rms[agent_id].update(obs_extracted[i])
+                    obs_extracted[i] = self.obs_rms[agent_id].norm(obs_extracted[i])
+            obs_extracted = obs_extracted.astype(np.float32)
 
         for i, venv_obs in enumerate(obs_extracted):
             obs[i]["obs"] = obs_extracted[i]
@@ -135,13 +136,24 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
             obs_extracted = self._norm_obs(obs_extracted)
             obs_extracted = obs_extracted.astype(np.float32)
         else:
-            for i, agent_id in enumerate(agent_ids):
-                if self.obs_rms[agent_id] and self.update_obs_rms:
-                    self.obs_rms[agent_id].update(obs_extracted)
-            for i, (e, agent_id) in enumerate(zip(env_id, agent_ids)):
-                if self.obs_rms[agent_id]:
-                    normed_obs = self.obs_rms[agent_id].norm([obs_extracted[e]])  # notice wrapped obs
-                    obs_extracted[e] = normed_obs[0]
+            # for i, agent_id in enumerate(agent_ids):
+            #     if self.obs_rms[agent_id] and self.update_obs_rms:
+            #         self.obs_rms[agent_id].update(obs_extracted)
+            # for i, (e, agent_id) in enumerate(zip(env_id, agent_ids)):
+            #     if self.obs_rms[agent_id]:
+            #         normed_obs = self.obs_rms[agent_id].norm([obs_extracted[e]])  # notice wrapped obs
+            #         obs_extracted[e] = normed_obs[0]
+            # obs_extracted = obs_extracted.astype(np.float32)
+            if env_id is not None:
+                for i, (e, agent_id) in enumerate(zip(env_id, agent_ids)):
+                    if self.obs_rms[agent_id] and self.update_obs_rms:
+                        self.obs_rms[agent_id].update(obs_extracted[i])
+                    obs_extracted[i] = self.obs_rms[agent_id].norm(obs_extracted[i])  # notice wrapped obs
+            else:
+                for i, agent_id in enumerate(agent_ids):
+                    if self.obs_rms[agent_id] and self.update_obs_rms:
+                        self.obs_rms[agent_id].update(obs_extracted[i])
+                    obs_extracted[i] = self.obs_rms[agent_id].norm(obs_extracted[i])
             obs_extracted = obs_extracted.astype(np.float32)
 
         for i, venv_obs in enumerate(obs_extracted):
