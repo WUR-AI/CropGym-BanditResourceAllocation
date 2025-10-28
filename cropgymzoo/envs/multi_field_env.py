@@ -485,7 +485,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
                     domain_repeat=self.domain_repeat,
                 )
                 self.fields[n] : ParcelEnv = env
-            print("Fields initialized!")
+            print(f"Fields initialized with seed no. {self.seed}!")
         else:
             for key, field in farm_dict.items():
                 self.fields[key] = ParcelEnv(

@@ -298,8 +298,8 @@ def make_vec_env(
     """Each subprocess builds → PettingZooEnv"""
     if parallel:
         env_fns = [
-            lambda indep=independent, tr=train, sd=seed:
-            get_petting_zoo_env(indep, tr, sd+i)
+            lambda indep=independent, tr=train, sd=seed+i:
+            get_petting_zoo_env(indep, tr, sd)
             for i, _ in enumerate(range(num_envs))
         ]
         env = SubprocVectorEnv(env_fns, context='spawn')
