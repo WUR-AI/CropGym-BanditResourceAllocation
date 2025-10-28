@@ -293,13 +293,14 @@ def make_vec_env(
         norm: bool = True,
         train: bool = True,
         agents: list['str'] = None,
+        seed: int = 107,
     ) -> SubprocVectorEnv | DummyVectorEnv | MultiAgentVecNormObs:
     """Each subprocess builds → PettingZooEnv"""
     if parallel:
         env_fns = [
-            lambda indep=independent, tr=train:
-            get_petting_zoo_env(indep, tr)
-            for _ in range(num_envs)
+            lambda indep=independent, tr=train, sd=seed:
+            get_petting_zoo_env(indep, tr, sd+i)
+            for i, _ in enumerate(range(num_envs))
         ]
         env = SubprocVectorEnv(env_fns, context='spawn')
         # env = ShmemVectorEnv(env_fns)
@@ -316,18 +317,19 @@ def make_vec_env(
     return env
 
 
-def get_petting_zoo_env(indep, training):
-    env = make_env(independent_learning=indep, training=training)
+def get_petting_zoo_env(indep, training, sd):
+    env = make_env(independent_learning=indep, training=training, seed=sd)
     env = PettingZooEnv(env)
     return env
 
-def make_env(independent_learning=True, training=True): # type: ignore
+def make_env(independent_learning=True, training=True, seed=107): # type: ignore
     """Return one wrapped PettingZoo environment instance."""
     env = MultiFieldEnv(
         warm_up=0,
         shared_obs=False if independent_learning else True,
         training=training,
         random_budget=False,
+        seed=seed,
     )
     return env
 
@@ -413,6 +415,7 @@ def train_gru_ppo(args: Namespace):
         norm=normalize,
         train=True,
         agents=agents,
+        seed=args.seed,
     )
     test_envs = make_vec_env(
         parallel=args.parallel,
