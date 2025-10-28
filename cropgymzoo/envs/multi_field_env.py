@@ -88,6 +88,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
             render: bool = False,
             stage: int = 0,
             farm_dict: dict | str = None,
+            domain_repeat = 10,
     ):
         EzPickle.__init__(
             self,
@@ -102,6 +103,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
             render=render,
             stage=stage,
             farm_dict=farm_dict,
+            domain_repeat=domain_repeat,
         )
         super().__init__()
         self.render_mode = None if not render else 'human'
@@ -111,6 +113,9 @@ class MultiFieldEnv(AECEnv, EzPickle):
         self.shared_obs = shared_obs
         self.dict_obs = dict_obs
         self.year = self.years[0]
+        self.year_cache = self.year
+        self.domain_repeat = domain_repeat
+        self._domain_repeat_left = 0
         self.rng, self.seed = gym.utils.seeding.np_random(seed=seed)
 
         self.has_reset = False
@@ -185,7 +190,12 @@ class MultiFieldEnv(AECEnv, EzPickle):
         # Good idea? Check for resource allocation too.
         options = options or {'year': 2010}
         if self.training:
-            options = {'year': self.rng.choice(self.years)}
+            if self._domain_repeat_left == 0:
+                self.year_cache = self.rng.choice(self.years)
+                self._domain_repeat_left = self.domain_repeat
+            self._domain_repeat_left -= 1
+            self._domain_repeat_left = max(self._domain_repeat_left, 0)
+            options = {'year': self.year_cache}
         # set year
         self.year = options['year']
 
@@ -471,7 +481,8 @@ class MultiFieldEnv(AECEnv, EzPickle):
                     n,
                     seed=seed or self.seed,  # set same seed for each parcel. Change?
                     training=self.training,
-                    random_manager=make_default_stage_manager()
+                    random_manager=make_default_stage_manager(),
+                    domain_repeat=self.domain_repeat,
                 )
                 self.fields[n] : ParcelEnv = env
             print("Fields initialized!")

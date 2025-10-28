@@ -1,5 +1,6 @@
 import os
 from copy import deepcopy
+import hashlib
 
 import numpy as np
 
@@ -14,14 +15,24 @@ class NoisyOpenMeteo(OpenMeteoWeatherDataProvider):
     SIGMA_RAIN  = 0.15
     SIGMA_OTHER = 0.06
 
-    def __init__(self, *args, rng=None, **kwargs):
+    def __init__(self, *args, seed=None, noise_key = None, **kwargs):
         super().__init__(*args, **kwargs)
-        self._rng = np.random.default_rng() if rng is None else rng
+        # a base secret; if None, a random one is chosen (non-reproducible across processes)
+        self._weather_seed = int(seed) if seed is not None else np.random.SeedSequence().entropy
+
+        self._noise_key = str(noise_key) if noise_key is not None else ""
+
+    def _rng_for_date(self, date) -> np.random.Generator:
+        # Stable 64-bit seed derived from (base seed, date ordinal, key)
+        msg = f"{self._weather_seed}|{getattr(date, 'toordinal', lambda: int(date))()}|{self._noise_key}"
+        h = hashlib.sha256(msg.encode("utf-8")).digest()
+        seed64 = int.from_bytes(h[:8], "little", signed=False)
+        return np.random.default_rng(seed64)
 
     def __call__(self, date, member_id=0):
         rec = super().__call__(date)
 
-        r = self._rng
+        r = self._rng_for_date(date)
 
         # don't change the actual values in the WDP!
         copied_rec = deepcopy(rec)

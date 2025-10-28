@@ -155,6 +155,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                  flatten_obs: bool = True,
                  training: bool = False,
                  keep_soil_moisture: bool = False,
+                 domain_repeat: int = 10,
                  **kwargs,
     ):
         EzPickle.__init__(
@@ -185,6 +186,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             original=original,
             flatten_obs=flatten_obs,
             keep_soil_moisture=keep_soil_moisture,
+            domain_repeat=domain_repeat,
             **kwargs,
         )
         # instance metadata
@@ -216,6 +218,10 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         # random generator
         self.rng, self.seed = gym.utils.seeding.np_random(seed=seed)
+
+        self.domain_repeat = int(domain_repeat)
+        self._domain_repeat_left = 0  # how many episodes left to reuse the current domain
+        self._domain_spec = None  # the cached domain specification
 
         # back to PCSE stuff
 
@@ -526,9 +532,9 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         term_cost = 0.0
         if terminated:
-            if self.non_zero_action_count > 3:
-                diff = float(self.non_zero_action_count - 3)
-                term_cost = (diff / 3) ** 2
+            if self.non_zero_action_count > 4:
+                diff = float(self.non_zero_action_count - 4)
+                term_cost = (diff / 4) ** 2
             else:
                 term_cost = 0.0  # no penalty if under or equal to max
 
@@ -1097,20 +1103,30 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
     def _randomise_domain(self, options):
         if self.training:
-            if self.random_manager.sowing:
-                self._shift_sowing_date()
-            if self.random_manager.parameters:
-                self._perturb_parameters()
-            if self.random_manager.co2:
-                options['site_params']['CO2'] = self._perturb_carbon_dioxide(self._get_carbon_dioxide_levels())
-            if self.random_manager.weather:
-                options['weather'] = True
-            if self.random_manager.area:
-                self._randomise_area()
-            if self.random_manager.soil:
-                coor = self.rng.choice(self.soil_coords)
-                with open(os.path.join(_SOILGRIDS_PATH, f'soil_{coor[0]}_{coor[1]}.yaml'), 'r') as f:
-                    options['soil_params'] = yaml.safe_load(f)
+            # if self.random_manager.sowing:
+            #     self._shift_sowing_date()
+            # if self.random_manager.parameters:
+            #     self._perturb_parameters()
+            # if self.random_manager.co2:
+            #     options['site_params']['CO2'] = self._perturb_carbon_dioxide(self._get_carbon_dioxide_levels())
+            # if self.random_manager.weather:
+            #     options['weather'] = True
+            # if self.random_manager.area:
+            #     self._randomise_area()
+            # if self.random_manager.soil:
+            #     coor = self.rng.choice(self.soil_coords)
+            #     with open(os.path.join(_SOILGRIDS_PATH, f'soil_{coor[0]}_{coor[1]}.yaml'), 'r') as f:
+            #         options['soil_params'] = yaml.safe_load(f)
+            # reuse cached spec if we still have repeats left
+            if self.domain_repeat > 1 and self._domain_repeat_left > 0 and self._domain_spec is not None:
+                options = self._apply_domain_spec(self._domain_spec, options)
+                self._domain_repeat_left -= 1
+                return options
+
+            # else: sample a fresh domain and cache it
+            spec = self._sample_domain_spec(options)
+            self._domain_spec = spec
+            self._domain_repeat_left = max(0, self.domain_repeat - 1)
         return options
 
     def _randomise_area(self):
@@ -1128,16 +1144,92 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
     def _perturb_carbon_dioxide(self, co2):
         return co2 * self.rng.normal(1.0, 0.1)
 
-    def _shift_sowing_date(self):
+    def _shift_sowing_date(self, shift_days: int = None):
         # shift sowing date by normal randomiser with std of 5
-        shift = self.rng.normal(loc=0, scale=5)
-        shifted_date = self.agmt.crop_start_date + datetime.timedelta(days=shift)
+        if shift_days is None:
+            shift_days = int(round(self.rng.normal(loc=0.0, scale=5.0)))
+        shifted_date = self.agmt.crop_start_date + datetime.timedelta(days=shift_days)
         # shift sowing date and also campaign date proportionally by the random sowing
-        end_shift = {"crop_end_date": self.agmt.crop_end_date + datetime.timedelta(days=shift)}\
+        end_shift = {"crop_end_date": self.agmt.crop_end_date + datetime.timedelta(days=shift_days)}\
             if self.agmt.crop_end_type == "harvest" else {}
         self.agro_management = self.agmt.update_attributes(crop_start_date=shifted_date,
                                                             campaign_date=shifted_date - datetime.timedelta(weeks=8),
                                                            **end_shift)
+        return shift_days
+
+    def _sample_domain_spec(self, options: dict) -> dict:
+        spec = {}
+
+        # sowing date
+        if self.random_manager.sowing:
+            shift = self._shift_sowing_date()  # returns the shift used
+            spec['sow_shift_days'] = shift
+        else:
+            spec['sow_shift_days'] = None
+
+        # CO2
+        if self.random_manager.co2:
+            co2_val = self._perturb_carbon_dioxide(self._get_carbon_dioxide_levels())
+            options.setdefault('site_params', {})
+            options['site_params']['CO2'] = co2_val
+            spec['co2'] = co2_val
+        else:
+            spec['co2'] = None
+
+        # weather flag
+        spec['weather'] = bool(self.random_manager.weather)
+        spec['weather_seed'] = int(self.rng.integers(0, 2 ** 31 - 1))
+        if spec['weather']:
+            options['weather'] = True
+
+        # area
+        if self.random_manager.area:
+            self._randomise_area()
+            spec['area'] = float(self.area)
+        else:
+            spec['area'] = None
+
+        # soil
+        if self.random_manager.soil:
+            spec['soil_params'] = None
+            coor = self.rng.choice(self.soil_coords)
+            soil_fname = f"soil_{coor[0]}_{coor[1]}.yaml"
+            with open(os.path.join(_SOILGRIDS_PATH, soil_fname), 'r') as f:
+                options['soil_params'] = yaml.safe_load(f)
+            spec['soil_file'] = soil_fname
+        else:
+            spec['soil_file'] = None
+            spec['soil_params'] = None
+
+        return spec
+
+    def _apply_domain_spec(self, spec: dict, options: dict) -> dict:
+        # sowing shift (apply relative to the already restored original_agmt)
+        if spec.get('sow_shift_days') is not None:
+            shift = int(spec['sow_shift_days'])
+            _ = self._shift_sowing_date(shift)
+
+        # area
+        if spec.get('area') is not None:
+            self.area = float(spec['area'])
+
+        # CO2
+        if spec.get('co2') is not None:
+            options.setdefault('site_params', {})
+            options['site_params']['CO2'] = spec['co2']
+
+        # soil
+        if spec.get('soil_file'):
+            with open(os.path.join(_SOILGRIDS_PATH, spec['soil_file']), 'r') as f:
+                options['soil_params'] = yaml.safe_load(f)
+        elif spec.get('soil_params') is not None:
+            options['soil_params'] = spec['soil_params']
+
+        # weather randomization flag
+        if spec.get('weather'):
+            options['weather'] = True
+
+        return options
 
     '''
     Init helpers
@@ -1362,6 +1454,10 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
     @weather_data_provider.setter
     def weather_data_provider(self, weather):
         self._weather_data_provider = weather
+
+    @property
+    def domain_repeat_left(self):
+        return self._domain_repeat_left
 
     @property
     def max_single_dose(self):
