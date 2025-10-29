@@ -349,7 +349,6 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         # reset various variables
         self._reset_action_variables()
-        self._reset_prices()
 
         # overwrite for new eps
         self.overwrite_year(year=options['year'])
@@ -361,10 +360,14 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         # randomise domain
         options = self._randomise_domain(options)
 
+        # reset prices
+        self._reset_prices()
+
         # reset PCSE
         obs = super().reset(seed=seed, options=options)
 
         self.day_of_planting = self.agmt.crop_start_date
+        self._update_budget_left()
 
         # get infos
         self._init_infos()
@@ -484,11 +487,17 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             return d.replace(year=year, day=28)
 
     def _reset_prices(self):
+        if getattr(self, "_domain_spec", None):
+            fp = self._domain_spec.get('fertilizer_price', None)
+            cp = self._domain_spec.get('crop_price', None)
+            if fp is not None and cp is not None:
+                self.fertilizer_price = float(fp)
+                self.costs_nitrogen = self.fertilizer_price
+                self.crop_price = float(cp)
+                return
+
         self.fertilizer_price = self._get_fertilizer_price()
-
         self.crop_price = self._get_crop_price()
-
-        self._update_budget_left()
 
     def _update_budget_left(self):
         self.reward_class.budget_left = self.budget_left
@@ -581,8 +590,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         total_constraint += self._get_frequency_constraint(terminated)
         total_constraint += self._get_dvs_constraint()
         # total_constraint += self._get_budget_constraint(terminated)
-        total_constraint += self._get_nue_constraint()
-        total_constraint += self._get_nsurp_constraint()
+        # total_constraint += self._get_nue_constraint()
+        # total_constraint += self._get_nsurp_constraint()
 
         return total_constraint
 
@@ -970,7 +979,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                             else self.rng.choice(list(self.fertilizer_prices.values()))
             return fert_price
         except KeyError:
-            fert_price = np.mean(list(self.fertilizer_prices.values()))
+            fert_price = list(self.fertilizer_prices.values())[-1]
             return fert_price
 
     def _get_fresh_weight(
@@ -992,7 +1001,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                     if not self.training \
                     else self.rng.choice(list(self.crop_prices[self.crop].values()))
         except KeyError:
-            return np.mean(list(self.crop_prices[self.crop].values()))
+            return list(self.crop_prices[self.crop].values())[-1]
 
     def _populate_infos(self, pcse_output, action, reward, terminate):
 
@@ -1066,7 +1075,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         return {k: soil_mapper[k] for k in self.soil_features if k in soil_mapper}
 
     def _misc_features_mapper(self, terminated = False):
-        pcse_output = self.model.get_output() if terminated else None
+        pcse_output = self.model.get_output()
         misc_process = {
             'SinDay': lambda: self._encode_doy(self.date)[0],
             'CosDay': lambda: self._encode_doy(self.date)[1],
@@ -1075,7 +1084,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             'CropCode': lambda: self._get_crop_code(),
             'CO2': lambda: self.carbon_dioxide_level,
             'Nue': lambda: (
-                0.0 if not terminated else calculate_nue(
+                calculate_nue(
                     n_input=self.reward_container.actions,
                     n_so=process_pcse.get_n_storage_organ(pcse_output),
                     nh4_depo=get_nh4_deposition_pcse(pcse_output),
@@ -1084,7 +1093,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                 )
             ),
             'Nsurp': lambda: (
-                0.0 if not terminated else get_surplus_n(
+                get_surplus_n(
                     n_input=self.reward_container.get_total_fertilization,
                     n_so=process_pcse.get_n_storage_organ(pcse_output),
                     nh4_depo=get_nh4_deposition_pcse(pcse_output),
@@ -1103,20 +1112,6 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
     def _randomise_domain(self, options):
         if self.training:
-            # if self.random_manager.sowing:
-            #     self._shift_sowing_date()
-            # if self.random_manager.parameters:
-            #     self._perturb_parameters()
-            # if self.random_manager.co2:
-            #     options['site_params']['CO2'] = self._perturb_carbon_dioxide(self._get_carbon_dioxide_levels())
-            # if self.random_manager.weather:
-            #     options['weather'] = True
-            # if self.random_manager.area:
-            #     self._randomise_area()
-            # if self.random_manager.soil:
-            #     coor = self.rng.choice(self.soil_coords)
-            #     with open(os.path.join(_SOILGRIDS_PATH, f'soil_{coor[0]}_{coor[1]}.yaml'), 'r') as f:
-            #         options['soil_params'] = yaml.safe_load(f)
             # reuse cached spec if we still have repeats left
             if self.domain_repeat > 1 and self._domain_repeat_left > 0 and self._domain_spec is not None:
                 options = self._apply_domain_spec(self._domain_spec, options)
@@ -1200,6 +1195,11 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         else:
             spec['soil_file'] = None
             spec['soil_params'] = None
+
+        fert_choices = list(self.fertilizer_prices.values())
+        crop_choices = list(self.crop_prices[self.crop].values())
+        spec['fertilizer_price'] = float(self.rng.choice(fert_choices))
+        spec['crop_price'] = float(self.rng.choice(crop_choices))
 
         return spec
 
