@@ -67,6 +67,7 @@ def model_picker(model_file, dict_fields):
     assert isinstance(orig_model_dict, dict)
 
     new_model_dict = {}
+    new_obs_rms_dict = {}
     for name, field in dict_fields.items():
         crop = field['crop']
         coor = (field['soil_lat'], field['soil_lon'])
@@ -74,33 +75,20 @@ def model_picker(model_file, dict_fields):
 
         orig_agent_name = region_crop_picker(region, crop)
         new_model_dict[name] = orig_model_dict["models"][orig_agent_name]
+        if isinstance(orig_model_dict["obs_rms"], dict):
+            new_obs_rms_dict[name] = orig_model_dict["obs_rms"][orig_agent_name]
 
     orig_model_dict['models'] = new_model_dict
+    if new_obs_rms_dict:
+        orig_model_dict['obs_rms'] = new_obs_rms_dict
 
     return orig_model_dict
 
 
 def region_crop_picker(region, crop):
-    if region == "groningen" and crop == "sugarbeet":
-        return "field-sb-n"
-    elif region == "groningen" and crop == "winterwheat":
-        return "field-ww-n"
-    elif region == "groningen" and crop == "potato":
-        return "field-pt-n"
-    elif region == "zeeland" and crop == "sugarbeet":
-        return "field-sb-s"
-    elif region == "zeeland" and crop == "winterwheat":
-        return "field-ww-s"
-    elif region == "zeeland" and crop == "potato":
-        return "field-pt-s"
-    elif region == "gelderland" and crop == "sugarbeet":
-        return "field-sb-e"
-    elif region == "gelderland" and crop == "winterwheat":
-        return "field-ww-e"
-    elif region == "gelderland" and crop == "potato":
-        return "field-pt-e"
-    else:
-        raise KeyError("combination not found")
+    region_suffix = {"groningen": "n", "zeeland": "s", "gelderland": "e"}
+    crop_code = {"sugarbeet": "sb", "winterwheat": "ww", "potato": "pt"}
+    return f"field-{crop_code[crop]}-{region_suffix[region]}"
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
