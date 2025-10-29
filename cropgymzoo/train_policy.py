@@ -120,54 +120,58 @@ def make_ppo_policy(
         network_fn = RecurrentLSTM
     else:
         network_fn = RecurrentGRU
-    actor_net = network_fn(
-        layer_num=len(hidden),
-        hidden_layer_size=hidden[0],
-        state_shape=obs_dim[0],
-        action_shape=act_dim,
-        concat_mask=args.concat_mask,
-        device=device,
-    )
-    if not mlp_critics:
-        critic_net = network_fn(
+    if args.architecture in ['lstm', 'gru']:
+        actor_net = network_fn(
             layer_num=len(hidden),
             hidden_layer_size=hidden[0],
-            state_shape=obs_dim[0],
+            state_shape=obs_dim[0] - (6 * len(get_default_weather_features())) if getattr(args, 'pool', False) else obs_dim[0],
             action_shape=act_dim,
             concat_mask=args.concat_mask,
-            device=device,
-        )
-        constraint_net = network_fn(
-            layer_num=len(hidden),
-            hidden_layer_size=hidden[0],
-            state_shape=obs_dim[0],
-            action_shape=act_dim,
-            concat_mask=args.concat_mask,
-            device=device,
-        ) if args.lagrangian_ppo else None
-    else:
-        critic_net = ObsMLP(
-            input_dim=obs_dim[0] - (6 * len(get_default_weather_features())) if getattr(args, 'pool', False) else 0,
-            action_dim=act_dim,
-            hidden_sizes=hidden,
-            concat_mask=args.concat_mask,
-            activation=torch.nn.Tanh,
             pool=getattr(args, 'pool', False),
             device=device,
         )
-        constraint_net = ObsMLP(
-            input_dim=obs_dim[0] - (6 * len(get_default_weather_features())) if getattr(args, 'pool', False) else 0,
-            action_dim=act_dim,
-            hidden_sizes=hidden,
-            concat_mask=args.concat_mask,
-            activation=torch.nn.Tanh,
-            pool=getattr(args, 'pool', False),
-            device=device,
-        ) if args.lagrangian_ppo else None
+        if not mlp_critics:
+            critic_net = network_fn(
+                layer_num=len(hidden),
+                hidden_layer_size=hidden[0],
+                state_shape=obs_dim[0] - (6 * len(get_default_weather_features())) if getattr(args, 'pool', False) else obs_dim[0],
+                action_shape=act_dim,
+                concat_mask=args.concat_mask,
+                pool=getattr(args, 'pool', False),
+                device=device,
+            )
+            constraint_net = network_fn(
+                layer_num=len(hidden),
+                hidden_layer_size=hidden[0],
+                state_shape=obs_dim[0] - (6 * len(get_default_weather_features())) if getattr(args, 'pool', False) else obs_dim[0],
+                action_shape=act_dim,
+                concat_mask=args.concat_mask,
+                pool=getattr(args, 'pool', False),
+                device=device,
+            ) if args.lagrangian_ppo else None
+        else:
+            critic_net = ObsMLP(
+                input_dim=obs_dim[0] - (6 * len(get_default_weather_features())) if getattr(args, 'pool', False) else obs_dim[0],
+                action_dim=act_dim,
+                hidden_sizes=hidden,
+                concat_mask=args.concat_mask,
+                activation=torch.nn.Tanh,
+                pool=getattr(args, 'pool', False),
+                device=device,
+            )
+            constraint_net = ObsMLP(
+                input_dim=obs_dim[0] - (6 * len(get_default_weather_features())) if getattr(args, 'pool', False) else obs_dim[0],
+                action_dim=act_dim,
+                hidden_sizes=hidden,
+                concat_mask=args.concat_mask,
+                activation=torch.nn.Tanh,
+                pool=getattr(args, 'pool', False),
+                device=device,
+            ) if args.lagrangian_ppo else None
 
     if args.architecture == 'mlp':
         actor_net = ObsMLP(
-            input_dim=obs_dim[0] - (6 * len(get_default_weather_features())) if getattr(args, 'pool', False) else 0,
+            input_dim=obs_dim[0] - (6 * len(get_default_weather_features())) if getattr(args, 'pool', False) else obs_dim[0],
             action_dim=act_dim,
             flatten_input=False,
             hidden_sizes=hidden,
@@ -177,7 +181,7 @@ def make_ppo_policy(
             device=device,
         )
         critic_net = ObsMLP(
-            input_dim=obs_dim[0] - (6 * len(get_default_weather_features())) if getattr(args, 'pool', False) else 0,
+            input_dim=obs_dim[0] - (6 * len(get_default_weather_features())) if getattr(args, 'pool', False) else obs_dim[0],
             action_dim=act_dim,
             hidden_sizes=hidden,
             activation=torch.nn.Tanh,
@@ -186,7 +190,7 @@ def make_ppo_policy(
             device=device,
         )
         constraint_net = ObsMLP(
-            input_dim=obs_dim[0] - (6 * len(get_default_weather_features())) if getattr(args, 'pool', False) else 0,
+            input_dim=obs_dim[0] - (6 * len(get_default_weather_features())) if getattr(args, 'pool', False) else obs_dim[0],
             action_dim=act_dim,
             hidden_sizes=hidden,
             activation=torch.nn.Tanh,
