@@ -140,6 +140,9 @@ class ObsMLP(MLP):
         self.input_dim = kwargs.pop("input_dim")
         self.action_dim = kwargs.pop("action_dim", 0)
         concat_mask = kwargs.pop("concat_mask", False)
+        self.n_weather_vars = kwargs.pop("n_weather_vars", 4)
+        self.n_days = kwargs.pop("n_days", 7)
+        self.pool = kwargs.pop("pool", False)
         kwargs['input_dim'] = self.input_dim + (self.action_dim if concat_mask else 0)
         super().__init__(*args, **kwargs)
 
@@ -158,6 +161,17 @@ class ObsMLP(MLP):
         """
 
         obs = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
+
+        # --- Weather pooling ---
+        if self.pool:
+            n_weather = self.n_weather_vars * self.n_days
+            weather = obs[..., -n_weather:]  # last n_weather_vars * n_days elements
+            weather = weather.view(*weather.shape[:-1], self.n_days, self.n_weather_vars)
+            weather_avg = weather.mean(dim=-2)  # average over days → shape [..., 4]
+
+            obs_core = obs[..., :-n_weather]  # everything before weather
+            obs = torch.cat([obs_core, weather_avg], dim=-1)  # concat averaged weather back
+
         x = self.model(obs)
 
         return x, state

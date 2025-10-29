@@ -56,6 +56,7 @@ if __name__ == "__main__":
 
     # feature space
     parser.add_argument("--concat_mask", action='store_true', dest='concat_mask')
+    parser.add_argument("--pool", action='store_true', dest='pool')
 
     # Use curriculum learning?
     parser.add_argument("--curriculum", action='store_true', dest='curriculum')
@@ -90,6 +91,7 @@ if __name__ == "__main__":
         no_comet=False,
         use_film=True,
         concat_mask=False,
+        pool=False,
     )
     hyperparams = parser.parse_args()
 

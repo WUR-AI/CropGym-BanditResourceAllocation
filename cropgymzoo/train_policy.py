@@ -43,6 +43,7 @@ from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
 from cropgymzoo.envs.wrappers import MultiAgentVecNormObs
 from cropgymzoo.utils.curriculum import CurriculumCallbackManager
+from cropgymzoo.utils.defaults import get_default_weather_features
 
 
 import torch
@@ -146,46 +147,51 @@ def make_ppo_policy(
         ) if args.lagrangian_ppo else None
     else:
         critic_net = ObsMLP(
-            input_dim=obs_dim[0],
+            input_dim=obs_dim[0] - (6 * len(get_default_weather_features())) if getattr(args, 'pool', False) else 0,
             action_dim=act_dim,
             hidden_sizes=hidden,
             concat_mask=args.concat_mask,
             activation=torch.nn.Tanh,
+            pool=getattr(args, 'pool', False),
             device=device,
         )
         constraint_net = ObsMLP(
-            input_dim=obs_dim[0],
+            input_dim=obs_dim[0] - (6 * len(get_default_weather_features())) if getattr(args, 'pool', False) else 0,
             action_dim=act_dim,
             hidden_sizes=hidden,
             concat_mask=args.concat_mask,
             activation=torch.nn.Tanh,
+            pool=getattr(args, 'pool', False),
             device=device,
         ) if args.lagrangian_ppo else None
 
     if args.architecture == 'mlp':
         actor_net = ObsMLP(
-            input_dim=obs_dim[0],
+            input_dim=obs_dim[0] - (6 * len(get_default_weather_features())) if getattr(args, 'pool', False) else 0,
             action_dim=act_dim,
             flatten_input=False,
             hidden_sizes=hidden,
             activation=torch.nn.Tanh,
             concat_mask=args.concat_mask,
+            pool=getattr(args, 'pool', False),
             device=device,
         )
         critic_net = ObsMLP(
-            input_dim=obs_dim[0],
+            input_dim=obs_dim[0] - (6 * len(get_default_weather_features())) if getattr(args, 'pool', False) else 0,
             action_dim=act_dim,
             hidden_sizes=hidden,
             activation=torch.nn.Tanh,
             concat_mask=args.concat_mask,
+            pool=getattr(args, 'pool', False),
             device=device,
         )
         constraint_net = ObsMLP(
-            input_dim=obs_dim[0],
+            input_dim=obs_dim[0] - (6 * len(get_default_weather_features())) if getattr(args, 'pool', False) else 0,
             action_dim=act_dim,
             hidden_sizes=hidden,
             activation=torch.nn.Tanh,
             concat_mask=args.concat_mask,
+            pool=getattr(args, 'pool', False),
             device=device,
         ) if args.lagrangian_ppo else None
 

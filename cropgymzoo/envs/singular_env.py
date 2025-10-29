@@ -1122,6 +1122,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             spec = self._sample_domain_spec(options)
             self._domain_spec = spec
             self._domain_repeat_left = max(0, self.domain_repeat - 1)
+            print(f"Sampled new domain for year {self.year}")
         return options
 
     def _randomise_area(self):
