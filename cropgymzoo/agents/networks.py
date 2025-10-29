@@ -268,6 +268,9 @@ class RecurrentLSTM(NetBase[RecurrentStateBatch]):
             action_shape: int | Sequence[int],
             concat_mask: bool = False,
             hidden_layer_size: int = 128,
+            n_weather_vars: int = 4,
+            n_days: int = 7,
+            pool: bool = False,
             device: str | int | torch.device = "cpu",
     ) -> None:
         super().__init__()
@@ -276,6 +279,15 @@ class RecurrentLSTM(NetBase[RecurrentStateBatch]):
         self.hidden_dim = hidden_layer_size
         self.env_num = 1
         self.flag = False
+
+        # Optional average pooling over the last (n_days * n_weather_vars) obs features
+        self.n_weather_vars = n_weather_vars
+        self.n_days = n_days
+        self.pool = pool
+        if self.pool:
+            # Pool across the day dimension (length = n_days)
+            self.avgpool = nn.AvgPool1d(kernel_size=self.n_days, stride=self.n_days)
+
 
         self.fc1 = nn.Linear(int(np.prod(self.obs_dim)), hidden_layer_size)
         self.lstm = nn.LSTM(
@@ -299,6 +311,27 @@ class RecurrentLSTM(NetBase[RecurrentStateBatch]):
         dones = ~info.Alive
         if isinstance(dones, np.ndarray):
             dones = torch.from_numpy(dones).to(self.device)
+
+        # Optional weather pooling on the last n_days * n_weather_vars features
+        if self.pool:
+            n_weather = self.n_weather_vars * self.n_days
+            if obs.shape[-1] >= n_weather:
+                # Split core features and weather tail
+                obs_core = obs[..., :-n_weather]
+                weather = obs[..., -n_weather:]
+
+                # Reshape to [..., n_days, n_weather_vars] then channels-first [..., n_weather_vars, n_days]
+                weather = weather.view(*weather.shape[:-1], self.n_days, self.n_weather_vars)
+                weather = weather.transpose(-2, -1)
+
+                # Collapse leading dims to N for pooling, pool over days → [N, n_weather_vars, 1]
+                flat = weather.reshape(-1, self.n_weather_vars, self.n_days)
+                pooled = self.avgpool(flat)
+                weather_avg = pooled.squeeze(-1)
+
+                # Restore leading dims and concatenate back
+                weather_avg = weather_avg.view(*weather.shape[:-2], self.n_weather_vars)
+                obs = torch.cat([obs_core, weather_avg], dim=-1)
 
         # feed-forward + add time dim
         x = self.fc1(obs)  # [B, H] or [B, T, H]
@@ -516,8 +549,14 @@ class StackedCritic(Critic):
 
         # FiLM section
         if self.film and info is not None:
-            rem_budget = torch.from_numpy(info.BudgetLeft).to(self.device)
-            tot_budget = torch.from_numpy(info.BudgetTotal).to(self.device)
+            if isinstance(info.BudgetLeft, np.ndarray):
+                rem_budget = torch.from_numpy(info.BudgetLeft).to(self.device)
+            else:
+                rem_budget = info.BudgetLeft.to(self.device)
+            if isinstance(info.BudgetTotal, np.ndarray):
+                tot_budget = torch.from_numpy(info.BudgetTotal).to(self.device)
+            else:
+                tot_budget = info.BudgetTotal.to(self.device)
 
             # compute bins
             fraction = (rem_budget / (tot_budget.clamp_min(1e-8))).clamp(0, 1.0)
