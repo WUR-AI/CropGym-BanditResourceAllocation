@@ -328,11 +328,8 @@ class Rewards:
                 price_fertilizer=price_fertilizer
             )
 
-            labor_cost = 30 if amount > 0 else 0
 
-            profit_now = profit - labor_cost
-
-            return profit_now, growth
+            return profit, growth
 
         def return_final_reward(
                 self,
@@ -353,12 +350,16 @@ class Rewards:
             nue = calculate_nue(n_input=n_fertilized, n_so=n_output, no3_depo=no3_depo, nh4_depo=nh4_depo, crop_name=crop_name)
 
             n_surplus_penalty =  obj.n_surplus_penalty(n_surplus)
-            nue_penalty = obj.nue_penalty(nue)
+            nue_penalty = obj.nue_penalty(nue, n_output)
 
-            budget_left_bonus = self.budget_beta * obj.budget_left_bonus(budget_left)
+            # budget_left_bonus = self.budget_beta * obj.budget_left_bonus(budget_left)
 
             # End reward in three terms that describe profit
-            reward = budget_left_bonus - abs(self.nsurp_beta * n_surplus_penalty) - abs(self.nue_beta * nue_penalty)
+            reward = (
+                    - abs(self.nsurp_beta * n_surplus_penalty)
+                    - abs(self.nue_beta * nue_penalty)
+                    # + budget_left_bonus
+            )
             return reward
 
 
@@ -944,7 +945,8 @@ class Rewards:
             return self.n_surplus_formula(n_surplus, nue)
 
         def calculate_profit_term(self, action, growth, price_crop, price_fertilizer):
-            expense = action * price_fertilizer
+            labor_cost = 30 if action > 0 else 0
+            expense = action * price_fertilizer + labor_cost
             income = growth * price_crop
             profit = income - expense
             self.accumulate_profit(profit)
@@ -1002,20 +1004,23 @@ class Rewards:
             return base_nue
 
         def n_surplus_penalty(self, nsurplus):
-            if 0 < nsurplus <= 40:
+            if 0 < nsurplus <= 41:
                 return 0
             else:
-                return nsurplus * self.fertilizer_price
+                return abs(nsurplus) * 3.5
 
-        def nue_penalty(self, nue):
+        def nue_penalty(self, nue, n_output):
             if 0.5 <= nue <= 0.9:
                 return 0
-            elif nue < 0.5:
-                excess = 0.5 - nue
-                return self.fertilizer_price * excess * 200  # penalty * 2 per 0.01 NUE
-            else:  #  nue > 0.9
-                excess = nue - 0.9
-                return self.fertilizer_price * excess * 200  # same, but half for soil mining
+            elif nue <= 0.5:
+                n_in_good = n_output / 0.5
+                n_in_actual = n_output / nue
+                n_difference = n_in_actual - n_in_good
+            else:  # nue > 0.91
+                n_in_good = n_output / 0.9
+                n_in_actual = n_output / nue
+                n_difference = n_in_good - n_in_actual
+            return n_difference * 3.5
 
         @staticmethod
         def n_surplus_formula(n_surplus, nue, nsurp_width=100, nue_width=1):
