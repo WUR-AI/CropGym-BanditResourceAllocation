@@ -677,14 +677,14 @@ class LagrangianIPPOPolicy(IPPOPolicy):
 
                 # Zero-init h0 to avoid stale behavior-state; we will rebuild under *current* weights.
                 # Keep device/dtype from collected tensors.
-                h0_fields = {}
-                hid0 = h0_collected.hidden
-                h0_fields["hidden"] = torch.zeros_like(hid0)
-                if hasattr(h0_collected, "cell") and getattr(h0_collected, "cell") is not None:
-                    cel0 = h0_collected.cell
-                    h0_fields["cell"] = torch.zeros_like(cel0)
-                h0 = Batch(h0_fields)
-
+                # h0_fields = {}
+                # hid0 = h0_collected.hidden
+                # h0_fields["hidden"] = torch.zeros_like(hid0)
+                # if hasattr(h0_collected, "cell") and getattr(h0_collected, "cell") is not None:
+                #     cel0 = h0_collected.cell
+                #     h0_fields["cell"] = torch.zeros_like(cel0)
+                # h0 = Batch(h0_fields)
+                h0 = h0_collected
                 B = seq_batch.adv.shape[0]
                 bs = batch_size or B
 
@@ -724,6 +724,13 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                         out_t = self(batch=step_batch, state=state)
                         dist_t = out_t.dist
                         state = out_t.state  # carry hidden
+
+                        # after computing done/alive for step t (e.g., from mb_valid or a 'Alive' field)
+                        # if "Alive" in mb.info:
+                        #     alive_t = torch.as_tensor(mb.info["Alive"][:, t], device=state.hidden.device).float()
+                        #     state.hidden = state.hidden * alive_t.view(-1, 1, 1)
+                        #     if hasattr(state, "cell") and state.cell is not None:
+                        #         state.cell = state.cell * alive_t.view(-1, 1, 1)
 
                         # per-step logprob/entropy against stored actions
                         act_t = mb.act[:, t]
@@ -774,9 +781,30 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                     # Critic values: if critic is non-recurrent, flatten [b, T, ...] -> [b*T, ...]
                     # mb.obs.obs: [b, T, H]
                     flat_obs = mb.obs.obs.reshape(-1, mb.obs.obs.shape[-1])
-                    mask_from_obs = mb.obs.mask.reshape(-1, mb.obs.mask.shape[-1])
-                    flat_info = mb.info.reshape(-1, mb.info.shape[-1])
-                    v = self.critic(Batch(obs=flat_obs, mask=mask_from_obs), info=Batch(info=flat_info)).reshape(mb.returns.shape)  # [b, T]
+                    # mask_from_obs = mb.obs.mask.reshape(-1, mb.obs.mask.shape[-1])
+                    # flat_info = mb.info.reshape(-1, mb.info.shape[-1])
+                    # v = self.critic(Batch(obs=flat_obs, mask=mask_from_obs), info=Batch(info=flat_info)).reshape(mb.returns.shape)  # [b, T]
+                    # Robust flatten for mask (2D or >2D)
+                    if mb.obs.mask.ndim >= 2:
+                        mask_from_obs = mb.obs.mask.reshape(-1, *mb.obs.mask.shape[2:])
+                    else:
+                        mask_from_obs = mb.obs.mask.reshape(-1)
+
+                    # helper: flatten a Batch of info fields from [B, T, ...] -> [B*T, ...] per key
+                    def _flatten_info_batch(info_batch: Batch) -> Batch:
+                        flat_dict = {}
+                        for k, v in info_batch.items():
+                            if k in ['CropName', 'Date']:
+                                continue
+                            t = v if torch.is_tensor(v) else torch.as_tensor(v)
+                            if t.ndim >= 2:
+                                flat_dict[k] = t.reshape(-1, *t.shape[2:])
+                            else:
+                                flat_dict[k] = t.reshape(-1)
+                        return Batch(flat_dict)
+
+                    flat_info = _flatten_info_batch(mb.info)
+                    v = self.critic(Batch(obs=flat_obs, mask=mask_from_obs), info=flat_info).reshape(mb.returns.shape)  # [b, T]
 
                     if self.value_clip:
                         v_clip = mb.v_s + (v - mb.v_s).clamp(-self.eps_clip, self.eps_clip)
@@ -788,7 +816,8 @@ class LagrangianIPPOPolicy(IPPOPolicy):
 
                     # Constraint critic similarly
                     if self.constraint_critic is not None and hasattr(mb, 'const_returns'):
-                        cv = self.constraint_critic(Batch(obs=flat_obs, mask=mask_from_obs), info=Batch(info=flat_info)).reshape(mb.const_returns.shape)
+                        cv = self.constraint_critic(Batch(obs=flat_obs, mask=mask_from_obs), info=flat_info).reshape(
+                            mb.const_returns.shape)
                         cfloss = (mb.const_returns - cv).pow(2)
                     else:
                         cfloss = None
