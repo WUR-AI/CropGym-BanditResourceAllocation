@@ -537,23 +537,23 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         step_cost = 0.0
         if acted:
             # small per-step penalty only when over K
-            step_cost = 0.2 if self.non_zero_action_count > 3 else 0.0
+            step_cost = 0.2 if self.non_zero_action_count > 4 else 0.0
 
-        term_cost = 0.0
-        if terminated:
-            if self.non_zero_action_count > 4:
-                diff = float(self.non_zero_action_count - 4)
-                term_cost = (diff / 4) ** 2
-            else:
-                term_cost = 0.0  # no penalty if under or equal to max
+        # term_cost = 0.0
+        # if terminated:
+        #     if self.non_zero_action_count > 4:
+        #         diff = float(self.non_zero_action_count - 4)
+        #         term_cost = (diff / 4) ** 2
+        #     else:
+        #         term_cost = 0.0  # no penalty if under or equal to max
 
-        return step_cost + term_cost
+        return step_cost # + term_cost
 
     def _get_dvs_constraint(self) -> float:
         dvs = self.model.get_output()[-1]['DVS']
         acted = self.action > 0  # or whatever check means "fertilizer applied"
         if acted and not (0.01 < dvs <= 1):
-            return 1.0
+            return 0.2
         return 0.0
 
     def _get_budget_constraint(self, terminated) -> float:
