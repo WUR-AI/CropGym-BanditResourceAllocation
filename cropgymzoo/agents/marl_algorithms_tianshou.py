@@ -358,6 +358,7 @@ class LagrangianIPPOPolicy(IPPOPolicy):
         ret = stack_time('returns')
         v_s = stack_time('v_s')
         logp_old = stack_time('logp_old')
+        dones = stack_time('done')
 
         # Build info as Batch over windows without converting to tensors
         info_list = []
@@ -462,6 +463,7 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             v_s=v_s,
             logp_old=logp_old,
             info=info,
+            done=dones,
         )
         if const_adv is not None:
             seq.const_adv = const_adv
@@ -556,27 +558,27 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             batch: RolloutBatchProtocol,
             buffer: ReplayBuffer,
             indices: np.ndarray,
-            v_s_: np.ndarray | torch.Tensor | None = None,
-            v_s: np.ndarray | torch.Tensor | None = None,
+            c_s_: np.ndarray | torch.Tensor | None = None,
+            c_s: np.ndarray | torch.Tensor | None = None,
             gamma: float = 0.99,
             gae_lambda: float = 0.95,
     ) -> tuple[np.ndarray, np.ndarray]:
 
         cost = _last1d(batch.info['TotalConstraint'])
-        if v_s_ is None:
+        if c_s_ is None:
             assert np.isclose(gae_lambda, 1.0)
-            v_s_ = np.zeros_like(cost)
+            c_s_ = np.zeros_like(cost)
         else:
-            v_s_ = to_numpy(v_s_.flatten())
-            v_s_ = v_s_ * BasePolicy.value_mask(buffer, indices)
-        v_s = np.roll(v_s_, 1) if v_s is None else to_numpy(v_s.flatten())
+            c_s_ = to_numpy(c_s_.flatten())
+            c_s_ = c_s_ * BasePolicy.value_mask(buffer, indices)
+        c_s = np.roll(c_s_, 1) if c_s is None else to_numpy(c_s.flatten())
 
         end_flag = np.logical_or(batch.terminated, batch.truncated)
         end_flag[np.isin(indices, buffer.unfinished_index())] = True
         if len(end_flag.shape) > 1:
             end_flag = end_flag[:, -1]
-        advantage = _gae_return(v_s, v_s_, cost, end_flag, gamma, gae_lambda)
-        returns = advantage + v_s
+        advantage = _gae_return(c_s, c_s_, cost, end_flag, gamma, gae_lambda)
+        returns = advantage + c_s
         # normalization varies from each policy, so we don't do it here
         return returns, advantage
 
@@ -677,14 +679,14 @@ class LagrangianIPPOPolicy(IPPOPolicy):
 
                 # Zero-init h0 to avoid stale behavior-state; we will rebuild under *current* weights.
                 # Keep device/dtype from collected tensors.
-                # h0_fields = {}
-                # hid0 = h0_collected.hidden
-                # h0_fields["hidden"] = torch.zeros_like(hid0)
-                # if hasattr(h0_collected, "cell") and getattr(h0_collected, "cell") is not None:
-                #     cel0 = h0_collected.cell
-                #     h0_fields["cell"] = torch.zeros_like(cel0)
-                # h0 = Batch(h0_fields)
-                h0 = h0_collected
+                h0_fields = {}
+                hid0 = h0_collected.hidden
+                h0_fields["hidden"] = torch.zeros_like(hid0)
+                if hasattr(h0_collected, "cell") and getattr(h0_collected, "cell") is not None:
+                    cel0 = h0_collected.cell
+                    h0_fields["cell"] = torch.zeros_like(cel0)
+                h0 = Batch(h0_fields)
+                # h0 = h0_collected
                 B = seq_batch.adv.shape[0]
                 bs = batch_size or B
 
@@ -713,6 +715,26 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                     state = mb_h0  # zeros or provided initial window state
                     logp_steps, ent_steps = [], []
                     for t in range(tlen):
+                        # reset state at episode boundaries
+                        if hasattr(mb, "done") and mb.done is not None:
+                            # done_t = mb.done[:, t].float()  # [B]
+                            # mask = (1.0 - done_t).view(1, -1, 1)
+                            # mb.done[:, t]: shape [B]; build a mask that broadcasts over [B, L, H]
+                            # Use the same device/dtype as the hidden state to avoid device/type mismatches.
+                            ref = state.hidden if hasattr(state, "hidden") and state.hidden is not None else None
+                            done_t = mb.done[:, t]
+                            if ref is not None:
+                                done_t = done_t.to(device=ref.device, dtype=ref.dtype)
+                            else:
+                                done_t = done_t.float()
+                            # Want shape [B, 1, 1] (NOT [1, B, 1]) so it broadcasts with [B, L, H]
+                            mask = (1.0 - done_t).view(-1, 1, 1)
+
+                            if hasattr(state, "hidden") and state.hidden is not None:
+                                state.hidden = state.hidden * mask
+                            if hasattr(state, "cell") and getattr(state, "cell") is not None:
+                                state.cell = state.cell * mask
+
                         step_obs_fields = {"obs": mb.obs.obs[:, t], "detach_state": False}
                         if hasattr(mb.obs, "mask") and mb.obs.mask is not None:
                             step_obs_fields["mask"] = mb.obs.mask[:, t]
