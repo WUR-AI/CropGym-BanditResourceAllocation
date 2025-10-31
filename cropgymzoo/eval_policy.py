@@ -176,7 +176,9 @@ class MultiRLAgent(BaseAgent):
             batch=Batch(
                 {
                     'obs': {
-                        'obs': self.obs_rms.norm(obs['observation']),
+                        'obs': self.obs_rms.norm(obs['observation'])
+                        if not isinstance(self.obs_rms, dict)
+                        else self.obs_rms[agent].norm(obs['observation']),
                         'mask': self.env._get_mask(agent),
                     },
                     'info': info,
