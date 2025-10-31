@@ -22,7 +22,11 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
                  agents: list[str],
                  update_obs_rms: bool = True,
                  shared: bool = True,
-                 device="cpu",):
+                 device: str = "cpu",
+                 reward_scale: float = 1e5,
+                 reward_clip: tuple[float, float] | None = None,
+                 log_true_reward: bool = True,
+     ):
         super().__init__(venv, update_obs_rms)
         self.device = device
 
@@ -33,6 +37,12 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
         self.agents = agents
         self.shared = shared
         self.num_agents = len(self.agents)
+
+        # reward scaling controls
+        self.old_rew = None
+        self.reward_scale: float = float(reward_scale)
+        self.reward_clip: tuple[float, float] | None = reward_clip
+        self.log_true_reward: bool = bool(log_true_reward)
 
         # observations
         self.obs_rms: RunningMeanStd | dict = (
@@ -112,6 +122,17 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
                     agent_id: False for agent_id in self.agents
                 }
 
+        # initialize last raw rewards after reset
+        try:
+            env_num = getattr(self.venv, "env_num", None)
+            if env_num is None:
+                # fall back to len(obs)
+                env_num = len(obs)
+            self.old_rew = np.zeros(int(env_num), dtype=np.float32)
+        except Exception:
+            self.old_rew = None
+
+
         return obs, info
 
     def step(
@@ -120,6 +141,23 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
             env_id: int | list[int] | np.ndarray | None = None,
     ):
         step_results = self.venv.step(action, env_id)
+
+        # Reward scaling: preserve raw reward, scale a sanitized copy
+        raw_rew = step_results[1]
+        if isinstance(raw_rew, torch.Tensor):
+            raw_rew = raw_rew.detach().cpu().numpy()
+        self.old_rew = np.array(raw_rew, copy=True)
+
+        rew = np.array(raw_rew, dtype=np.float64, copy=True)
+        rew = np.nan_to_num(rew, nan=0.0, posinf=0.0, neginf=0.0)
+        # fixed scale towards O(1-10) magnitudes for stability
+        if self.reward_scale and self.reward_scale != 0.0:
+            rew = rew / float(self.reward_scale)
+        if self.reward_clip is not None:
+            lo, hi = self.reward_clip
+            rew = np.clip(rew, float(lo), float(hi))
+        rew = rew.astype(np.float32)
+
 
         # Process obs
 
@@ -163,15 +201,23 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
 
         info = []
         for i, _info in enumerate(step_results[-1]):
-            info.append(self.collapse_info_dict(_info))
+            collapsed = self.collapse_info_dict(_info)
+            # annotate rewards for logging/analysis
+            if self.log_true_reward:
+                try:
+                    collapsed["TrueReward"] = float(self.old_rew[i])
+                    collapsed["ScaledReward"] = float(rew[i])
+                except Exception:
+                    pass
             # Add resets flag in info
-            info[i]["ResetMask"] = False
+            collapsed["ResetMask"] = False
+            info.append(collapsed)
         info = np.stack(info)
 
         # Process terminates
         terminateds = self._get_terminateds(obs, step_results[2], env_id)
 
-        return obs, step_results[1], terminateds, step_results[-2], info
+        return obs, rew, terminateds, step_results[-2], info
 
     def _get_terminateds(self, obs, terminated_ids, env_id) -> np.array:
         if not self.subproc:
@@ -211,6 +257,8 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
         return deepcopy(self.old_obs)
 
     def get_original_reward(self) -> np.ndarray:
+        if getattr(self, "old_rew", None) is None:
+            return np.array([], dtype=np.float32)
         return self.old_rew.copy()
 
 
