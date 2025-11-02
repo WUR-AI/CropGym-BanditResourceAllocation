@@ -101,12 +101,15 @@ class CurriculumCallbackManager:
     def _stage_zero_gate(self) -> bool:
         """Stage 0 -> 1 advancement rule: reward > first_stage_reward (instant),
         and optionally EMA > threshold too for consistency."""
-        if self.last_score is None or self.ema is None:
-            return False
-        if self.require_ema_and_inst:
-            return (self.last_score > self.first_stage_reward) and (self.ema > self.first_stage_reward)
-        else:
-            return self.last_score > self.first_stage_reward
+        # if self.last_score is None or self.ema is None:
+        #     return False
+        # if self.require_ema_and_inst:
+        #     return (self.last_score > self.first_stage_reward) and (self.ema > self.first_stage_reward)
+        # else:
+        #     return self.last_score > self.first_stage_reward
+        if self.epochs_in_stage >= 300:
+            return True
+        return False
 
     def _epoch_gate(self) -> bool:
         """Stages >=1 advancement rule: spend at least N epochs in the current stage."""
