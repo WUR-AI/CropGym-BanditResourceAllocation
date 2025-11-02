@@ -122,6 +122,70 @@ def _masked_mean(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     denom = mask.sum().clamp_min(1.0)
     return (x * mask).sum() / denom
 
+class RunningMeanStdSafe:
+    """Calculates the running mean and std of a data stream.
+
+    https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
+
+    :param mean: the initial mean estimation for data array. Default to 0.
+    :param std: the initial standard error estimation for data array. Default to 1.
+    :param clip_max: the maximum absolute value for data array. Default to
+        10.0.
+    :param epsilon: To avoid division by zero.
+    """
+
+    def __init__(
+        self,
+        mean: float | np.ndarray = 0.0,
+        std: float | np.ndarray = 1.0,
+        clip_max: float | None = 10.0,
+        epsilon: float = np.finfo(np.float32).eps.item(),
+    ) -> None:
+        self.mean = np.asarray(mean, dtype=np.float64)
+        # NOTE: the "std" argument is actually variance in Tianshou's RMS usage
+        self.var = np.asarray(std, dtype=np.float64)
+        self.clip_max = clip_max
+        self.count = int(0)
+        self.eps = float(epsilon)
+        # Safety bounds to avoid exploding/vanishing scales
+        self._min_var = np.float64(1e-12)
+        self._max_var = np.float64(1e12)
+
+    def norm(self, data_array: float | np.ndarray) -> float | np.ndarray:
+        # data_array = (data_array - self.mean) / np.sqrt(self.var + self.eps)
+        data_array = (np.asarray(data_array, dtype=np.float64) - self.mean) / np.sqrt(np.clip(self.var, self._min_var, self._max_var) + self.eps)
+        if self.clip_max:
+            data_array = np.clip(data_array, -self.clip_max, self.clip_max)
+        return data_array
+
+    def update(self, data_array: np.ndarray) -> None:
+        """Add a batch of item into RMS with the same shape, modify mean/var/count."""
+        data_array = np.asarray(data_array, dtype=np.float64)
+        if data_array.ndim == 0:
+            data_array = data_array[None]
+        batch_mean = np.mean(data_array, axis=0)
+        batch_var = np.var(data_array, axis=0)
+        batch_count = int(data_array.shape[0])
+
+        if batch_count <= 0:
+            return
+
+        delta = batch_mean - self.mean
+        total_count = self.count + batch_count
+
+        new_mean = self.mean + delta * (batch_count / total_count)
+        m_a = self.var * self.count
+        m_b = batch_var * batch_count
+        m_2 = m_a + m_b + (delta ** 2) * (self.count * batch_count / total_count)
+        new_var = m_2 / total_count
+
+        # Safety clamps
+        new_var = np.clip(new_var, self._min_var, self._max_var)
+
+        self.mean, self.var = new_mean, new_var
+        self.count = total_count
+
+
 
 class IPPOPolicy(PPOPolicy):
     def __init__(
@@ -181,7 +245,8 @@ class LagrangianIPPOPolicy(IPPOPolicy):
         super().__init__(**kwargs)
 
         self.constraint_critic = constraint_critic
-        self.const_rms = RunningMeanStd()
+        self.const_rms = RunningMeanStdSafe()
+        self.ret_rms = RunningMeanStdSafe()
         self.cf_coef = constraint_loss_coefficient
         self.lagrange = Lagrange(
             cost_limit=0.0,
@@ -347,9 +412,9 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                         if hasattr(getattr(flat, field_name), 'device')
                         else None
                     )
-                # # Squeeze trailing singleton action dim if present
-                # if field_name == 'act' and x.ndim >= 2 and x.shape[-1] == 1:
-                #     x = x.squeeze(-1)
+                # Squeeze trailing singleton dims for discrete fields that should be scalar per-step
+                if field_name in ("act", "logp_old") and x.ndim >= 2 and x.shape[-1] == 1:
+                    x = x.squeeze(-1)
                 xs.append(pad_to_T_general(x, t))
             return torch.stack(xs, dim=0)  # [B, T, ...]
 
@@ -501,11 +566,25 @@ class LagrangianIPPOPolicy(IPPOPolicy):
         batch.v_s = torch.cat(v_s, dim=0).flatten()  # old value
         batch.c_s = torch.cat(c_s, dim=0).flatten()
 
+        # === Add safety checks for NaNs here ===
+        if torch.isnan(batch.v_s).any() or torch.isnan(batch.c_s).any():
+            print("NaNs detected in value or constraint predictions!")
+            print("v_s:", batch.v_s)
+            print("c_s:", batch.c_s)
+        assert not torch.isnan(batch.v_s).any(), "NaN detected in batch.v_s"
+        assert not torch.isnan(batch.c_s).any(), "NaN detected in batch.c_s"
+
         v_s = batch.v_s.cpu().numpy()
         v_s_ = torch.cat(v_s_, dim=0).flatten().cpu().numpy()
 
         c_s = batch.c_s.cpu().numpy()
         c_s_ = torch.cat(c_s_, dim=0).flatten().cpu().numpy()
+
+        # Also check after conversion to numpy, just in case
+        assert not np.isnan(v_s).any(), "NaN detected in v_s (numpy)"
+        assert not np.isnan(v_s_).any(), "NaN detected in v_s_ (numpy)"
+        assert not np.isnan(c_s).any(), "NaN detected in c_s (numpy)"
+        assert not np.isnan(c_s_).any(), "NaN detected in c_s_ (numpy)"
         # when normalizing values, we do not minus self.ret_rms.mean to be numerically
         # consistent with OPENAI baselines' value normalization pipeline. Empirical
         # study also shows that "minus mean" will harm performances a tiny little bit
@@ -517,6 +596,20 @@ class LagrangianIPPOPolicy(IPPOPolicy):
         if self.const_norm:
             c_s = c_s * np.sqrt(self.const_rms.var + self._eps)
             c_s_ = c_s_ * np.sqrt(self.const_rms.var + self._eps)
+            # Guard the running variance and compute a bounded scale
+            # var = np.asarray(self.const_rms.var, dtype=np.float64)
+            # if not np.all(np.isfinite(var)):
+            #     var = np.float64(1.0)
+            # var = np.clip(var, 1e-12, 1e6)
+            # scale = np.sqrt(var + float(self._eps))
+            # # Bound the effective scale to avoid overflow on multiplication
+            # scale = float(np.clip(scale, 1e-3, 1e3))
+            # # Promote to float64 during scaling to reduce overflow, then keep as float64 for downstream np ops
+            # c_s = (c_s.astype(np.float64) * scale)
+            # c_s_ = (c_s_.astype(np.float64) * scale)
+            # # Final magnitude clamp (acts as a last-resort safety net)
+            # c_s = np.clip(c_s, -1e12, 1e12)
+            # c_s_ = np.clip(c_s_, -1e12, 1e12)
         unnormalized_returns, advantages = self.compute_episodic_return(
             batch,
             buffer,
@@ -536,6 +629,12 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             gae_lambda=self.gae_lambda,
         )
 
+        # Sanity guard against any remaining numerical issues
+        if not np.all(np.isfinite(const_returns)):
+            const_returns = np.nan_to_num(const_returns, nan=0.0, posinf=1e12, neginf=-1e12)
+        if not np.all(np.isfinite(constraint_advantages)):
+            constraint_advantages = np.nan_to_num(constraint_advantages, nan=0.0, posinf=1e12, neginf=-1e12)
+
         if self.rew_norm:
             batch.returns = unnormalized_returns / np.sqrt(self.ret_rms.var + self._eps)
             self.ret_rms.update(unnormalized_returns)
@@ -551,6 +650,12 @@ class LagrangianIPPOPolicy(IPPOPolicy):
 
         batch.const_returns = to_torch_as(batch.const_returns, batch.c_s)
         batch.const_adv = to_torch_as(constraint_advantages, batch.c_s)
+        if torch.isnan(batch.adv).any() or torch.isnan(batch.const_adv).any():
+            print("NaNs detected in value or constraint predictions!")
+            print("adv:", batch.adv)
+            print("const_adv:", batch.const_adv)
+        assert not torch.isnan(batch.adv).any(), "NaN detected in batch.adv"
+        assert not torch.isnan(batch.const_adv).any(), "NaN detected in batch.const_adv"
         return cast(BatchWithAdvantagesProtocol, batch)
 
     @staticmethod
@@ -708,67 +813,41 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                     mb_h0_fields = {"hidden": h0.hidden[s:e]}
                     if hasattr(h0, "cell") and getattr(h0, "cell") is not None:
                         mb_h0_fields["cell"] = h0.cell[s:e]
-                    mb_h0 = Batch(mb_h0_fields)
+                    # mb_h0 = Batch(mb_h0_fields)
 
-                    # === Time-loop unroll with done-mask resets (CleanRL-style) ===
-                    bsz, tlen = mb.obs.obs.shape[0], mb.obs.obs.shape[1]
-                    state = mb_h0  # zeros or provided initial window state
-                    logp_steps, ent_steps = [], []
-                    for t in range(tlen):
-                        # reset state at episode boundaries
-                        if hasattr(mb, "done") and mb.done is not None:
-                            # done_t = mb.done[:, t].float()  # [B]
-                            # mask = (1.0 - done_t).view(1, -1, 1)
-                            # mb.done[:, t]: shape [B]; build a mask that broadcasts over [B, L, H]
-                            # Use the same device/dtype as the hidden state to avoid device/type mismatches.
-                            ref = state.hidden if hasattr(state, "hidden") and state.hidden is not None else None
-                            done_t = mb.done[:, t]
-                            if ref is not None:
-                                done_t = done_t.to(device=ref.device, dtype=ref.dtype)
-                            else:
-                                done_t = done_t.float()
-                            # Want shape [B, 1, 1] (NOT [1, B, 1]) so it broadcasts with [B, L, H]
-                            mask = (1.0 - done_t).view(-1, 1, 1)
+                    mb.obs['detach_state'] = False
 
-                            if hasattr(state, "hidden") and state.hidden is not None:
-                                state.hidden = state.hidden * mask
-                            if hasattr(state, "cell") and getattr(state, "cell") is not None:
-                                state.cell = state.cell * mask
 
-                        step_obs_fields = {"obs": mb.obs.obs[:, t], "detach_state": False}
-                        if hasattr(mb.obs, "mask") and mb.obs.mask is not None:
-                            step_obs_fields["mask"] = mb.obs.mask[:, t]
-                        if hasattr(mb.obs, "agent_id") and mb.obs.agent_id is not None:
-                            step_obs_fields["agent_id"] = (
-                                mb.obs.agent_id[:, t] if getattr(mb.obs.agent_id, "ndim", 1) > 1 else mb.obs.agent_id
-                            )
-                        step_batch = Batch(obs=Batch(step_obs_fields), info=mb.info[:, t])
-                        out_t = self(batch=step_batch, state=state)
-                        dist_t = out_t.dist
-                        state = out_t.state  # carry hidden
+                    # Forward the whole [B,T,H] sequence once. Start from mb_h0 for this window.
+                    out_seq = self(Batch(obs=mb.obs, info=mb.info), state=None)
+                    dist_seq = out_seq.dist
+                    # state = out_seq.state  # carry the updated hidden state if you need it later
 
-                        # after computing done/alive for step t (e.g., from mb_valid or a 'Alive' field)
-                        # if "Alive" in mb.info:
-                        #     alive_t = torch.as_tensor(mb.info["Alive"][:, t], device=state.hidden.device).float()
-                        #     state.hidden = state.hidden * alive_t.view(-1, 1, 1)
-                        #     if hasattr(state, "cell") and state.cell is not None:
-                        #         state.cell = state.cell * alive_t.view(-1, 1, 1)
+                    # Compute log-prob and entropy for ALL steps at once
+                    act_bt = mb.act  # may be [B,T] or [B,T,1] for discrete
+                    if act_bt.ndim == 3 and act_bt.shape[-1] == 1:
+                        act_bt = act_bt.squeeze(-1)
+                    logp = dist_seq.log_prob(act_bt)
+                    ent = dist_seq.entropy()
 
-                        # per-step logprob/entropy against stored actions
-                        act_t = mb.act[:, t]
-                        # if act_t.ndim == 2 and act_t.shape[-1] == 1:
-                        #     act_t = act_t.squeeze(-1)
-                        # act_t = act_t.long()
-                        lp_t = dist_t.log_prob(act_t)
-                        if lp_t.ndim > 1: lp_t = lp_t.sum(-1)
-                        ent_t = dist_t.entropy()
-                        if ent_t.ndim > 1: ent_t = ent_t.sum(-1)
-                        logp_steps.append(lp_t)
-                        ent_steps.append(ent_t)
-                    logp = torch.stack(logp_steps, dim=1)  # [B,T]
-                    ent = torch.stack(ent_steps, dim=1)  # [B,T]
+                    # If action space has extra dims, sum across the last dim
+                    if logp.ndim > 2:
+                        logp = logp.sum(dim=-1)
+                    if ent.ndim > 2:
+                        ent = ent.sum(dim=-1)
 
-                    logratio = logp - mb.logp_old
+                    # Ensure [B,T] layout
+                    bsz, tlen = mb.obs.obs.shape[:2]
+                    if logp.ndim == 1:
+                        logp = logp.view(bsz, tlen)
+                    if ent.ndim == 1:
+                        ent = ent.view(bsz, tlen)
+
+                    # logratio = logp - mb.logp_old
+                    logp_old_bt = mb.logp_old
+                    if logp_old_bt.ndim == 3 and logp_old_bt.shape[-1] == 1:
+                        logp_old_bt = logp_old_bt.squeeze(-1)
+                    logratio = logp - logp_old_bt
                     ratios = logratio.exp().float()  # [b, T]
 
                     with torch.no_grad():
