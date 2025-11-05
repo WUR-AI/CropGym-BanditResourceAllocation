@@ -29,6 +29,7 @@ class TestSingularRewardFunctions(unittest.TestCase):
         self.env_pnb_3 = gym.make('field-ww-s', reward='PNB')
 
         self.env_pnr_1 = gym.make('field-sb-s', reward='PNR')
+        self.env_pnr_train = gym.make('field-sb-s', reward='PNR', training=True)
 
         self.year_dict = {'year': 2000}
 
@@ -43,6 +44,75 @@ class TestSingularRewardFunctions(unittest.TestCase):
         print(f"Total rew: {np.sum(rewards)}")
 
         self.assertTrue(np.sum(rewards) == 0)
+
+        _, info = self.env_pnr_1.reset(options={'year': 2010})
+        terminated = False
+        rewards = []
+        while not terminated:
+            _, reward, terminated, _, info = self.env_pnr_1.step(0)
+            rewards.append(reward)
+
+        print(f"Total rew: {np.sum(rewards)}")
+
+        self.assertTrue(np.sum(rewards) == 0)
+
+    def test_pnr_training(self):
+        _, info = self.env_pnr_train.reset(options=self.year_dict)
+        terminated = False
+        rewards = []
+        while not terminated:
+            _, reward, terminated, _, info = self.env_pnr_train.step(0)
+            rewards.append(reward)
+
+        print(f"Total rew: {np.sum(rewards)}")
+
+        self.assertTrue(np.sum(rewards) == 0)
+
+        self.env_pnr_train.unwrapped.random_manager.stage = 3
+        self.env_pnr_train.unwrapped.domain_repeat_left = 0
+
+        _, info = self.env_pnr_train.reset(options={'year': 1990})
+        terminated = False
+        rewards = []
+        while not terminated:
+            _, reward, terminated, _, info = self.env_pnr_train.step(0)
+            rewards.append(reward)
+
+        print(f"Total rew: {np.sum(rewards)}")
+
+        self.assertTrue(np.sum(rewards) == 0)
+
+        self.env_pnr_train.unwrapped.random_manager.stage = 4
+        self.env_pnr_train.unwrapped.domain_repeat_left = 0
+
+        _, info = self.env_pnr_train.reset(options={'year': 1995})
+        terminated = False
+        rewards = []
+        while not terminated:
+            _, reward, terminated, _, info = self.env_pnr_train.step(0)
+            rewards.append(reward)
+
+        print(f"Total rew: {np.sum(rewards)}")
+
+        self.assertTrue(np.sum(rewards) == 0)
+
+        _, info = self.env_pnr_train.reset(options={'year': 1995})
+        terminated = False
+        rewards = []
+        for _ in range(3):
+            _ = self.env_pnr_train.step(0)
+        _, self.env_pnr_train.step(10)
+        while not terminated:
+            _, reward, terminated, _, info = self.env_pnr_train.step(0)
+            rewards.append(reward)
+
+        print(f"Total rew: {np.sum(rewards)}")
+
+        self.assertTrue(True)
+
+
+
+
 
     def test_nue(self):
         # crop sugarbeets

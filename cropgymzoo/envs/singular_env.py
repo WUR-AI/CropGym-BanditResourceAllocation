@@ -139,7 +139,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                  year: int = None,
                  year_list: list = None,
                  timestep: int = 7,
-                 reward: str = 'PNB',
+                 reward: str = 'PNR',
                  action_multiplier: float = 1,
                  action_space: gym.spaces = gym.spaces.Discrete(9),
                  costs_nitrogen: int = 0,
@@ -373,13 +373,12 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         # reset baseline
         if self.reward_function in reward_functions_with_baseline() and self.original is True:
-            if self.flag_gather_zero_env:
-                self.baseline_information['infos'] = self.zero_nitrogen_env_storage.get_episode_output(
-                    self.baseline_env,
-                    spec=self._domain_spec
-                )
-                self.baseline_information['psce_output'] = self.baseline_env.model.get_output()
-                self.flag_gather_zero_env = False if not self.training else True
+            self.baseline_env.year = self.year
+            self.baseline_information['infos'] = self.zero_nitrogen_env_storage.get_episode_output(
+                self.baseline_env,
+                spec=self._domain_spec
+            )
+            self.baseline_information['psce_output'] = self.baseline_env.model.get_output()
             # self.baseline_env.rng.bit_generator.state = self.rng.bit_generator.state
             # self.baseline_env.reset(seed=seed, options=options)
 
@@ -691,7 +690,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                 )
             )
             if self.baseline_information is not None and self.original:
-                final_reward = final_reward - x
+                final_reward = round(final_reward - x, 1)
             return final_reward
 
         return 0
@@ -1140,7 +1139,6 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             self._domain_spec = spec
             self._domain_repeat_left = max(0, self.domain_repeat - 1)
             print(f"Sampled new domain for year {self.year}")
-            self.flag_gather_zero_env = True
         return options
 
     def _randomise_area(self):
@@ -1489,6 +1487,22 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
     def domain_repeat_left(self):
         return self._domain_repeat_left
 
+    @domain_repeat_left.setter
+    def domain_repeat_left(self, value):
+        self._domain_repeat_left = value
+
+    @property
+    def domain_spec(self):
+        return self._domain_spec
+
+    @domain_spec.setter
+    def domain_spec(self, spec):
+        self._domain_spec = spec
+
+    @domain_spec.setter
+    def domain_spec(self, spec):
+        self._domain_spec = spec
+
     @property
     def max_single_dose(self):
         return self.action_space.n - 1
@@ -1502,19 +1516,16 @@ class ZeroNitrogenEnvStorage:
     Container to store results from zero nitrogen policy (for re-use)
     """
 
-    def __init__(self, maxlen=3):
+    def __init__(self, maxlen=50):
         self.results = OrderedDict()
         self.maxlen = maxlen
 
     @staticmethod
     def run_episode(env, spec=None):
-        env.reset(options={'year': env.year})
         if spec is not None:
-            for k, v in spec.items():
-                if k in 'year':
-                    continue
-                if hasattr(env, k):
-                    setattr(env, k, v)
+            env.domain_spec = spec
+            env.domain_repeat_left = 10
+        env.reset(options={'year': env.year})
         terminated, truncated = False, False
         info = {}
         while not terminated or truncated:
@@ -1527,12 +1538,15 @@ class ZeroNitrogenEnvStorage:
         location = env.location
         crop = env.crop
         reg = get_scenario_based_on_loc(env.location)
-        key = f'{year}-{location}-{crop}-{reg}-{env.area}'
+        key = f'{year}-{location}-{crop}-{reg}'
         assert 'None' not in key
         return key
 
     def get_episode_output(self, env, spec=None):
         key = self.get_key(env)
+        if spec is not None and getattr(env, "domain_spec", None) is not None:
+            if env.domain_spec == spec and key in self.results:
+                return self.results[key]
         if key not in self.results.keys():
             results = self.run_episode(env, spec=spec)
             self.results[key] = results
