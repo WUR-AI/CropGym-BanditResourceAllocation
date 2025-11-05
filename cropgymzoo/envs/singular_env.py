@@ -6,6 +6,7 @@ import math
 from copy import deepcopy
 
 import yaml
+from collections import OrderedDict
 
 import functools
 import gymnasium as gym
@@ -280,6 +281,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self._init_infos()
 
         # initialize Zero nitrogen simulations
+        self.flag_gather_zero_env = True
         self._init_zero_env(**kwargs)
 
         # reset the env at start
@@ -334,10 +336,6 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         # Only for invalid action masking
         # self.reset_non_zero_action_count()
-        # reset baseline
-        if self.reward_function in reward_functions_with_baseline() and self.original is True:
-            self.baseline_env.rng.bit_generator.state = self.rng.bit_generator.state
-            self.baseline_env.reset(seed=seed, options=options)
 
         # return the original agro management class shifts during randos
         self.agmt = deepcopy(self.original_agmt)
@@ -372,6 +370,18 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         # get infos
         self._init_infos()
         self._populate_infos(self.model.get_output(), 0, 0, False)
+
+        # reset baseline
+        if self.reward_function in reward_functions_with_baseline() and self.original is True:
+            if self.flag_gather_zero_env:
+                self.baseline_information['infos'] = self.zero_nitrogen_env_storage.get_episode_output(
+                    self.baseline_env,
+                    spec=self._domain_spec
+                )
+                self.baseline_information['psce_output'] = self.baseline_env.model.get_output()
+                self.flag_gather_zero_env = False if not self.training else True
+            # self.baseline_env.rng.bit_generator.state = self.rng.bit_generator.state
+            # self.baseline_env.reset(seed=seed, options=options)
 
         return self._observation(obs), self.infos
 
@@ -604,10 +614,11 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         amount = action * 10  #kg/ha
 
         output_baseline = []
-        if self.reward_function in reward_functions_with_baseline():
+        if self.reward_function in reward_functions_with_baseline() and self.original is True:
 
-            _, _, _, _, _ = self.baseline_env.step(0)
-            output_baseline = self.baseline_env.model.get_output()
+            output_baseline = self.baseline_information['psce_output']
+            # Trim to current date
+            output_baseline = output_baseline[:len(output)]
 
         self.rewards_obj.update_profit(output, amount, year=self.date.year)
 
@@ -663,8 +674,12 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             )
             return reward
 
-        elif terminated and self.reward_function == 'PNB':
-            reward = (
+        elif terminated and self.reward_function in ['PNB', 'PNR']:
+            if not self.original:
+                self.infos['FinalReward'] = reward
+            if self.baseline_information is not None and self.original:
+                x = self.baseline_information['infos']['Reward'][-1] - self.baseline_information['infos']['FinalReward'] - reward
+            final_reward = (
                 self.reward_class.return_final_reward(
                     obj=self.reward_container,
                     n_fertilized=self.reward_container.get_total_fertilization,
@@ -675,7 +690,9 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                     crop_name=self.crop,
                 )
             )
-            return reward
+            if self.baseline_information is not None and self.original:
+                final_reward = final_reward - x
+            return final_reward
 
         return 0
 
@@ -1123,6 +1140,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             self._domain_spec = spec
             self._domain_repeat_left = max(0, self.domain_repeat - 1)
             print(f"Sampled new domain for year {self.year}")
+            self.flag_gather_zero_env = True
         return options
 
     def _randomise_area(self):
@@ -1303,6 +1321,12 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             self.rewards_obj.crop_price = self.crop_price
             self.rewards_obj.fertilizer_price = self.fertilizer_price
 
+        elif self.reward_function == 'PNR':
+            self.reward_class = self.rewards_obj.PNR(self.timestep, costs_nitrogen, budget_left=self.budget_left)
+            self.reward_container = self.rewards_obj.ContainerNUE(self.timestep, costs_nitrogen)
+            self.rewards_obj.crop_price = self.crop_price
+            self.rewards_obj.fertilizer_price = self.fertilizer_price
+
         elif self.reward_function == 'PNY':
             self.reward_class = self.rewards_obj.PNY(self.timestep, costs_nitrogen)
             self.reward_container = self.rewards_obj.ContainerNUE(self.timestep, costs_nitrogen)
@@ -1362,6 +1386,9 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.consecutive_mask_counter = 0
 
     def _init_zero_env(self, **kwargs):
+        self._env_baseline = None
+        self.zero_nitrogen_env_storage = None
+        self.baseline_information = None
         if self.reward_function in reward_functions_with_baseline() and self.original is not False:
             self._env_baseline = ParcelEnv(
                 crop_features=self.crop_features,
@@ -1377,9 +1404,11 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                 original=False,  # important!
                 flatten_obs=True,
                 type=self.soil_type,
+                domain_repeat=self.domain_repeat,
                 **kwargs,
             )
             self.zero_nitrogen_env_storage = ZeroNitrogenEnvStorage()
+            self.baseline_information = {}
 
     def _init_obs_keys(self):
         self.obs_keys = tuple(
@@ -1473,40 +1502,42 @@ class ZeroNitrogenEnvStorage:
     Container to store results from zero nitrogen policy (for re-use)
     """
 
-    def __init__(self):
-        self.results = {}
+    def __init__(self, maxlen=3):
+        self.results = OrderedDict()
+        self.maxlen = maxlen
 
     @staticmethod
-    def run_episode(env):
-        env.reset()
+    def run_episode(env, spec=None):
+        env.reset(options={'year': env.year})
+        if spec is not None:
+            for k, v in spec.items():
+                if k in 'year':
+                    continue
+                if hasattr(env, k):
+                    setattr(env, k, v)
         terminated, truncated = False, False
-        infos_this_episode = []
+        info = {}
         while not terminated or truncated:
             _, _, terminated, truncated, info = env.step(0)
-            infos_this_episode.append(info)
-        variables = infos_this_episode[0].keys()
-        episode_info = {}
-        for v in variables:
-            episode_info[v] = {}
-        for v in variables:
-            for info_dict in infos_this_episode:
-                episode_info[v].update(info_dict[v])
-        return episode_info
+        return info
 
     @staticmethod
     def get_key(env):
-        # year = env.date.year
-        year = env.get_harvest_year()
-        location = env.loc
-        key = f'{year}-{location}'
+        year = env.year
+        location = env.location
+        crop = env.crop
+        reg = get_scenario_based_on_loc(env.location)
+        key = f'{year}-{location}-{crop}-{reg}-{env.area}'
         assert 'None' not in key
         return key
 
-    def get_episode_output(self, env):
+    def get_episode_output(self, env, spec=None):
         key = self.get_key(env)
         if key not in self.results.keys():
-            results = self.run_episode(env)
+            results = self.run_episode(env, spec=spec)
             self.results[key] = results
+            if len(self.results) > self.maxlen:
+                self.results.popitem(last=False)
         assert bool(self.results[key]), "key empty; check PCSE output"
         return self.results[key]
 

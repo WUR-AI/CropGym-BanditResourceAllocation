@@ -19,16 +19,30 @@ from cropgymzoo.utils.plotters import plot_results
 
 class TestSingularRewardFunctions(unittest.TestCase):
     def setUp(self):
-        self.env_nue = gym.make('field-1', reward='NUE')
-        self.env_pny_1 = gym.make('field-1', reward='PNY')
-        self.env_pny_2 = gym.make('field-4', reward='PNY')
-        self.env_pny_3 = gym.make('field-2', reward='PNY')
+        self.env_nue = gym.make('field-sb-s', reward='NUE')
+        self.env_pny_1 = gym.make('field-sb-s', reward='PNY')
+        self.env_pny_2 = gym.make('field-pt-s', reward='PNY')
+        self.env_pny_3 = gym.make('field-ww-s', reward='PNY')
 
-        self.env_pnb_1 = gym.make('field-1', reward='PNB')
-        self.env_pnb_2 = gym.make('field-2', reward='PNB')
-        self.env_pnb_3 = gym.make('field-3', reward='PNB')
+        self.env_pnb_1 = gym.make('field-sb-s', reward='PNB')
+        self.env_pnb_2 = gym.make('field-pt-s', reward='PNB')
+        self.env_pnb_3 = gym.make('field-ww-s', reward='PNB')
+
+        self.env_pnr_1 = gym.make('field-sb-s', reward='PNR')
 
         self.year_dict = {'year': 2000}
+
+    def test_pnr(self):
+        _, info = self.env_pnr_1.reset(options=self.year_dict)
+        terminated = False
+        rewards = []
+        while not terminated:
+            _, reward, terminated, _, info = self.env_pnr_1.step(0)
+            rewards.append(reward)
+
+        print(f"Total rew: {np.sum(rewards)}")
+
+        self.assertTrue(np.sum(rewards) == 0)
 
     def test_nue(self):
         # crop sugarbeets
