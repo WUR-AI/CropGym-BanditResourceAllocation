@@ -42,9 +42,7 @@ class NoisyOpenMeteo(OpenMeteoWeatherDataProvider):
         copied_rec.IRRAD = round(np.clip(copied_rec.IRRAD + r.normal(0, self.SIGMA_OTHER * abs(copied_rec.IRRAD)), 0., 40e6), 0)
         copied_rec.WIND = np.clip(copied_rec.WIND + r.normal(0, self.SIGMA_OTHER * abs(copied_rec.WIND)), 0., 100.)
 
-        # sanity check
-        # special random for temperature; ensure TMAX > TMIN
-        # perturbing daily mean rather than the values
+        # sanity check for temperature; ensure TMAX > TMIN
         t_mean = (copied_rec.TMAX + copied_rec.TMIN) / 2
         t_range = copied_rec.TMAX - copied_rec.TMIN
 
@@ -53,7 +51,6 @@ class NoisyOpenMeteo(OpenMeteoWeatherDataProvider):
 
         t_range = max(t_range, 0.1)
 
-        # get new noisy values from the mean
         copied_rec.TMIN = np.clip(t_mean - 0.5 * t_range, -50., 60.)
         copied_rec.TMAX = np.clip(t_mean + 0.5 * t_range, -50., 60.)
 
@@ -70,5 +67,5 @@ class NoisyOpenMeteo(OpenMeteoWeatherDataProvider):
         for f in ["RAIN", "IRRAD", "TMAX", "TMIN", "VAP", "TEMP", "WIND"]:
             setattr(copied_rec, f, round(getattr(copied_rec, f), 2))
 
-        return copied_rec  # same copied object, now containing noisy values
+        return deepcopy(copied_rec)
 

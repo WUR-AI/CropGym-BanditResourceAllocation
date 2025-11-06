@@ -352,8 +352,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.overwrite_year(year=options['year'])
 
         # use options. Shift soil and randomise N conditions
-        site_params = self._special_init_conditions()
-        options['site_params'] = site_params
+        # site_params = self._special_init_conditions()
+        # options['site_params'] = site_params
 
         # randomise domain
         options = self._randomise_domain(options)
@@ -706,8 +706,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
     def _overwrite_nitrogen_rain_concentration(self):
         # N concentration in rain for deposition
-        nh4concr, no3concr = convert_year_to_n_concentration(self.date.year,
-                                                             loc=self.loc,
+        nh4concr, no3concr = convert_year_to_n_concentration(2021,
+                                                             loc=self.location,
                                                              wdp=self.weather_data_provider,)
 
         site_parameters = {'NH4ConcR': nh4concr, 'NO3ConcR': no3concr, }
@@ -1189,10 +1189,11 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             spec['co2'] = None
 
         # weather flag
-        spec['weather'] = bool(self.random_manager.weather)
-        spec['weather_seed'] = int(self.rng.integers(0, 2 ** 31 - 1))
-        if spec['weather']:
-            options['weather'] = True
+        if self.random_manager.weather:
+            spec['weather'] = bool(self.random_manager.weather)
+            spec['weather_seed'] = int(self.rng.integers(0, 2 ** 31 - 1))
+        else:
+            spec['weather'] = None
 
         # area
         if self.random_manager.area:
@@ -1243,7 +1244,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             options['soil_params'] = spec['soil_params']
 
         # weather randomization flag
-        if spec.get('weather'):
+        if spec.get('weather') is not None:
             options['weather'] = True
 
         return options
@@ -1260,9 +1261,6 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         self.carbon_dioxide_level = self._get_carbon_dioxide_levels()
 
-        nh4conc, no3conc = convert_year_to_n_concentration(self.year,
-                                                         loc=self.location,)
-
         # initialize soil variables
         self._init_soil_variables(
             len_soil=len(soil_parameters['SoilProfileDescription']['SoilLayers'])
@@ -1278,8 +1276,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             # default init; need to change?
             NH4I=nh4i,
             NO3I=no3i,
-            NH4ConcR=nh4conc,
-            NO3ConcR=no3conc,
+            NH4ConcR=1.32,
+            NO3ConcR=0.6,
         )
         return crop_parameters, site_parameters, soil_parameters
 

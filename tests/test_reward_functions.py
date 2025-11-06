@@ -68,6 +68,19 @@ class TestSingularRewardFunctions(unittest.TestCase):
 
         self.assertTrue(np.sum(rewards) == 0)
 
+        # once again for domain repeat
+        _, info = self.env_pnr_train.reset(options=self.year_dict)
+        terminated = False
+        rewards = []
+        while not terminated:
+            _, reward, terminated, _, info = self.env_pnr_train.step(0)
+            rewards.append(reward)
+
+        print(f"Total rew: {np.sum(rewards)}")
+
+        self.assertTrue(np.sum(rewards) == 0)
+
+        # try curriculum advance
         self.env_pnr_train.unwrapped.random_manager.stage = 3
         self.env_pnr_train.unwrapped.domain_repeat_left = 0
 
@@ -458,6 +471,131 @@ class TestSingularRewardFunctions(unittest.TestCase):
         print(f"Sum reward: {sum_reward}")
 
         self.assertTrue(sum_reward > 0)
+
+class TestMultiRewardFunctionPNR(unittest.TestCase):
+    def setUp(self):
+        self.env_full = MultiFieldEnv(
+            training=True,
+        )
+
+    def test_reward_multi_full(self):
+        self.env_full.reset(options={'year': 2020})
+
+        infos = {}
+        rewards = {}
+        for agent in self.env_full.unwrapped.possible_agents:
+            rewards[agent] = []
+        for agent in self.env_full.agent_iter():
+            obs, rew, term, trunc, info = self.env_full.last()
+            rewards[agent].append(rew)
+            if self.env_full.terminations[agent]:
+                infos[agent] = info
+                self.env_full.step(None)
+            else:
+                self.env_full.step(0)
+
+        for agent in self.env_full.unwrapped.possible_agents:
+            print(f"Agent {agent} has cumulative reward {np.sum(rewards[agent])}")
+            self.assertTrue(np.sum(rewards[agent]) == 0)
+
+        self.env_full.reset(options={'year': 2010})
+
+        infos = {}
+        rewards = {}
+        for agent in self.env_full.unwrapped.possible_agents:
+            rewards[agent] = []
+        for agent in self.env_full.agent_iter():
+            obs, rew, term, trunc, info = self.env_full.last()
+            rewards[agent].append(rew)
+            if self.env_full.terminations[agent]:
+                infos[agent] = info
+                self.env_full.step(None)
+            else:
+                self.env_full.step(0)
+
+        for agent in self.env_full.unwrapped.possible_agents:
+            print(f"Agent {agent} has cumulative reward {np.sum(rewards[agent])}")
+            self.assertTrue(np.sum(rewards[agent]) == 0)
+
+        self.env_full._domain_repeat_left = 0
+        self.env_full.reset(options={'year': 2010})
+
+        infos = {}
+        rewards = {}
+        for agent in self.env_full.unwrapped.possible_agents:
+            rewards[agent] = []
+        for agent in self.env_full.agent_iter():
+            obs, rew, term, trunc, info = self.env_full.last()
+            rewards[agent].append(rew)
+            if self.env_full.terminations[agent]:
+                infos[agent] = info
+                self.env_full.step(None)
+            else:
+                self.env_full.step(0)
+
+        for agent in self.env_full.unwrapped.possible_agents:
+            print(f"Agent {agent} has cumulative reward {np.sum(rewards[agent])}")
+            self.assertTrue(np.sum(rewards[agent]) == 0)
+
+
+        self.env_full.reset(options={'year': 2010})
+
+        infos = {}
+        rewards = {}
+        for agent in self.env_full.unwrapped.possible_agents:
+            rewards[agent] = []
+        for agent in self.env_full.agent_iter():
+            obs, rew, term, trunc, info = self.env_full.last()
+            rewards[agent].append(rew)
+            if self.env_full.terminations[agent]:
+                infos[agent] = info
+                self.env_full.step(None)
+            else:
+                self.env_full.step(0)
+
+        for agent in self.env_full.unwrapped.possible_agents:
+            print(f"Agent {agent} has cumulative reward {np.sum(rewards[agent])}")
+            self.assertTrue(np.sum(rewards[agent]) == 0)
+
+        self.env_full._domain_repeat_left = 0
+        self.env_full.set_curriculum_stage(3)
+        self.env_full.reset(options={'year': 2010})
+
+        infos = {}
+        rewards = {}
+        for agent in self.env_full.unwrapped.possible_agents:
+            rewards[agent] = []
+        for agent in self.env_full.agent_iter():
+            obs, rew, term, trunc, info = self.env_full.last()
+            rewards[agent].append(rew)
+            if self.env_full.terminations[agent]:
+                infos[agent] = info
+                self.env_full.step(None)
+            else:
+                self.env_full.step(0)
+
+        for agent in self.env_full.unwrapped.possible_agents:
+            print(f"Agent {agent} has cumulative reward {np.sum(rewards[agent])}")
+            self.assertTrue(np.sum(rewards[agent]) == 0)
+
+        self.env_full.reset(options={'year': 2010})
+
+        infos = {}
+        rewards = {}
+        for agent in self.env_full.unwrapped.possible_agents:
+            rewards[agent] = []
+        for agent in self.env_full.agent_iter():
+            obs, rew, term, trunc, info = self.env_full.last()
+            rewards[agent].append(rew)
+            if self.env_full.terminations[agent]:
+                infos[agent] = info
+                self.env_full.step(None)
+            else:
+                self.env_full.step(0)
+
+        for agent in self.env_full.unwrapped.possible_agents:
+            print(f"Agent {agent} has cumulative reward {np.sum(rewards[agent])}")
+            self.assertTrue(np.sum(rewards[agent]) == 0)
 
 class TestMultiRewardFunction(unittest.TestCase):
     def setUp(self):
