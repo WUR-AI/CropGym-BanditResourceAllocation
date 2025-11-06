@@ -47,7 +47,7 @@ def register_predefined_cropgym_instances() -> None:
                 'year': 2000,
                 'name': key,
                 'area': field['area'],
-                'reward': 'PNB',
+                # 'reward': 'PNB',
                 'original': True,
                 'flatten_obs': True,
                 'type': field['type'],

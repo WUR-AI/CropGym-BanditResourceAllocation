@@ -79,6 +79,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
             self,
             seed: int = 107,
             warm_up: int = 0,
+            reward: str = 'PNR',
             use_rl_warm_up_actions: bool = True,
             years: list = get_default_years(),
             training: bool = False,
@@ -94,6 +95,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
             self,
             seed=seed,
             warm_up=warm_up,
+            reward=reward,
             use_rl_warm_up_actions=use_rl_warm_up_actions,
             years=years,
             training=training,
@@ -116,6 +118,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
         self.year_cache = self.year
         self.domain_repeat = domain_repeat
         self._domain_repeat_left = 0
+        self.reward_code = reward
         self.rng, self.seed = gym.utils.seeding.np_random(seed=seed)
 
         self.has_reset = False
@@ -209,6 +212,8 @@ class MultiFieldEnv(AECEnv, EzPickle):
         # reset each field and get obs and infos again
         infos = {}
         for agent, env in self.fields.items():
+            if self.training:
+                env.unwrapped.domain_repeat_left = self._domain_repeat_left
             _, info = env.reset(seed=seed, options=options)
             infos[agent] = info
 
@@ -483,6 +488,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
                     training=self.training,
                     random_manager=make_default_stage_manager(),
                     domain_repeat=self.domain_repeat,
+                    reward=self.reward_code,
                 )
                 self.fields[n] : ParcelEnv = env
             print(f"Fields initialized with seed no. {self.seed}!")
