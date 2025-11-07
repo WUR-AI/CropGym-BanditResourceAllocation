@@ -959,7 +959,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         """
         # deprecated linear equation
         # level = np.clip(1.6567 * self.year - 2939, 290.0, 450.0)
-        self.carbon_dioxide_level = co2_levels()[self.year]
+        self.carbon_dioxide_level = 430  # co2_levels()[self.year]
         return self.carbon_dioxide_level
 
     def _special_init_conditions(self):
@@ -1325,6 +1325,12 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         elif self.reward_function == 'PNY':
             self.reward_class = self.rewards_obj.PNY(self.timestep, costs_nitrogen)
+            self.reward_container = self.rewards_obj.ContainerNUE(self.timestep, costs_nitrogen)
+            self.rewards_obj.crop_price = self.crop_price
+            self.rewards_obj.fertilizer_price = self.fertilizer_price
+
+        elif self.reward_function == 'MPN':
+            self.reward_class = self.rewards_obj.MPN(self.timestep, costs_nitrogen, budget_left=self.budget_left)
             self.reward_container = self.rewards_obj.ContainerNUE(self.timestep, costs_nitrogen)
             self.rewards_obj.crop_price = self.crop_price
             self.rewards_obj.fertilizer_price = self.fertilizer_price
