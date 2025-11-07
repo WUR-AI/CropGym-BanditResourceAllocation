@@ -469,6 +469,34 @@ class PCSEEnv(gym.Env):
         # Define Gym action space
         self.action_space = self._get_action_space()
 
+    def new_wdp(self, options):
+        # Reuse an existing weather provider when possible to avoid heavy re-initialization.
+        rm = getattr(self, 'random_manager', None)
+
+        # --- what we currently have / want ---
+        # current desired "randomized weather" mode (NoisyOpenMeteo) if training+rm.weather
+        curr_randomize_flag = bool(self.training and (rm is not None) and getattr(rm, "weather", False))
+
+        # detect whether we must rebuild
+        need_new_wdp = not hasattr(self, "_weather_data_provider") or (self._weather_data_provider is None)
+
+        # derive the previous mode if we haven't recorded it yet (first run)
+        provider_name = getattr(getattr(self, "_weather_data_provider", None), "__class__", object).__name__ \
+            if hasattr(self, "_weather_data_provider") else ""
+        prev_randomize_flag = getattr(self, "_wdp_randomize_flag", None)
+        if prev_randomize_flag is None and provider_name:
+            # heuristic: if class name is NoisyOpenMeteo, we were in randomized mode
+            prev_randomize_flag = (provider_name == "NoisyOpenMeteo")
+
+        # triggers for a rebuild
+        location_changed = getattr(self, "_wdp_location", None) != self._location
+        randomize_mode_changed = (prev_randomize_flag is not None) and (prev_randomize_flag != curr_randomize_flag)
+        weather_reseed = bool(options.get('weather')) and ('weather_seed' in options)
+
+        need_new_wdp = need_new_wdp or location_changed or randomize_mode_changed or weather_reseed
+
+        return need_new_wdp, rm, curr_randomize_flag
+
     def _init_pcse_model(self, options={}, *args, **kwargs) -> Engine:
 
         # Inject different initial condition every episode if it specified in args
@@ -487,12 +515,28 @@ class PCSEEnv(gym.Env):
                                                                soildata=self._soil_params,
                                                                )
 
-        self._weather_data_provider = get_openmeteo_provider(
-            location=self._location,
-            seed=self.seed,
-            training=self.training,
-            random_manager=getattr(self, 'random_manager', None),  # assumed that it's initialised
-        )
+        # if need to reinitialize wdp
+        need_new_wdp, rm, curr_randomize_flag = self.new_wdp(options)
+
+        if need_new_wdp:
+            # Use an episode-specific seed only when provided; otherwise keep the env seed.
+            seed = options.get('weather_seed', self.seed)
+            self._weather_data_provider = get_openmeteo_provider(
+                location=self._location,
+                seed=seed,
+                training=self.training,
+                random_manager=rm,
+            )
+            # remember state for future resets
+            self._wdp_location = self._location
+            self._wdp_randomize_flag = curr_randomize_flag
+        else:
+            self._weather_data_provider = get_openmeteo_provider(
+                location=self._location,
+                seed=self.seed,
+                training=self.training,
+                random_manager=getattr(self, 'random_manager', None),  # assumed that it's initialised
+            )
 
         # Create a PCSE engine / crop growth model
         model = Engine(self._parameter_provider,
