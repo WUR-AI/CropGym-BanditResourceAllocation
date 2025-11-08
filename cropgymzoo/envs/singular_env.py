@@ -374,11 +374,11 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         # reset baseline
         if self.reward_function in reward_functions_with_baseline() and self.original is True:
             self.baseline_env.year = self.year
-            self.baseline_information['infos'] = self.zero_nitrogen_env_storage.get_episode_output(
-                self.baseline_env,
-                spec=self._domain_spec
-            )
-            self.baseline_information['psce_output'] = self.baseline_env.model.get_output()
+            self.baseline_information['infos'], self.baseline_information['pcse_output'] = \
+                self.zero_nitrogen_env_storage.get_episode_output(
+                    self.baseline_env,
+                    spec=self._domain_spec
+                )
             # self.baseline_env.rng.bit_generator.state = self.rng.bit_generator.state
             # self.baseline_env.reset(seed=seed, options=options)
 
@@ -615,7 +615,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         output_baseline = []
         if self.reward_function in reward_functions_with_baseline() and self.original is True:
 
-            output_baseline = self.baseline_information['psce_output']
+            output_baseline = self.baseline_information['pcse_output']
             # Trim to current date
             output_baseline = output_baseline[:len(output)]
 
@@ -632,7 +632,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             output_baseline=output_baseline,
             obj=self.reward_container,
             **prices
-            if self.reward_function in ['PNY', 'PNB', 'PNR']
+            if self.reward_function in ['PNY', 'PNB', 'PNR', 'MPN']
             else {},
             fresh_yield_fn=self._get_fresh_weight
             if self.crop in ['winterwheat', 'sugarbeet', 'potato']
@@ -1407,6 +1407,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                 flatten_obs=True,
                 type=self.soil_type,
                 domain_repeat=self.domain_repeat,
+                area=self.area,
                 **kwargs,
             )
             self.zero_nitrogen_env_storage = ZeroNitrogenEnvStorage()
@@ -1522,6 +1523,7 @@ class ZeroNitrogenEnvStorage:
 
     def __init__(self, maxlen=50):
         self.results = OrderedDict()
+        self.results_output = OrderedDict()
         self.maxlen = maxlen
 
     @staticmethod
@@ -1546,18 +1548,24 @@ class ZeroNitrogenEnvStorage:
         assert 'None' not in key
         return key
 
+    def get_episode_output_robust(self, env, spec=None):
+        result = self.run_episode(env, spec=spec)
+        return result
+
     def get_episode_output(self, env, spec=None):
         key = self.get_key(env)
         if spec is not None and getattr(env, "domain_spec", None) is not None:
             if env.domain_spec == spec and key in self.results:
-                return self.results[key]
+                return self.results[key], self.results_output[key]
         if key not in self.results.keys():
             results = self.run_episode(env, spec=spec)
             self.results[key] = results
+            self.results_output[key] = env.model.get_output()
             if len(self.results) > self.maxlen:
                 self.results.popitem(last=False)
+                self.results_output.popitem(last=False)
         assert bool(self.results[key]), "key empty; check PCSE output"
-        return self.results[key]
+        return self.results[key], self.results_output[key]
 
     @property
     def get_result(self):
