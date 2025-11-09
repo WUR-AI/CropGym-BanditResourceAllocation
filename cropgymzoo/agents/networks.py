@@ -41,13 +41,13 @@ class IntrinsicCuriosityModuleMARL(IntrinsicCuriosityModule):
 
 
 class FiLMHead(nn.Module):
-    def __init__(self, in_dim, hidden_dim, out_dim, cond_dim):
+    def __init__(self, in_dim, hidden_dim, out_dim, cond_dim, device="mps"):
         super().__init__()
-        self.lin1 = nn.Linear(in_dim, hidden_dim)
-        self.gam1 = nn.Linear(cond_dim, hidden_dim)
-        self.bet1 = nn.Linear(cond_dim, hidden_dim)
+        self.lin1 = nn.Linear(in_dim, hidden_dim, device=device)
+        self.gam1 = nn.Linear(cond_dim, hidden_dim, device=device)
+        self.bet1 = nn.Linear(cond_dim, hidden_dim, device=device)
         self.act  = nn.ReLU()
-        self.out  = nn.Linear(hidden_dim, out_dim)
+        self.out  = nn.Linear(hidden_dim, out_dim, device=device)
         # identity init for (1+gamma)*h + beta at start
         nn.init.zeros_(self.gam1.weight)
         nn.init.zeros_(self.gam1.bias)
@@ -73,11 +73,11 @@ class BudgetCond(nn.Module):
     embedding layer for the discretized budget bin.
     """
 
-    def __init__(self, n_bins, emb_dim=8):
+    def __init__(self, n_bins, emb_dim=8, device="mps"):
         super().__init__()
         # Use a real embedding layer for the categorical bin information
         # n_bins + 1 because bucketize can output values from 0 to n_bins inclusive
-        self.bin_embedding = nn.Embedding(n_bins + 1, emb_dim)
+        self.bin_embedding = nn.Embedding(n_bins + 1, emb_dim, device=device)
 
         # The output dimension will be the embedding dim + 1 continuous feature
         self.out_dim = emb_dim + 1
@@ -433,7 +433,9 @@ class MaskedActor(Actor):
             concat_mask=False,
             last_hidden_dim=None,
             use_film: bool = True,
-            device='cpu'
+            prefer_noop=True,  # enable prior
+            noop_prior_p=0.9,  # ~90% prior on action 0
+            device='mps'
     ):
         super().__init__(preprocess_net=preprocess_net, action_shape=action_dim,
                          softmax_output=False, device=device)  # remember for logits
@@ -441,18 +443,24 @@ class MaskedActor(Actor):
         # self.feature_dim = self.feature_dim - action_dim if self.feature_dim is not None else None
         self.concat_mask = concat_mask
         self.last.flatten_input = False
+        self.prefer_noop = prefer_noop
+        self.noop_prior_p = float(noop_prior_p)
 
         self.n_bins = 5
         self.edges = torch.linspace(0, 1, self.n_bins + 1, device=self.device)[1:-1]
         self.film = use_film
-        if self.film :
-            self.build_cond = BudgetCond(self.n_bins, 1)
+        if self.film:
+            self.build_cond = BudgetCond(self.n_bins, 1).to(device)
             self.last = FiLMHead(
                 in_dim=last_hidden_dim,
                 hidden_dim=32,
                 out_dim=action_dim,
                 cond_dim=self.build_cond.out_dim,
-            )
+            ).to(device)
+        self.last.to(device)
+        if self.prefer_noop:
+            self._init_noop_skew(action_dim, p0=self.noop_prior_p)
+
 
     def forward(self, obs: torch.Tensor, state: torch.Tensor | None = None, info: dict | Batch = None):
 
@@ -529,6 +537,32 @@ class MaskedActor(Actor):
 
         return logits, h
 
+    def _init_noop_skew(self, action_dim: int, p0: float):
+        """
+        One-time init: set output-layer bias so softmax prefers action 0 with prob ~p0
+        (assuming other actions start at 0 logit).
+        """
+        # clamp p0 to (1/A, 1) to avoid degenerate math
+        A = float(action_dim)
+        p0 = max(min(p0, 1.0 - 1e-6), 1.0 / A + 1e-6)
+
+        # required offset vs others=0: b0 = log(p0/(1-p0)) + log(A-1)
+        b0 = (np.log(p0 / (1.0 - p0)) + np.log(A - 1.0))
+
+        # Find the final nn.Linear that outputs action_dim logits
+        lin = None
+        for m in self.last.modules():
+            if isinstance(m, nn.Linear) and m.out_features == action_dim:
+                lin = m
+        if lin is None and isinstance(self.last, nn.Linear) and self.last.out_features == action_dim:
+            lin = self.last
+        if lin is None or lin.bias is None:
+            raise RuntimeError("Could not locate final logits bias to set noop skew.")
+
+        with torch.no_grad():
+            lin.bias.zero_()
+            lin.bias[0] = b0
+
 
 class StackedCritic(Critic):
     def __init__(
@@ -537,7 +571,7 @@ class StackedCritic(Critic):
             concat_mask=False,
             last_hidden_dim=None,
             use_film=True,
-            device='cpu',
+            device='mps',
             **kwargs
     ):
         super().__init__(
@@ -551,13 +585,13 @@ class StackedCritic(Critic):
         self.edges = torch.linspace(0, 1, self.n_bins + 1, device=self.device)[1:-1]
         self.film = use_film
         if self.film:
-            self.build_cond = BudgetCond(self.n_bins, 1)
+            self.build_cond = BudgetCond(self.n_bins, 1).to(device)
             self.last = FiLMHead(
                 in_dim=last_hidden_dim,
                 hidden_dim=32,
                 out_dim=1,
                 cond_dim=self.build_cond.out_dim,
-            )
+            ).to(device)
 
     def forward(self, obs: np.ndarray | torch.Tensor, **kwargs: Any) -> torch.Tensor:
         """Mapping: s_B -> V(s)_B."""
