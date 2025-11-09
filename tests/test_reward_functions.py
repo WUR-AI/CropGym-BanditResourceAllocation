@@ -472,11 +472,56 @@ class TestSingularRewardFunctions(unittest.TestCase):
 
         self.assertTrue(sum_reward > 0)
 
+
+class TestSingularRewardFunctionsMPN(unittest.TestCase):
+    def setUp(self):
+        self.env = gym.make('field-sb-s', reward='MPN', training=True)
+
+
+    def test_reward_mpn(self):
+        _, info = self.env.reset(options={'year': 2000})
+        terminated = False
+        rewards = []
+        while not terminated:
+            _, reward, terminated, _, info = self.env.step(0)
+            rewards.append(reward)
+
+        print(f"Total rew: {np.sum(rewards)}")
+
+        self.assertTrue(np.sum(rewards) == 0)
+
+        _, info = self.env.reset(options={'year': 2010})
+        terminated = False
+        rewards = []
+        while not terminated:
+            _, reward, terminated, _, info = self.env.step(0)
+            rewards.append(reward)
+
+        print(f"Total rew: {np.sum(rewards)}")
+
+        self.assertTrue(np.sum(rewards) == 0)
+
+        _, info = self.env.reset(options={'year': 2010})
+        terminated = False
+        rewards = []
+        for _ in range(3):
+            _ = self.env.step(0)
+        _, self.env.step(10)
+        while not terminated:
+            _, reward, terminated, _, info = self.env.step(0)
+            rewards.append(reward)
+
+        print(f"Total rew: {np.sum(rewards)}")
+
+        self.assertTrue(True)
+
 class TestMultiRewardFunctionPNR(unittest.TestCase):
     def setUp(self):
         self.env_full = MultiFieldEnv(
             training=True,
         )
+
+        self.env_eval = MultiFieldEnv()
 
     def test_reward_multi_full(self):
         self.env_full.reset(options={'year': 2020})
@@ -596,6 +641,65 @@ class TestMultiRewardFunctionPNR(unittest.TestCase):
         for agent in self.env_full.unwrapped.possible_agents:
             print(f"Agent {agent} has cumulative reward {np.sum(rewards[agent])}")
             self.assertTrue(np.sum(rewards[agent]) == 0)
+
+    def test_reward_multi_eval(self):
+        self.env_full.reset(options={'year': 2000})
+
+        infos = {}
+        rewards = {}
+        for agent in self.env_full.unwrapped.possible_agents:
+            rewards[agent] = []
+        for agent in self.env_full.agent_iter():
+            obs, rew, term, trunc, info = self.env_full.last()
+            rewards[agent].append(rew)
+            if self.env_full.terminations[agent]:
+                infos[agent] = info
+                self.env_full.step(None)
+            else:
+                self.env_full.step(0)
+
+        for agent in self.env_full.unwrapped.possible_agents:
+            print(f"Agent {agent} has cumulative reward {np.sum(rewards[agent])}")
+            self.assertTrue(np.sum(rewards[agent]) == 0)
+
+        self.env_full.reset(options={'year': 2010})
+
+        infos = {}
+        rewards = {}
+        for agent in self.env_full.unwrapped.possible_agents:
+            rewards[agent] = []
+        for agent in self.env_full.agent_iter():
+            obs, rew, term, trunc, info = self.env_full.last()
+            rewards[agent].append(rew)
+            if self.env_full.terminations[agent]:
+                infos[agent] = info
+                self.env_full.step(None)
+            else:
+                self.env_full.step(0)
+
+        for agent in self.env_full.unwrapped.possible_agents:
+            print(f"Agent {agent} has cumulative reward {np.sum(rewards[agent])}")
+            self.assertTrue(np.sum(rewards[agent]) == 0)
+
+        self.env_full.reset(options={'year': 2020})
+
+        infos = {}
+        rewards = {}
+        for agent in self.env_full.unwrapped.possible_agents:
+            rewards[agent] = []
+        for agent in self.env_full.agent_iter():
+            obs, rew, term, trunc, info = self.env_full.last()
+            rewards[agent].append(rew)
+            if self.env_full.terminations[agent]:
+                infos[agent] = info
+                self.env_full.step(None)
+            else:
+                self.env_full.step(0)
+
+        for agent in self.env_full.unwrapped.possible_agents:
+            print(f"Agent {agent} has cumulative reward {np.sum(rewards[agent])}")
+            self.assertTrue(np.sum(rewards[agent]) == 0)
+
 
 class TestMultiRewardFunction(unittest.TestCase):
     def setUp(self):
