@@ -109,6 +109,8 @@ def make_ppo_policy(
     mlp_critics = True,
 ) -> PPOPolicy | ICMPolicy:
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "mps" if torch.backends.mps.is_available() else device
+    print(f"Using device: {device}")
 
     if args.lagrangian_ppo:
         obs_constraint_dim = args.obs_constraint_dim
@@ -217,7 +219,7 @@ def make_ppo_policy(
         concat_mask=args.concat_mask,
         last_hidden_dim=hidden[-1],
         use_film=args.use_film,
-    ) if args.lagrangian_ppo else None
+    ).to(device) if args.lagrangian_ppo else None
 
     optim = Adam(
         list(actor.parameters()) + list(critic.parameters()) + list(constraint_critic.parameters()),
@@ -277,7 +279,7 @@ def make_ppo_policy(
         action_dim=act_dim,
         feature_dim=64,
         hidden_sizes=[128],
-    )
+    ).to(device)
 
     icm_optim = torch.optim.Adam(
         icm.parameters(),
@@ -340,11 +342,12 @@ def make_env(independent_learning=True, training=True, seed=107): # type: ignore
         training=training,
         random_budget=False,
         seed=seed,
+        reward='PNR',
     )
     return env
 
 def get_dummy_env():
-    env = MultiFieldEnv()
+    env = MultiFieldEnv(reward='PNR')
     return env
 
 def grab_spaces(seed):
