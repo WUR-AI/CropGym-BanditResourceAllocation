@@ -500,8 +500,8 @@ class MaskedActor(Actor):
 
         # FiLM section
         if self.film:
-            rem_budget = torch.from_numpy(info.BudgetLeft).to(self.device)
-            tot_budget = torch.from_numpy(info.BudgetTotal).to(self.device)
+            rem_budget = self._to_device_f32(info.BudgetLeft, self.device)
+            tot_budget = self._to_device_f32(info.BudgetTotal, self.device)
 
             # compute bins
             fraction = (rem_budget / (tot_budget.clamp_min(1e-8))).clamp(0, 1.0)
@@ -562,6 +562,16 @@ class MaskedActor(Actor):
         with torch.no_grad():
             lin.bias.zero_()
             lin.bias[0] = b0
+
+    @staticmethod
+    def _to_device_f32(x, device):
+        """Convert numpy / tensor / scalar to torch.float32 on given device."""
+        if isinstance(x, torch.Tensor):
+            return x.to(device=device, dtype=torch.float32)
+        elif isinstance(x, np.ndarray):
+            return torch.from_numpy(x).to(device=device, dtype=torch.float32)
+        else:
+            return torch.tensor(x, device=device, dtype=torch.float32)
 
 
 class StackedCritic(Critic):
@@ -624,13 +634,13 @@ class StackedCritic(Critic):
         # FiLM section
         if self.film and info is not None:
             if isinstance(info.BudgetLeft, np.ndarray):
-                rem_budget = torch.from_numpy(info.BudgetLeft).to(self.device)
+                rem_budget = torch.from_numpy(info.BudgetLeft).to(device=self.device, dtype=torch.float32)
             else:
-                rem_budget = info.BudgetLeft.to(self.device)
+                rem_budget = info.BudgetLeft.to(device=self.device, dtype=torch.float32)
             if isinstance(info.BudgetTotal, np.ndarray):
-                tot_budget = torch.from_numpy(info.BudgetTotal).to(self.device)
+                tot_budget = torch.from_numpy(info.BudgetTotal).to(device=self.device, dtype=torch.float32)
             else:
-                tot_budget = info.BudgetTotal.to(self.device)
+                tot_budget = info.BudgetTotal.to(device=self.device, dtype=torch.float32)
 
             # compute bins
             fraction = (rem_budget / (tot_budget.clamp_min(1e-8))).clamp(0, 1.0)
