@@ -990,14 +990,7 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             constraint_advantages = minibatch.const_adv
 
             # learn
-            if not self.recurrent:
-                dist = self(minibatch).dist
-            else:
-                out = self(
-                    batch=minibatch,
-                    state=self._get_hidden_state(minibatch),
-                )
-                dist = out.dist
+            dist = self(minibatch).dist
             if self.norm_adv:
                 mean, std = advantages.mean(), advantages.std()
                 advantages = (advantages - mean) / (std + self._eps)  # per-batch norm
