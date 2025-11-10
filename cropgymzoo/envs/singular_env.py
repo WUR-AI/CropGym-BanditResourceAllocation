@@ -1077,9 +1077,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
     def _soil_features_mapper(self):
         pcas = soil_to_latent_pca(
             self._soil_params,
-            get_scenario_based_on_name(self.name)
-            if self.training
-            else get_scenario_based_on_loc(self.location)
+            "all"
         )
         soil_mapper = {
             'pc1': pcas[0],
