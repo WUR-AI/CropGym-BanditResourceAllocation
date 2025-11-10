@@ -765,6 +765,9 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             total_constraint = np.squeeze(total_constraint, axis=-1)
         final_tc = total_constraint[done]
         mean_ep_constraint_values = float(np.mean(final_tc)) if final_tc.size > 0 else 0.0
+
+        self.lagrange.update_lagrange_multiplier(mean_ep_constraint_values)
+
         lagrangian_multiplier = float(self.lagrange.lagrangian_multiplier)
 
         for step in range(repeat):
@@ -867,6 +870,7 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                             cmean, cstd = cadv[mb_learn].mean(), cadv[mb_learn].std()
                             cadv = (cadv - cmean) / (cstd + self._eps)
                         combined_adv = adv - float(self.lagrange.lagrangian_multiplier) * cadv
+                        combined_adv /= (self.lagrange.lagrangian_multiplier + 1)
                     else:
                         combined_adv = adv
 
@@ -961,8 +965,6 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                     constraint_predictions.append(constraint_prediction.item())
                     losses.append(loss.item())
 
-        self.lagrange.update_lagrange_multiplier(mean_ep_constraint_values)
-
         return IPPOTrainingStats.from_sequence(  # type: ignore[return-value]
             losses=losses,
             clip_losses=clip_losses,
@@ -1005,6 +1007,7 @@ class LagrangianIPPOPolicy(IPPOPolicy):
 
             # start lagrangian constraint
             combined_advantages = advantages - lagrangian_multiplier * constraint_advantages
+            combined_advantages /= (lagrangian_multiplier + 1)
 
             act = minibatch.act
             logp = dist.log_prob(act)
