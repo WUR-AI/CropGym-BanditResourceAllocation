@@ -80,6 +80,9 @@ class CurriculumCallbackManager:
     ):
         self.beta = beta
         self.stage = start_stage
+        if start_stage > 0:
+            print(f"Curriculum learning stage set to {start_stage}")
+
         self.ema: float | None = None
         self.last_score: float | None = None
         self.epochs_in_stage = 0
