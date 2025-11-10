@@ -6,7 +6,7 @@ import pickle
 
 import yaml
 
-from cropgymzoo import _SCENARIO_PATH, _DEFAULT_MODEL_DIR
+from cropgymzoo import _SCENARIO_PATH, _DEFAULT_MODEL_DIR, _DEFAULT_RESULTSDIR
 from cropgymzoo.utils.scenario_utils import get_scenario_based_on_loc
 
 from cropgymzoo.eval_policy import MultiRLAgent
@@ -57,9 +57,12 @@ def run_region_year(
             print(f"Running farmer_{i} at {region} in year {year}")
             info = runner.run(years=[year])
 
+        if info is None:
+            print(f"No results for farmer_{i} at {region} in year {year}")
+
         result_dict[f"farmer_{i}"] = info
 
-        return result_dict
+    return result_dict
 
 def model_picker(model_file, dict_fields):
     orig_model_dict = torch.load(model_file, weights_only=False)
@@ -95,7 +98,7 @@ if __name__ == "__main__":
     parser.add_argument("--regions", type=str, help="region name", default="all")
     parser.add_argument("--years", type=int, help="year", default=0)
     parser.add_argument("--agent", type=str, help="agent name", default="baseline")
-    parser.add_argument("--scenario", type=str, help="scenario name", default="baseline")
+    parser.add_argument("--scenario", type=str, help="scenario name", default="full_budget")
     args = parser.parse_args()
 
     regions = args.regions
@@ -117,3 +120,8 @@ if __name__ == "__main__":
         for year in years:
             info_dict = run_region_year(region, year, agent=agent, scenario=scenario)
             results_dict[f"{region}_{year}"] = info_dict
+
+    with open(os.path.join(_DEFAULT_RESULTSDIR, f"results_{agent}_{scenario}.pkl"), "wb") as f:
+        pickle.dump(results_dict, f)
+
+    print(f"Saved results to {os.path.join(_DEFAULT_RESULTSDIR, f'results_{agent}_{scenario}.pkl')}")
