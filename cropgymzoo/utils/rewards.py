@@ -12,7 +12,7 @@ def reward_functions_without_baseline():
 
 
 def reward_functions_with_baseline():
-    return ['DEF', 'ANE', 'END', 'PNR']
+    return ['DEF', 'ANE', 'END', 'PNR', 'MPN']
 
 
 def reward_function_list():
@@ -653,6 +653,135 @@ class Rewards:
             reward = (
                     - abs(self.nsurp_beta * n_surplus_penalty)
                     - abs(self.nue_beta * nue_penalty)
+                # + budget_left_bonus
+            )
+            return reward
+
+        def update_fertilizer_price(self, fertilizer_price):
+            self.fertilizer_price = fertilizer_price
+
+        def update_crop_price(self, crop_price):
+            self.crop_price = crop_price
+
+
+    class MPN(Rew):
+        """
+        Marginal profit increase per unit of N applied
+        """
+
+        def __init__(self, timestep, costs_nitrogen, fertilizer_price=None, crop_price=None, budget_left=None,
+                     alpha: float = 1.0, squash_k: float = 1):
+            super().__init__(timestep, costs_nitrogen)
+            self.timestep = timestep
+            self.costs_nitrogen = costs_nitrogen
+            self.fertilizer_price = fertilizer_price
+            self.crop_price = crop_price
+
+            # per-kg stabilizer to prevent huge ratios when amount≈0
+            self.alpha = float(alpha)
+            # optional squashing gain for tanh
+            self.squash_k = float(squash_k)
+
+            # penalty weights
+            self.fertilizer_beta = 1
+            self.nsurp_beta = 1
+            self.nue_beta = 1
+            self.budget_beta = 0
+
+        def return_reward(
+                self,
+                output,
+                amount,
+                output_baseline=None,
+                multiplier=1,
+                obj=None,
+                price_crop=None,
+                price_fertilizer=None,
+                budget_left=None,
+                fresh_yield_fn=None,
+        ):
+            obj.calculate_amount(amount)
+
+            self.update_crop_price(price_crop)
+            self.update_fertilizer_price(price_fertilizer)
+            obj.update_fertilizer_price(price_fertilizer)
+            obj.update_crop_price(price_crop)
+
+            growth = process_pcse.compute_growth_storage_organ(output, self.timestep, multiplier)
+            if output_baseline:
+                growth_baseline = process_pcse.compute_growth_storage_organ(output_baseline, self.timestep, multiplier)
+            obj.calculate_positive_reward_cumulative(output, output_baseline, multiplier)
+
+            if fresh_yield_fn is not None:
+                growth = fresh_yield_fn(growth)
+                if output_baseline:
+                    growth_baseline = fresh_yield_fn(growth_baseline)
+
+            # get profit
+            profit_now = obj.calculate_profit_term(
+                action=amount,
+                growth=growth,
+                price_crop=price_crop,
+                price_fertilizer=price_fertilizer
+            )
+
+            if output_baseline:
+                profit_baseline = obj.calculate_profit_term(
+                    action=0,
+                    growth=growth_baseline,
+                    price_crop=price_crop,
+                    price_fertilizer=price_fertilizer
+                )
+            else:
+                profit_baseline = 0.0
+
+            # Incremental profit from taking the current action vs. zero-N baseline
+            d_profit = profit_now - profit_baseline
+            abs_mag_profit = abs(profit_baseline)
+
+            reward_step = round(
+                float(
+                    d_profit / (abs_mag_profit + 1e-8)
+                ), 3
+            )
+
+            return reward_step, growth
+
+        def return_final_reward(
+                self,
+                obj=None,
+                n_fertilized=None,
+                n_output=None,
+                no3_depo=None,
+                nh4_depo=None,
+                budget_left=None,
+                crop_name=None,
+        ):
+            n_surplus = get_surplus_n(
+                n_input=n_fertilized,
+                n_so=n_output,
+                no3_depo=no3_depo,
+                nh4_depo=nh4_depo,
+                crop_name=crop_name
+            )
+
+            nue = calculate_nue(
+                n_input=n_fertilized,
+                n_so=n_output,
+                no3_depo=no3_depo,
+                nh4_depo=nh4_depo,
+                crop_name=crop_name
+            )
+
+            n_surplus_penalty = obj.n_surplus_penalty(n_surplus)
+            nue_penalty = obj.nue_penalty(nue, n_output)
+
+            # budget_left_bonus = self.budget_beta * obj.budget_left_bonus(budget_left)
+
+            # End reward in three terms that describe profit
+            reward = (
+                - abs(self.nsurp_beta * n_surplus_penalty)
+                - abs(self.nue_beta * nue_penalty)
                 # + budget_left_bonus
             )
             return reward
