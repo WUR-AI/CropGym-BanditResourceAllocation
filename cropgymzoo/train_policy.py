@@ -107,6 +107,7 @@ def make_ppo_policy(
     logger = None,
     args: Namespace = None,
     mlp_critics = True,
+    skew_prior_action = True,
 ) -> PPOPolicy | ICMPolicy:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     device = "mps" if torch.backends.mps.is_available() else device
@@ -207,6 +208,7 @@ def make_ppo_policy(
         last_hidden_dim=hidden[-1],
         use_film=args.use_film,
         concat_mask = args.concat_mask,
+        prefer_noop=skew_prior_action,
     ).to(device)
     critic = StackedCritic(
         preprocess_net=critic_net,
