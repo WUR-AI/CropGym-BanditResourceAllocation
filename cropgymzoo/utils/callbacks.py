@@ -3,6 +3,7 @@ import os
 import glob
 import re
 from datetime import datetime
+import time
 
 import matplotlib
 matplotlib.use("Agg")  # non-interactive backend
@@ -242,7 +243,7 @@ def marl_save_checkpoint_fn(
 ) -> None | str:
     # copy running statistics into the frozen eval envs *once per epoch*
     test_envs.set_obs_rms(train_envs.get_obs_rms())
-    if epoch % 2 == 0:
+    if epoch % 1 == 0:
         save_path = os.path.join(args.logdir, run_name, "checkpoints", f"check_{epoch:04d}.pth")
         torch.save(
             {
@@ -263,6 +264,7 @@ def marl_save_checkpoint_fn(
 
 
 def log_weights_and_grads_marl(experiment, model, step: int, log_grads: bool = True, args = None):
+    items = 0
     for aid, policy in model.policies.items():
         modules = []
         if hasattr(args, 'use_icm') and args.use_icm:
@@ -276,6 +278,10 @@ def log_weights_and_grads_marl(experiment, model, step: int, log_grads: bool = T
         # Log histograms (prefix by agent + role)
         for role, module in modules:
             for pname, p in module.named_parameters():
+                items += 1
+                if items % 450 == 0:
+                    print("=== Sleeping a bit to log histograms; I hope you don't mind... ===")
+                    time.sleep(60)
                 experiment.log_histogram_3d(
                     p.detach().cpu().numpy(),
                     name=f"{aid}/{role}/weights/{pname}",
