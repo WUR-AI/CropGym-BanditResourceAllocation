@@ -543,13 +543,13 @@ class MultiFieldEnv(AECEnv, EzPickle):
         """
         Uses the "weighted by area" policy reward.
         """
-        field_size = self.get_field_size(self.agent_selection)
+        # field_size = self.get_field_size(self.agent_selection)
 
         # This is for the PNY reward
         # weighted_reward = (reward * field_size) / self.total_area
 
         # This is for the PNB reward
-        weighted_reward = reward * field_size
+        weighted_reward = reward
 
         self.rewards[self.agent_selection] = weighted_reward
         # reward = rewards / self.total_area
