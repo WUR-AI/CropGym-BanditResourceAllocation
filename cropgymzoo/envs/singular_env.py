@@ -558,6 +558,16 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         return step_cost # + term_cost
 
+    def _get_consecutive_constraint(self) -> float:
+        acted = float(self.action) > 0.0
+        if acted:
+            if self.steps_since_last_action < 3:
+                return (3 - self.steps_since_last_action) * 0.1
+            else:
+                return 0.0
+        else:
+            return 0.0
+
     def _get_dvs_constraint(self) -> float:
         dvs = self.model.get_output()[-1]['DVS']
         acted = self.action > 0  # or whatever check means "fertilizer applied"
@@ -598,6 +608,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         total_constraint = 0.0
         total_constraint += self._get_frequency_constraint(terminated)
         total_constraint += self._get_dvs_constraint()
+        total_constraint += self._get_consecutive_constraint()
         # total_constraint += self._get_budget_constraint(terminated)
         # total_constraint += self._get_nue_constraint()
         # total_constraint += self._get_nsurp_constraint()
@@ -841,7 +852,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             'Alive': [], 'ActionMask': [], 'RFTRA': [], 'WC': [],
             'TotalConstraint': [], 'FrequencyConstraint': [],
             'DVSConstraint': [], 'BudgetConstraint': [],
-            'NueConstraint': [], 'NsurpConstraint': [],
+            'NueConstraint': [], 'NsurpConstraint': [], 'ConsecutiveConstraint': [],
             'TotalEpisodicConstraint': [], 'DaysAfterPlanting': [],
         }
 
@@ -1052,6 +1063,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.infos['FrequencyConstraint'].append(self._get_frequency_constraint(terminate))
         self.infos['DVSConstraint'].append(self._get_dvs_constraint())
         self.infos['BudgetConstraint'].append(self._get_budget_constraint(terminate))
+        self.infos['ConsecutiveConstraint'].append(self._get_consecutive_constraint())
         self.infos['NueConstraint'].append(self._get_nue_constraint())
         self.infos['NsurpConstraint'].append(self._get_nsurp_constraint())
 
