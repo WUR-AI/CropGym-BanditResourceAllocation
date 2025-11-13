@@ -112,3 +112,48 @@ def plot_results(
         plt.show()
 
     return fig
+
+
+def plot_nue_template(ax=None, label=True, size=(4, 4), max=300, get_return=True) -> plt:
+    l = max
+
+    n_in = np.linspace(0, l, l)
+
+    # For NUE = 50%, the output is the same as the input
+    n_output_50 = n_in * 0.5
+
+    # For NUE = 90%, the output is 90% of the input
+    n_output_90 = n_in * 0.9
+
+    max_surplus_line = n_in - 40
+
+    # max_surplus_line[max_surplus_line < 0] = 0
+
+    if not ax:
+        plt.figure(figsize=size)
+
+        plt.plot(n_in, max_surplus_line, 'k--', linewidth=0.5, zorder=1)  #, label='N surplus = 40 kg/ha/yr')
+
+        plt.fill_between(n_in, n_output_50, max_surplus_line, color='grey',
+                         alpha=0.5)  #, label='N surplus > 40 kg/ha/yr')
+
+        plt.plot(n_in, n_output_50, 'k-', linewidth=0.5)  #, label='NUE = 50%')
+
+        plt.plot(n_in, n_output_90, 'k-', linewidth=0.5)  #, label='NUE = 90%')
+
+        # plt.plot(n_in, min_productivity_output, 'k-.', label='Desired minimum productivity (N output > 80 kg/ha/yr)')
+
+        plt.fill_between(n_in, 0, n_output_50, color='lightcoral', zorder=2)
+        # label='NUE very low (NUE < 50%): Risk of inefficient N use')
+
+        plt.fill_between(n_in, n_output_90, l, color='lightcoral', zorder=2)
+        # label='NUE very high (NUE > 90%): Risk of soil mning')
+        if label:
+            plt.xlabel('Input', size=8)
+            plt.ylabel('Output', size=8)
+        plt.tick_params(axis='both', which='major', labelsize=7)
+        plt.ylim(0, 300)
+        plt.xlim(0, 300)
+        plt.tight_layout()
+        if get_return:
+            return plt
