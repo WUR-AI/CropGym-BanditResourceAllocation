@@ -634,9 +634,6 @@ class Rewards:
                 budget_left=None,
                 crop_name=None,
         ):
-            # Maybe give negative reward if did not act at all; soil mining most likely
-            # if obj.get_total_fertilization == 0:
-            #     return -obj.cum_profit - 100
 
             n_surplus = get_surplus_n(n_input=n_fertilized, n_so=n_output, no3_depo=no3_depo, nh4_depo=nh4_depo,
                                       crop_name=crop_name)
@@ -646,6 +643,8 @@ class Rewards:
 
             n_surplus_penalty = obj.n_surplus_penalty(n_surplus)
             nue_penalty = obj.nue_penalty(nue, n_output)
+
+            obj.accumulate_profit(- n_surplus_penalty - nue_penalty)
 
             # budget_left_bonus = self.budget_beta * obj.budget_left_bonus(budget_left)
 
