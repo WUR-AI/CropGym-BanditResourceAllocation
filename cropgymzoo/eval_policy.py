@@ -36,7 +36,8 @@ def load_policy(
             act_dim=act_dim,
             hidden=args.hidden_layers,
             use_icm=args.use_icm,
-            args=args
+            args=args,
+            skew_prior_action=False,
         ) for a in env.agents
     }
     print(f"Using {'LagrangianIPPO' if args.lagrangian_ppo else 'IPPO'} policy!")

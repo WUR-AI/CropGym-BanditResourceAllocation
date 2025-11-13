@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 import gymnasium as gym
 
-from cropgymzoo import _DEFAULT_MODEL_DIR
+from cropgymzoo import _DEFAULT_MODEL_DIR, _DEFAULT_RESUMEDIR
 from cropgymzoo.agents.networks import (
     RecurrentGRU,
     RecurrentLSTM,
@@ -81,6 +81,20 @@ def load_model(args: Namespace | None = None) -> dict:
 
     checkpoint = None
     for entry in model_dir.iterdir():
+        checkpoint = torch.load(entry, weights_only=False) if str(entry).endswith(".pth") else None
+        if checkpoint is not None:
+            break
+    else:
+        print(f"Loaded {checkpoint}!")
+
+    return checkpoint
+
+def load_checkpoint():
+
+    model_path = Path(_DEFAULT_RESUMEDIR)
+
+    checkpoint = None
+    for entry in model_path.iterdir():
         checkpoint = torch.load(entry, weights_only=False) if str(entry).endswith(".pth") else None
         if checkpoint is not None:
             break
@@ -408,10 +422,14 @@ def train_gru_ppo(args: Namespace):
     # resume model?
     saved_model = None
     if getattr(args, "resume", None) is not None:
-        saved_model = load_model(args)
+        saved_model = load_checkpoint()
         # override args to match
+        start_stage = args.start_stage
+        advance_steps = args.advance_steps
         args = saved_model['args']
         args.resume = True
+        args.start_stage = start_stage
+        args.advance_steps = advance_steps
 
         print("Resuming training from saved model!")
 
@@ -484,6 +502,7 @@ def train_gru_ppo(args: Namespace):
             use_icm=args.use_icm,
             logger=logger,
             args=args,
+            skew_prior_action=not args.resume if args.resume is not None else True,
         )
         for a in agents
     }
@@ -496,12 +515,15 @@ def train_gru_ppo(args: Namespace):
         env=PettingZooEnv(dummy_env),
     )
 
-    if args.resume is not None:
+    if args.resume is not None and args.resume:
         for agent, policy in marl_policy_manager.policies.items():
             policy.load_state_dict(saved_model['models'][agent], strict=True)
+            policy.train()
 
         train_envs.set_obs_rms(saved_model['obs_rms'])
         test_envs.set_obs_rms(saved_model['obs_rms'])
+
+        print("Loaded trained policies!")
 
     # Buffers / collectors
     train_collector = IPPOCollector(

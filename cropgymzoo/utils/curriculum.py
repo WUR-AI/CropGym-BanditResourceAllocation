@@ -73,6 +73,7 @@ class CurriculumCallbackManager:
         *,
         beta: float = 0.1,                 # EMA smoothing
         start_stage: int = 0,
+        stage_zero_epochs: float = 500,
         min_epochs_per_stage: int = 400,   # gate for stages >= 1
         first_stage_reward: float = 2500,
         require_ema_and_inst: bool = True,  # "consistent": both EMA and instant > threshold
@@ -86,6 +87,7 @@ class CurriculumCallbackManager:
         self.ema: float | None = None
         self.last_score: float | None = None
         self.epochs_in_stage = 0
+        self.stage_zero_epochs = int(stage_zero_epochs)
 
         self.min_epochs_per_stage = int(min_epochs_per_stage)
         self.first_stage_reward = float(first_stage_reward)
@@ -102,15 +104,8 @@ class CurriculumCallbackManager:
         return self.ema
 
     def _stage_zero_gate(self) -> bool:
-        """Stage 0 -> 1 advancement rule: reward > first_stage_reward (instant),
-        and optionally EMA > threshold too for consistency."""
-        # if self.last_score is None or self.ema is None:
-        #     return False
-        # if self.require_ema_and_inst:
-        #     return (self.last_score > self.first_stage_reward) and (self.ema > self.first_stage_reward)
-        # else:
-        #     return self.last_score > self.first_stage_reward
-        if self.epochs_in_stage >= 300:
+        """Stage 0 -> 1 """
+        if self.epochs_in_stage >= self.stage_zero_epochs:
             return True
         return False
 
