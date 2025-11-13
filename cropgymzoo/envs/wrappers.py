@@ -23,7 +23,7 @@ class MultiAgentVecNormObs(VectorEnvNormObs):
                  update_obs_rms: bool = True,
                  shared: bool = True,
                  device: str = "cpu",
-                 reward_scale: float = 1e5,
+                 reward_scale: float = 1e3,
                  reward_clip: tuple[float, float] | None = None,
                  log_true_reward: bool = True,
      ):
