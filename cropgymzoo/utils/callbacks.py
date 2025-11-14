@@ -104,7 +104,7 @@ def yearly_eval_test_fn(
     policy_mgr.eval()
 
     reset_options_list = [
-        2000, 2010, 2020
+        2020, 2021, 2022
     ]
     # get writer
     if hasattr(logger, 'writer'):
@@ -169,16 +169,16 @@ def yearly_eval_test_fn(
         agent_actions = []
         for a_id, full_info in agent_info.items():
             agent_reward = np.sum(full_info['Reward'])
-            agent_nue = full_info['Nue'][-1]
-            agent_nsurp = full_info['Nsurp'][-1]
-            agent_budget_left = full_info['BudgetLeft'][-1]
-            agent_yield = full_info['Yield'][-1]
-            agent_n_action = full_info['Naction'][-1]
+            # agent_nue = full_info['Nue'][-1]
+            # agent_nsurp = full_info['Nsurp'][-1]
+            # agent_budget_left = full_info['BudgetLeft'][-1]
+            # agent_yield = full_info['Yield'][-1]
+            # agent_n_action = full_info['Naction'][-1]
             # agent_actions = np.sum(full_info['Action'])
-            constraint_nue = np.sum(full_info['NueConstraint'])
-            constraint_nsurp = np.sum(full_info['NsurpConstraint'])
-            constraint_budget = np.sum(full_info['BudgetConstraint'])
-            constraint_frequency = np.sum(full_info['FrequencyConstraint'])
+            # constraint_nue = np.sum(full_info['NueConstraint'])
+            # constraint_nsurp = np.sum(full_info['NsurpConstraint'])
+            # constraint_budget = np.sum(full_info['BudgetConstraint'])
+            # constraint_frequency = np.sum(full_info['FrequencyConstraint'])
             # constraint_dvs = np.sum(full_info['DVSConstraint'])
             constraint_total = np.sum(full_info['TotalConstraint'])
 
@@ -187,16 +187,16 @@ def yearly_eval_test_fn(
 
             if writer:
                 writer.add_scalar(f"test/year:{year}/{a_id}/Reward", agent_reward, epoch)
-                writer.add_scalar(f"test/year:{year}/{a_id}/NUE", agent_nue, epoch)
-                writer.add_scalar(f"test/year:{year}/{a_id}/Nsurp", agent_nsurp, epoch)
-                writer.add_scalar(f"test/year:{year}/{a_id}/BudgetLeft", agent_budget_left, epoch)
-                writer.add_scalar(f"test/year:{year}/{a_id}/Yield", agent_yield, epoch)
-                writer.add_scalar(f"test/year:{year}/{a_id}/Naction", agent_n_action, epoch)
+                # writer.add_scalar(f"test/year:{year}/{a_id}/NUE", agent_nue, epoch)
+                # writer.add_scalar(f"test/year:{year}/{a_id}/Nsurp", agent_nsurp, epoch)
+                # writer.add_scalar(f"test/year:{year}/{a_id}/BudgetLeft", agent_budget_left, epoch)
+                # writer.add_scalar(f"test/year:{year}/{a_id}/Yield", agent_yield, epoch)
+                # writer.add_scalar(f"test/year:{year}/{a_id}/Naction", agent_n_action, epoch)
                 # writer.add_scalar(f"test/year:{year}/{a_id}/ActionTotal", agent_actions, epoch)
-                writer.add_scalar(f"constrain/year:{year}/{a_id}/ConstraintNUE", constraint_nue, epoch)
-                writer.add_scalar(f"constrain/year:{year}/{a_id}/ConstraintNsurp", constraint_nsurp, epoch)
-                writer.add_scalar(f"constrain/year:{year}/{a_id}/ConstraintBudget", constraint_budget, epoch)
-                writer.add_scalar(f"constrain/year:{year}/{a_id}/ConstraintFrequency", constraint_frequency, epoch)
+                # writer.add_scalar(f"constrain/year:{year}/{a_id}/ConstraintNUE", constraint_nue, epoch)
+                # writer.add_scalar(f"constrain/year:{year}/{a_id}/ConstraintNsurp", constraint_nsurp, epoch)
+                # writer.add_scalar(f"constrain/year:{year}/{a_id}/ConstraintBudget", constraint_budget, epoch)
+                # writer.add_scalar(f"constrain/year:{year}/{a_id}/ConstraintFrequency", constraint_frequency, epoch)
                 # writer.add_scalar(f"constrain/year:{year}/{a_id}/ConstraintDVS", constraint_dvs, epoch)
                 writer.add_scalar(f"constrain/year:{year}/{a_id}/ConstraintTotal", constraint_total, epoch)
             else:
@@ -214,7 +214,7 @@ def yearly_eval_test_fn(
                     )),
                     epoch,
                 )
-                writer.add_scalar(f"metrics/reward/year:{year}/total_reward", np.sum(reward_year), epoch)
+                writer.add_scalar(f"metrics/reward/{year}/", np.sum(reward_year), epoch)
     else:
         # Final aggregated logging
         mean_reward = np.mean(list(across_years_reward.values()))

@@ -336,7 +336,7 @@ class IFOCOPSPolicy(LagrangianIPPOPolicy):
         # have a dedicated field, but you can extend IPPOTrainingStats if wanted.
         clip_losses = vf_losses  # placeholder, or you can make a separate list
 
-        return IPPOTrainingStats.from_sequences(  # type: ignore[return-value]
+        stats = IPPOTrainingStats.from_sequences(  # type: ignore[return-value]
             losses=losses,
             clip_losses=clip_losses,
             vf_losses=vf_losses,
@@ -346,3 +346,8 @@ class IFOCOPSPolicy(LagrangianIPPOPolicy):
             explained_variance=explained_variances,
             gradient_steps=gradient_steps,
         )
+
+        self._log_learn_stats(batch, losses, clip_losses, vf_losses, ent_losses, approx_kls,
+                              clipfracs, explained_variances)
+
+        return stats

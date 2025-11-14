@@ -298,13 +298,19 @@ class IRCPOPolicy(IPPOPolicy):
         self._lambda = self._lambda.detach()  # just in case
         self._lambda.data = torch.tensor(new_lambda, dtype=self._lambda.dtype, device=self._lambda.device)
 
-        # if self.logger is not None:
-        #     try:
-        #         self.logger.write("rcpo/mean_cost_return", mean_cost_return)
-        #         self.logger.write("rcpo/lambda", new_lambda)
-        #         self.logger.write("rcpo/cost_limit", self.cost_limit)
-        #     except Exception:
-        #         pass
+        if self.logger is not None:
+            name = self._get_agent_name(batch)
+            try:
+                more_data = {
+                    f"rcpo/lambda/{name}": self._mean(new_lambda),
+                    f"cost/total_cost/{name}": self._mean(batch.info["TotalConstraint"]),
+                    f"rcpo/mean_cost_return/{name}": mean_cost_return,
+                    f"rcpo/cost_limit/{name}": self.cost_limit,
+                    f"cost/lagrangian_multiplier/{name}": self.lagrange.lagrangian_multiplier,
+                }
+                self.logger.log_update_data(more_data, step=self._update_step)
+            except Exception:
+                pass
 
         return stats
 

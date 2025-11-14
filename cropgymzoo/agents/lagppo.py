@@ -104,8 +104,11 @@ class RunningMeanStdSafe:
 class IPPOPolicy(PPOPolicy):
     def __init__(
             self,
+            logger = None,
             **kwargs
     ):
+        self.logger = logger
+        self._update_step = 0
         super().__init__(**kwargs)
 
     def process_fn(self, batch, buffer, indices):
@@ -224,7 +227,7 @@ class IPPOPolicy(PPOPolicy):
                 explained_variances.append(explained_vars.item())
                 losses.append(loss.item())
 
-        return IPPOTrainingStats.from_sequences(  # type: ignore[return-value]
+        stats = IPPOTrainingStats.from_sequences(  # type: ignore[return-value]
             losses=losses,
             clip_losses=clip_losses,
             vf_losses=vf_losses,
@@ -234,6 +237,64 @@ class IPPOPolicy(PPOPolicy):
             explained_variance=explained_variances,
             gradient_steps=gradient_steps,
         )
+
+        self._log_learn_stats(batch, losses, clip_losses, vf_losses, ent_losses, approx_kls,
+                               clipfracs, explained_variances)
+
+        return stats
+
+    @staticmethod
+    def _get_agent_name(batch):
+        try:
+            return str(batch.obs.agent_id[0])
+        except Exception:
+            return batch.obs.agent_id[0]
+
+
+    @staticmethod
+    def _mean(xs):
+        return float(np.mean(xs)) if len(xs) > 0 else float(xs)
+
+    def _log_learn_stats(self, batch, losses, clip_losses, vf_losses, ent_losses,
+                         approx_kls, clipfracs, explained_variances, additional_data: dict = None):
+        if self.logger is None:
+            return
+
+        name = self._get_agent_name(batch)
+
+        log_data = {
+            f"loss/total/{name}": self._mean(losses),
+            f"loss/clip/{name}": self._mean(clip_losses),
+            f"loss/value/{name}": self._mean(vf_losses),
+            f"loss/entropy/{name}": self._mean(ent_losses),
+            f"ppo/approx_kl/{name}": self._mean(approx_kls),
+            f"ppo/clipfrac/{name}": self._mean(clipfracs),
+            f"ppo/explained_var/{name}": self._mean(explained_variances),
+        }
+
+        if additional_data is not None:
+            log_data = {**log_data, **additional_data}
+
+        # optional: episode returns
+        try:
+            rew_np = np.asarray(batch.rew)
+            done_np = np.asarray(batch.done)
+            ep_returns = []
+            cur = 0.0
+            for r, d in zip(rew_np, done_np):
+                cur += r
+                if d:
+                    ep_returns.append(cur)
+                    cur = 0.0
+            if ep_returns:
+                log_data[f"train/ep_return_mean/{name}"] = float(np.mean(ep_returns))
+                log_data[f"train/ep_return_std/{name}"] = float(np.std(ep_returns))
+        except:
+            pass
+
+        step = self._update_step
+        self.logger.log_update_data(log_data, step=step)
+        self._update_step += 1
 
 
 class LagrangianIPPOPolicy(IPPOPolicy):
@@ -975,7 +1036,7 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                     constraint_predictions.append(constraint_prediction.item())
                     losses.append(loss.item())
 
-        return LagIPPOTrainingStats.from_sequence(  # type: ignore[return-value]
+        stats = LagIPPOTrainingStats.from_sequences(  # type: ignore[return-value]
             losses=losses,
             clip_losses=clip_losses,
             vf_losses=vf_losses,
@@ -987,6 +1048,18 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             constraint_prediction=constraint_predictions,
             gradient_steps=gradient_steps,
         )
+
+        name = self._get_agent_name(batch)
+        more_data = {
+            f"loss/constraint/{name}": self._mean(cf_losses),
+            f"cost/total_cost/{name}": self._mean(batch.info["TotalConstraint"]),
+            f"cost/lagrangian_multiplier/{name}": self.lagrange.lagrangian_multiplier,
+            f"ppo/constraint_prediction/{name}": self._mean(constraint_predictions),
+        }
+        self._log_learn_stats(batch, losses, clip_losses, vf_losses, ent_losses, approx_kls,
+                              clipfracs, explained_variances, additional_data=more_data)
+
+        return stats
 
     def flat_learn_ppo(self, batch: RolloutBatchProtocol | BatchWithAdvantagesProtocol, cf_losses: list[Any],
                        clip_losses: list[Any], ent_losses: list[Any], gradient_steps: int, lagrangian_multiplier: float,
