@@ -38,6 +38,7 @@ from cropgymzoo.agents.marl_algorithms_tianshou import (
     IPCPOPolicy,
     IPPOCollector,
     LagrangianIPPOPolicy,
+    IFOCOPSPolicy,
     AECMultiAgentPolicyManager,
     ICMPolicyRNN
 )
@@ -161,7 +162,7 @@ def make_ppo_policy(
                 concat_mask=args.concat_mask,
                 pool=getattr(args, 'pool', False),
                 device=device,
-            ) if args.alg in ['lagppo', 'rcpo', 'pcpo'] else None
+            ) if args.alg in ['lagppo', 'rcpo', 'pcpo', 'focops'] else None
         else:
             critic_net = ObsMLP(
                 input_dim=obs_dim[0] - (6 * len(get_default_weather_features())) if getattr(args, 'pool', False) else obs_dim[0],
@@ -180,7 +181,7 @@ def make_ppo_policy(
                 activation=torch.nn.Tanh,
                 pool=getattr(args, 'pool', False),
                 device=device,
-            ) if args.alg in ['lagppo', 'rcpo', 'pcpo'] else None
+            ) if args.alg in ['lagppo', 'rcpo', 'pcpo', 'focops'] else None
 
     if args.architecture == 'mlp':
         actor_net = ObsMLP(
@@ -210,7 +211,7 @@ def make_ppo_policy(
             concat_mask=args.concat_mask,
             pool=getattr(args, 'pool', False),
             device=device,
-        ) if args.alg in ['lagppo', 'rcpo', 'pcpo'] else None
+        ) if args.alg in ['lagppo', 'rcpo', 'pcpo', 'focops'] else None
 
     actor = MaskedActor(
         preprocess_net=actor_net,
@@ -231,12 +232,12 @@ def make_ppo_policy(
         concat_mask=args.concat_mask,
         last_hidden_dim=hidden[-1],
         use_film=args.use_film,
-    ).to(device) if args.alg in ['lagppo', 'rcpo', 'pcpo'] else None
+    ).to(device) if args.alg in ['lagppo', 'rcpo', 'pcpo', 'focops'] else None
 
     optim = Adam(
         list(actor.parameters()) + list(critic.parameters()) + list(constraint_critic.parameters()),
         lr=args.lr if args is not None else 1e-3,
-        ) if args.alg in ['lagppo', 'rcpo', 'pcpo'] else (
+        ) if args.alg in ['lagppo', 'rcpo', 'pcpo', 'focops'] else (
         Adam(
             list(actor.parameters()) + list(critic.parameters()),
             lr=args.lr if args is not None else 1e-3,
@@ -253,11 +254,13 @@ def make_ppo_policy(
         policy_fn = IRCPOPolicy
     elif args.alg == 'pcpo':
         policy_fn = IPCPOPolicy
+    elif args.alg == 'focops':
+        policy_fn = IFOCOPSPolicy
     else:
         policy_fn = IPPOPolicy
 
     lagrangian_kwarg = {
-        'constraint_critic': constraint_critic if args.alg in ['lagppo', 'rcpo', 'pcpo'] else None,
+        'constraint_critic': constraint_critic if args.alg in ['lagppo', 'rcpo', 'pcpo', 'focops'] else None,
         'recurrent': True if args.architecture in ['lstm', 'gru'] else False,
         'unroll_len': args.seq_len if args.architecture in ['lstm', 'gru'] else 1,
     }
@@ -419,7 +422,7 @@ def collect_test_episodes(collector: Collector, years: list[int] = list(range(20
 
 def train_gru_ppo(args: Namespace):
     """
-    Script to train a GRU-PPO agent
+    Script to train a field-agent
     """
 
     # resume model?
@@ -510,10 +513,8 @@ def train_gru_ppo(args: Namespace):
         for a in agents
     }
 
-    print(f"Using {args.alg} policy!")
+    print(f"Using {str(args.alg).upper()} policy!")
     print(f"Using ICM Policy!") if args.use_icm else None
-
-    print("OK")
 
     marl_policy_manager = AECMultiAgentPolicyManager(
         policies=list(policies.values()),
