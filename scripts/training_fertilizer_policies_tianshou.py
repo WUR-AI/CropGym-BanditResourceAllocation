@@ -7,7 +7,7 @@ from cropgymzoo.utils import curriculum
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 import os
-from cropgymzoo.train_policy import train_gru_ppo
+from cropgymzoo.train_policy import train_policy
 from cropgymzoo import _DEFAULT_LOGDIR
 import yaml
 
@@ -98,4 +98,4 @@ if __name__ == "__main__":
     # safeguard
     hyperparams.train_envs_num = 2 if (hyperparams.parallel is True and hyperparams.train_envs_num == 1) else hyperparams.train_envs_num
 
-    train_gru_ppo(hyperparams)
+    train_policy(hyperparams)

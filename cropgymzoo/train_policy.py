@@ -32,16 +32,15 @@ from cropgymzoo.agents.networks import (
     ConstraintCritic,
     ObsMLP
 )
-from cropgymzoo.agents.marl_algorithms_tianshou import (
-    IPPOPolicy,
-    IRCPOPolicy,
-    IPCPOPolicy,
+from cropgymzoo.agents.marl_utils import (
     IPPOCollector,
-    LagrangianIPPOPolicy,
-    IFOCOPSPolicy,
     AECMultiAgentPolicyManager,
     ICMPolicyRNN
 )
+from cropgymzoo.agents.pcpo import IPCPOPolicy
+from cropgymzoo.agents.rcpo import IRCPOPolicy
+from cropgymzoo.agents.focops import IFOCOPSPolicy
+from cropgymzoo.agents.lagppo import IPPOPolicy, LagrangianIPPOPolicy
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
 from cropgymzoo.envs.wrappers import MultiAgentVecNormObs
@@ -116,7 +115,7 @@ def marl_reward_calculator(
         avg.append(avg_env_reward)
     return np.array(avg)
 
-def make_ppo_policy(
+def initialize_policy(
     obs_dim: int | tuple[int],
     act_dim: int,
     hidden: Sequence = [64, 64],
@@ -420,7 +419,7 @@ def collect_test_episodes(collector: Collector, years: list[int] = list(range(20
 
 # Training methods
 
-def train_gru_ppo(args: Namespace):
+def train_policy(args: Namespace):
     """
     Script to train a field-agent
     """
@@ -501,7 +500,7 @@ def train_gru_ppo(args: Namespace):
     # Build policies
     # if args.independent:
     policies = {
-        a: make_ppo_policy(
+        a: initialize_policy(
             obs_dim=obs_dim,
             act_dim=act_dim,
             hidden=args.hidden_layers,

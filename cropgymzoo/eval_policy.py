@@ -12,10 +12,10 @@ from tianshou.data import Batch
 from tianshou.policy import MultiAgentPolicyManager
 
 from cropgymzoo.train_policy import (
-    make_ppo_policy,
+    initialize_policy,
     load_model
 )
-from cropgymzoo.agents.marl_algorithms_tianshou import IPPOPolicy
+from cropgymzoo.agents.lagppo import IPPOPolicy
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 from cropgymzoo.utils.plotters import plot_year, plot_results
 
@@ -31,7 +31,7 @@ def load_policy(
     act_dim = env.action_spaces[agent].n
 
     policies = {
-        a: make_ppo_policy(
+        a: initialize_policy(
             obs_dim=obs_dim,
             act_dim=act_dim,
             hidden=args.hidden_layers,
@@ -143,7 +143,7 @@ class MultiRLAgent(BaseAgent):
         act_dim = self.env.action_spaces[self.agents[0]].n
 
         policies = {
-            a: make_ppo_policy(
+            a: initialize_policy(
                 obs_dim=obs_dim,
                 act_dim=act_dim,
                 hidden=args.hidden_layers,

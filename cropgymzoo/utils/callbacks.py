@@ -27,7 +27,7 @@ from tianshou.policy import MultiAgentPolicyManager, BasePolicy
 from tianshou.utils.logger.base import BaseLogger
 
 from cropgymzoo import _SOURCE_PATH, _BASE_PATH
-from cropgymzoo.agents.marl_algorithms_tianshou import IPPOPolicy
+from cropgymzoo.agents.lagppo import IPPOPolicy
 from cropgymzoo.agents.nn_agp import SelectionInfo
 from cropgymzoo.envs.wrappers import MultiAgentVecNormObs
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
