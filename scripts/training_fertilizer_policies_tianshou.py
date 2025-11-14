@@ -75,7 +75,7 @@ if __name__ == "__main__":
     parser.add_argument("--model_dir", type=str, default='GRU_PPO')
 
     # use lagrangian
-    parser.add_argument("--lagrangian_ppo", action="store_true", dest='lagrangian_ppo')
+    parser.add_argument("--alg", dest='alg', default='lagppo')
 
     # use comet
     parser.add_argument("--no_comet", action='store_true', dest='no_comet')
@@ -87,7 +87,7 @@ if __name__ == "__main__":
         independent=True,
         debug=False,
         use_icm=False,
-        lagrangian_ppo=False,
+        alg='lagppo',
         no_comet=False,
         use_film=True,
         concat_mask=False,

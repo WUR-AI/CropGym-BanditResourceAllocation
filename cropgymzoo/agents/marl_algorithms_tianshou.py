@@ -226,6 +226,101 @@ class IPPOPolicy(PPOPolicy):
         batch: LogpOldProtocol
         return batch
 
+    def learn(  # type: ignore
+        self,
+        batch: RolloutBatchProtocol,
+        batch_size: int | None,
+        repeat: int,
+        *args: Any,
+        **kwargs: Any,
+    ) -> TPPOTrainingStats:
+        losses, clip_losses, vf_losses, ent_losses, clipfracs, approx_kls, explained_variances = [], [], [], [], [], [], []
+        gradient_steps = 0
+        split_batch_size = batch_size or -1
+        for step in range(repeat):
+            if self.recompute_adv and step > 0:
+                batch = self._compute_returns(batch, self._buffer, self._indices)
+            for minibatch in batch.split(split_batch_size, merge_last=True):
+                gradient_steps += 1
+                # calculate loss for actor
+                advantages = minibatch.adv
+                dist = self(minibatch).dist
+                if self.norm_adv:
+                    mean, std = advantages.mean(), advantages.std()
+                    advantages = (advantages - mean) / (std + self._eps)  # per-batch norm
+                act = minibatch.act
+                logp = dist.log_prob(act)
+                if logp.ndim > 1: logp = logp.sum(-1)
+
+                logratio = logp - minibatch.logp_old
+                ratios = logratio.exp().float()  # [b, T]
+                # ratios = (dist.log_prob(minibatch.act) - minibatch.logp_old).exp().float()
+                # ratios = ratios.reshape(ratios.size(0), -1).transpose(0, 1)
+
+                with torch.no_grad():
+                    # calculate approx_kl http://joschu.net/blog/kl-approx.html
+                    # old_approx_kl = (-logratio).mean()
+                    approx_kl = ((ratios - 1) - logratio).mean()
+                    clipfracs += [((ratios - 1.0).abs() > self.eps_clip).float().mean().item()]
+
+                surr1 = ratios * advantages
+                surr2 = ratios.clamp(1.0 - self.eps_clip, 1.0 + self.eps_clip) * advantages
+                if self.dual_clip:
+                    clip1 = torch.min(surr1, surr2)
+                    clip2 = torch.max(clip1, self.dual_clip * advantages)
+                    clip_loss = -torch.where(advantages < 0, clip2, clip1).mean()
+                else:
+                    clip_loss = -torch.min(surr1, surr2).mean()
+                # calculate loss for critic
+                value = self.critic(minibatch.obs, info=minibatch.info).flatten()
+                if self.value_clip:
+                    v_clip = minibatch.v_s + (value - minibatch.v_s).clamp(
+                        -self.eps_clip,
+                        self.eps_clip,
+                    )
+                    vf1 = (minibatch.returns - value).pow(2)
+                    vf2 = (minibatch.returns - v_clip).pow(2)
+                    vf_loss = torch.max(vf1, vf2).mean()
+                else:
+                    vf_loss = (minibatch.returns - value).pow(2).mean()
+
+                def get_critic_prediction(true, pred) -> float | int | Any:
+                    y_pred, y_true = pred.detach().cpu().numpy(), true.detach().cpu().numpy()
+                    var_y = np.var(y_true)
+                    explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
+                    return explained_var
+
+                explained_vars = get_critic_prediction(minibatch.returns, value)
+
+                # calculate regularization and overall loss
+                ent_loss = dist.entropy().mean()
+                loss = clip_loss + self.vf_coef * vf_loss - self.ent_coef * ent_loss
+                self.optim.zero_grad()
+                loss.backward()
+                if self.max_grad_norm:  # clip large gradient
+                    nn.utils.clip_grad_norm_(
+                        self._actor_critic.parameters(),
+                        max_norm=self.max_grad_norm,
+                    )
+                self.optim.step()
+                clip_losses.append(clip_loss.item())
+                vf_losses.append(vf_loss.item())
+                ent_losses.append(ent_loss.item())
+                approx_kls.append(approx_kl.item())
+                explained_variances.append(explained_vars.item())
+                losses.append(loss.item())
+
+        return IPPOTrainingStats.from_sequences(  # type: ignore[return-value]
+            losses=losses,
+            clip_losses=clip_losses,
+            vf_losses=vf_losses,
+            ent_losses=ent_losses,
+            approx_kl=approx_kls,
+            clipfrac=clipfracs,
+            explained_variance=explained_variances,
+            gradient_steps=gradient_steps,
+        )
+
 class LagrangianIPPOPolicy(IPPOPolicy):
     def __init__(
             self,
@@ -965,7 +1060,7 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                     constraint_predictions.append(constraint_prediction.item())
                     losses.append(loss.item())
 
-        return IPPOTrainingStats.from_sequence(  # type: ignore[return-value]
+        return LagIPPOTrainingStats.from_sequence(  # type: ignore[return-value]
             losses=losses,
             clip_losses=clip_losses,
             vf_losses=vf_losses,
@@ -1074,6 +1169,471 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             losses.append(loss.item())
         return gradient_steps, clip_losses, vf_losses, ent_losses, cf_losses, approx_kls, explained_variances, constraint_predictions, losses
 
+class IRCPOPolicy(IPPOPolicy):
+    """
+    Reward Constrained Policy Optimization (RCPO) for this Tianshou-based codebase.
+
+    RCPO optimizes PPO on a *penalized* reward:
+        r'_t = r_t - lambda * (c_t - cost_limit)
+
+    with a dual ascent update on the Lagrange multiplier:
+        lambda <- [lambda + alpha * (J_c - cost_limit)]_+
+
+    where J_c is the (discounted) expected cost.  We implement:
+      • a separate constraint critic for the discounted cost,
+      • optional running normalization of costs (like the existing RunningMeanStdSafe),
+      • PPO training on the *penalized* reward stream r',
+      • a projected gradient ascent update of lambda after each learn() call.
+
+    Expected cost signal location (in priority order):
+        batch.info["cost"]  -> batch.cost -> zeros if missing.
+
+    Notes:
+      - Mirrors the patterns used in LagrangianIPPOPolicy (RMS, critic calls, masking, logging hooks).
+      - Keeps the standard PPO value loss on the *reward* critic. The constraint critic is used only
+        for variance-reduced estimates of the discounted cost/advantage.
+    """
+
+    def __init__(
+        self,
+        *,
+        constraint_critic: torch.nn.Module | None = None,
+        cost_limit: float = 0.0,
+        lambda_init: float = 0.0,
+        lambda_lr: float = 5e-4,
+        lambda_upper_bound: float = 5.0,
+        normalize_cost: bool = True,
+        logger=None,
+        **kwargs,
+    ):
+        self.recurrent = kwargs.pop("recurrent", None)
+        self.unroll_len = kwargs.pop("unroll_len", None)
+        super().__init__(**kwargs)
+
+        if constraint_critic is None:
+            raise ValueError("RCPOIPPOPolicy requires a `constraint_critic` network.")
+
+        self.constraint_critic = constraint_critic
+        self.const_rms = RunningMeanStd()
+        self.normalize_cost = bool(normalize_cost)
+
+        # Dual variable (not optimized by torch; updated by projected ascent)
+        # Keep on the same device as actor params.
+        device = next(self.actor.parameters()).device
+        self._lambda = torch.tensor(float(lambda_init), dtype=torch.float32, device=device)
+
+        self.cost_limit = float(cost_limit)
+        self.lambda_lr = float(lambda_lr)
+        self.lambda_upper_bound = float(lambda_upper_bound)
+
+        self.logger = logger
+        self._warned_no_cost = False
+
+        # re-use the combined wrapper for gradient clipping etc.
+        self._actor_critic = ActorCriticConstraint(self.actor, self.critic, self.constraint_critic)
+
+    # ---------------------------- helpers ---------------------------- #
+
+    def _extract_cost_array(self, batch: RolloutBatchProtocol) -> np.ndarray:
+        """Fetch immediate cost per step as a NumPy array aligned with batch.rew."""
+        cost = None
+        if hasattr(batch, "info") and isinstance(batch.info, Batch) and "TotalConstraint" in batch.info:
+            cost = batch.info["TotalConstraint"]
+        elif hasattr(batch, "TotalConstraint"):
+            cost = batch.cost
+
+        if cost is None:
+            if not self._warned_no_cost:
+                print("[RCPO] No cost signal found on batch.info['TotalConstraint'] nor batch.cost. Using zeros.")
+                self._warned_no_cost = True
+            cost = np.zeros_like(batch.rew)
+
+        # Make sure it's np.ndarray
+        if isinstance(cost, torch.Tensor):
+            cost = cost.detach().cpu().numpy()
+        elif not isinstance(cost, np.ndarray):
+            cost = np.asarray(cost, dtype=np.float32)
+
+        return cost.astype(np.float32)
+
+    def _extract_cost_tensor(self, batch: RolloutBatchProtocol) -> torch.Tensor:
+        """Fetch immediate cost per step as a torch tensor aligned with batch.rew."""
+        cost = None
+        # Priority order of where we look for costs
+        if hasattr(batch, "info") and isinstance(batch.info, Batch) and "TotalConstraint" in batch.info:
+            cost = batch.info["TotalConstraint"]
+        elif hasattr(batch, "TotalConstraint"):
+            cost = batch.cost
+
+        if cost is None:
+            if not self._warned_no_cost:
+                print("[RCPO] No cost signal found on batch.info['TotalConstraint'] nor batch.cost. Using zeros.")
+                self._warned_no_cost = True
+            cost = torch.zeros_like(batch.rew)
+
+        # Ensure tensor on same device/dtype as rewards
+        if isinstance(cost, np.ndarray):
+            cost = torch.as_tensor(cost, dtype=torch.float32)
+        if isinstance(batch.rew, np.ndarray):
+            batch.rew = torch.as_tensor(batch.rew, dtype=torch.float32)
+        cost = to_torch_as(cost, batch.rew)
+        return cost
+
+    def _compute_cost_values_and_gae(
+            self,
+            batch: RolloutBatchProtocol,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Compute (const_returns, const_adv) using the constraint critic and GAE."""
+
+        # 1) Get constraint values V_c(s) and V_c(s')
+        c_s, c_s_ = [], []
+        with torch.no_grad():
+            for minibatch in batch.split(self.max_batchsize, shuffle=False, merge_last=True):
+                c_s.append(self.constraint_critic(minibatch.obs, info=minibatch.info))
+                c_s_.append(self.constraint_critic(minibatch.obs_next, info=minibatch.info))
+
+        batch.c_s = torch.cat(c_s, dim=0).flatten()
+        c_s_np = batch.c_s.detach().cpu().numpy()
+        c_s_next_np = torch.cat(c_s_, dim=0).flatten().cpu().numpy()
+
+        # 2) Immediate costs (same shape as rewards)
+
+        cost_np = self._extract_cost_array(batch)
+
+        # Optional normalization (RMS over *costs*)
+        if self.normalize_cost:
+            self.const_rms.update(cost_np)
+            cost_np = self.const_rms.norm(cost_np)
+
+        # 3) End flags for GAE (done / terminated / truncated)
+        if hasattr(batch, "terminated") and hasattr(batch, "truncated"):
+            end_flag = np.logical_or(
+                to_numpy(batch.terminated),
+                to_numpy(batch.truncated),
+            )
+        else:
+            end_flag = to_numpy(batch.done)
+
+        # 4) GAE on the cost stream
+        gamma = self.gamma
+        gae_lmb = self.gae_lambda if hasattr(self, "gae_lambda") else 0.95
+
+        # _gae_return(v_s, v_s_, rew, end_flag, gamma, gae_lambda)
+        const_adv = _gae_return(
+            c_s_np,
+            c_s_next_np,
+            cost_np,
+            end_flag,
+            gamma,
+            gae_lmb,
+        )
+
+        const_returns = const_adv + c_s_np
+        return const_returns, const_adv
+
+    # ------------------------ PPO integration ------------------------ #
+
+    def process_fn(
+        self,
+        batch: RolloutBatchProtocol,
+        buffer: ReplayBuffer,
+        indices: np.ndarray,
+    ) -> LogpOldProtocol:
+        # 0) Align done/terminated/truncated with agent Alive flags (same as IPPO)
+        if "Alive" in batch.info:
+            bat_done = batch.info["Alive"] == False
+            bat_term = batch.info["Alive"] == False
+            batch.done = bat_done
+            batch.terminated = bat_term
+            batch.truncated = bat_term
+        if "Alive" in buffer.info:
+            buf_done = buffer.info["Alive"] == False
+            buf_term = buffer.info["Alive"] == False
+            buffer._meta.done = buf_done
+            buffer._meta.terminated = buf_term
+            buffer._meta.truncated = buf_term
+
+        # 1) Compute cost critic targets and store const_returns/const_adv
+        const_returns_np, const_adv_np = self._compute_cost_values_and_gae(batch)
+        batch.const_returns = to_torch_as(const_returns_np, batch.c_s)
+        batch.const_adv = to_torch_as(const_adv_np, batch.c_s)
+
+        # 2) Form the RCPO penalized reward and temporarily replace batch.rew
+        cost_t = self._extract_cost_array(batch)
+        # r' = r - lambda * (cost - cost_limit); note that subtracting lambda*cost_limit
+        # is a constant shaping that doesn't change the policy gradient, but it stabilizes
+        # the value targets. Keeping it here to mirror the paper.
+        lam = float(self._lambda.detach().item())
+        penalized_rew = batch.rew - lam * (cost_t - self.cost_limit)
+
+        # Keep a copy for debugging
+        batch.policy.orig_rew = batch.rew.copy()
+        batch.rew = penalized_rew
+
+        # 3) Now run the standard PPO processing to compute v_s, returns, adv and logp_old
+        if self.recompute_adv:
+            self._buffer, self._indices = buffer, indices
+        batch = self._compute_returns(batch, buffer, indices)  # reward-side v_s/returns/adv
+        batch.act = to_torch_as(batch.act, batch.v_s)
+
+        # Compute logp_old without touching the networks' grads
+        logp_old = []
+        with torch.no_grad():
+            for minibatch in batch.split(self.max_batchsize, shuffle=False, merge_last=True):
+                logp_old.append(self(minibatch).dist.log_prob(minibatch.act))
+            batch.logp_old = torch.cat(logp_old, dim=0).flatten()
+        batch: LogpOldProtocol
+        return batch
+
+    def _compute_returns(  # identical to PPO/A2C reward-side logic
+        self,
+        batch: RolloutBatchProtocol,
+        buffer: ReplayBuffer,
+        indices: np.ndarray,
+    ) -> BatchWithAdvantagesProtocol:
+        v_s, v_s_ = [], []
+        with torch.no_grad():
+            for minibatch in batch.split(self.max_batchsize, shuffle=False, merge_last=True):
+                v_s.append(self.critic(minibatch.obs, info=minibatch.info))
+                v_s_.append(self.critic(minibatch.obs_next, info=minibatch.info))
+        batch.v_s = torch.cat(v_s, dim=0).flatten()
+        v_s_np = batch.v_s.detach().cpu().numpy()
+        v_s_next_np = torch.cat(v_s_, dim=0).flatten().cpu().numpy()
+
+        # Unnormalize if reward normalization is enabled (mirror PPO/A2C)
+        if self.rew_norm:
+            v_s_np = v_s_np * np.sqrt(self.ret_rms.var + self._eps)
+            v_s_next_np = v_s_next_np * np.sqrt(self.ret_rms.var + self._eps)
+
+        unnormalized_returns, advantages = self.compute_episodic_return(
+            batch,
+            buffer,
+            indices,
+            v_s_next_np,
+            v_s_np,
+            gamma=self.gamma,
+            gae_lambda=self.gae_lambda,
+        )
+        if self.rew_norm:
+            batch.returns = unnormalized_returns / np.sqrt(self.ret_rms.var + self._eps)
+            self.ret_rms.update(unnormalized_returns)
+        else:
+            batch.returns = unnormalized_returns
+        batch.returns = to_torch_as(batch.returns, batch.v_s)
+        batch.adv = to_torch_as(advantages, batch.v_s)
+        return cast(BatchWithAdvantagesProtocol, batch)
+
+    # ----------------------- training & lambda ----------------------- #
+
+    def learn(  # type: ignore[override]
+        self,
+        batch: RolloutBatchProtocol,
+        batch_size: int | None,
+        repeat: int,
+        *args: Any,
+        **kwargs: Any,
+    ) -> PPOTrainingStats:
+        """
+        Train with standard PPO loss on the *penalized* reward computed in process_fn().
+        After PPO updates, perform a projected gradient ascent step on lambda using
+        the mean discounted cost return from this batch.
+        """
+        # Run standard PPO optimization (clip loss, vf loss, entropy)
+        stats: IPPOTrainingStats = super().learn(batch, batch_size, repeat, *args, **kwargs)  # type: ignore[assignment]
+
+        # Dual ascent: lambda <- [lambda + lr * (E[J_c] - cost_limit)]_+
+        # Use the batch's discounted cost returns as a proxy for E[J_c].
+        if not hasattr(batch, "const_returns"):
+            # Safety: if costs are missing, skip the update.
+            return stats
+
+        mean_cost_return = float(batch.const_returns.mean().item())
+        delta = mean_cost_return - self.cost_limit
+        new_lambda = float(self._lambda.detach().item() + self.lambda_lr * delta)
+        new_lambda = float(np.clip(new_lambda, 0.0, self.lambda_upper_bound))
+
+        # Keep device consistent
+        self._lambda = self._lambda.detach()  # just in case
+        self._lambda.data = torch.tensor(new_lambda, dtype=self._lambda.dtype, device=self._lambda.device)
+
+        # if self.logger is not None:
+        #     try:
+        #         self.logger.write("rcpo/mean_cost_return", mean_cost_return)
+        #         self.logger.write("rcpo/lambda", new_lambda)
+        #         self.logger.write("rcpo/cost_limit", self.cost_limit)
+        #     except Exception:
+        #         pass
+
+        return stats
+
+    @property
+    def lambda_value(self) -> float:
+        return float(self._lambda.detach().item())
+
+
+class IPCPOPolicy(IRCPOPolicy):
+    """
+    Projection-based Constrained Policy Optimization (PCPO) for this Tianshou-based codebase.
+
+    Workflow:
+      1) PPO update on task reward (by default with lambda=0; i.e., no penalty).
+      2) If mean discounted cost (from `batch.const_returns`) exceeds `cost_limit + projection_tol`,
+         run a projection loop: PPO-style clipped update using cost advantages to reduce expected cost,
+         with an approximate-KL guard to enforce a small trust region.
+
+    Options:
+      - Set `use_lambda_update=True` to combine PCPO with a Lagrange multiplier update (hybrid).
+      - Otherwise, lambda is set to 0 during the reward step and restored afterward.
+
+    This class reuses your batching, masking, logging, and advantage handling.
+    """
+
+    def __init__(
+        self,
+        *,
+        use_lambda_update: bool = False,
+        projection_steps: int = 3,
+        projection_batch_size: int | None = None,
+        projection_tol: float = 0.0,
+        max_proj_kl: float = 0.01,
+        projection_lr_scale: float = 1.0,
+        constraint_critic: torch.nn.Module | None = None,
+        cost_limit: float = 0.0,
+        lambda_init: float = 0.0,
+        lambda_lr: float = 5e-4,
+        lambda_upper_bound: float = 5.0,
+        normalize_cost: bool = True,
+        logger=None,
+        **kwargs,
+    ):
+        super().__init__(
+            constraint_critic=constraint_critic,
+            cost_limit=cost_limit,
+            lambda_init=lambda_init,
+            lambda_lr=lambda_lr,
+            lambda_upper_bound=lambda_upper_bound,
+            normalize_cost=normalize_cost,
+            logger=logger,
+            **kwargs,
+        )
+        self.use_lambda_update = bool(use_lambda_update)
+        self.projection_steps = int(projection_steps)
+        self.projection_batch_size = projection_batch_size
+        self.projection_tol = float(projection_tol)
+        self.max_proj_kl = float(max_proj_kl)
+        self.projection_lr_scale = float(projection_lr_scale)
+
+    def learn(  # type: ignore[override]
+        self,
+        batch: RolloutBatchProtocol,
+        batch_size: int | None,
+        repeat: int,
+        *args: Any,
+        **kwargs: Any,
+    ) -> PPOTrainingStats:
+        # 1) Pure PPO on r' with lambda=0 by default (unless hybrid mode requested)
+        backup_lambda = self._lambda.detach().clone()
+        if not self.use_lambda_update:
+            self._lambda.data = torch.tensor(0.0, dtype=self._lambda.dtype, device=self._lambda.device)
+
+        stats: PPOTrainingStats = super().learn(batch, batch_size, repeat, *args, **kwargs)  # type: ignore[assignment]
+
+        # 2) Lambda update (only if hybrid PCPO+RCPO requested)
+        if self.use_lambda_update:
+            # lambda was already updated inside RCPO.learn() above
+            pass
+        else:
+            # restore lambda for subsequent calls
+            self._lambda.data = backup_lambda
+
+        # 3) Projection loop if still violating constraint
+        if not hasattr(batch, "const_returns"):
+            return stats
+
+        mean_cost_return = float(batch.const_returns.mean().item())
+        violation = mean_cost_return - (self.cost_limit + self.projection_tol)
+        if violation <= 0.0:
+            if self.logger is not None:
+                try:
+                    self.logger.write("pcpo/feasible_after_ppo", 1.0)
+                    self.logger.write("pcpo/mean_cost_return", mean_cost_return)
+                except Exception:
+                    pass
+            return stats
+
+        if self.logger is not None:
+            try:
+                self.logger.write("pcpo/feasible_after_ppo", 0.0)
+                self.logger.write("pcpo/pre_projection_cost", mean_cost_return)
+            except Exception:
+                pass
+
+        split_batch_size = self.projection_batch_size or (batch_size or -1)
+        proj_steps_taken = 0
+
+        for _ in range(self.projection_steps):
+            proj_steps_taken += 1
+            approx_kls = []
+            for mb in batch.split(split_batch_size, merge_last=True, shuffle=True if getattr(self, "recurrent", False) else False):
+                dist = self(mb).dist
+                act = mb.act
+                logp = dist.log_prob(act)
+                if logp.ndim > 1:
+                    logp = logp.sum(-1)
+
+                logratio = logp - mb.logp_old
+                ratios = logratio.exp().float()
+
+                const_adv = mb.const_adv
+                if getattr(self, "norm_const_adv", False):
+                    cmean, cstd = const_adv.mean(), const_adv.std()
+                    const_adv = (const_adv - cmean) / (cstd + self._eps)
+
+                # PPO-style clipped surrogate on cost advantage.
+                # We MINIMIZE this to reduce the expected discounted cost.
+                surr1 = ratios * const_adv
+                surr2 = ratios.clamp(1.0 - self.eps_clip, 1.0 + self.eps_clip) * const_adv
+                proj_clip_loss = torch.min(surr1, surr2).mean()
+
+                ent = dist.entropy().mean()
+                loss = proj_clip_loss - self.ent_coef * ent
+
+                self.optim.zero_grad()
+                # clear grads
+                for p in self._actor_critic.parameters():
+                    if p.grad is not None:
+                        p.grad.detach_()
+                        p.grad.zero_()
+                loss.backward()
+                if self.max_grad_norm:
+                    nn.utils.clip_grad_norm_(self._actor_critic.parameters(), self.max_grad_norm)
+                # conservative step
+                for p in self._actor_critic.parameters():
+                    if p.grad is not None:
+                        p.grad.data.mul_(self.projection_lr_scale)
+                self.optim.step()
+
+                with torch.no_grad():
+                    approx_kl = ((ratios - 1) - logratio).mean().item()
+                    approx_kls.append(float(approx_kl))
+
+            # trust-region guard
+            if len(approx_kls) > 0 and float(np.mean(approx_kls)) > self.max_proj_kl:
+                if self.logger is not None:
+                    try:
+                        self.logger.write("pcpo/projection_early_stop_kl", 1.0)
+                        self.logger.write("pcpo/approx_kl_last", float(np.mean(approx_kls)))
+                    except Exception:
+                        pass
+                break
+
+        if self.logger is not None:
+            try:
+                self.logger.write("pcpo/projection_steps", float(proj_steps_taken))
+            except Exception:
+                pass
+
+        return stats
 
 log = logging.getLogger(__name__)
 
@@ -1954,14 +2514,42 @@ class Lagrange:
 
 @dataclass(kw_only=True)
 class IPPOTrainingStats(PPOTrainingStats):
-    cf_loss: SequenceSummaryStats
     approx_kl: SequenceSummaryStats
     clipfrac: SequenceSummaryStats
     explained_variance: SequenceSummaryStats
+
+    @classmethod
+    def from_sequences(
+        cls,
+        *,
+        losses: Sequence[float],
+        clip_losses: Sequence[float],
+        vf_losses: Sequence[float],
+        ent_losses: Sequence[float],
+        approx_kl: Sequence[float],
+        clipfrac: Sequence[float],
+        explained_variance: Sequence[float],
+        gradient_steps: int = 0,
+    ) -> Self:
+        return cls(
+            loss=SequenceSummaryStats.from_sequence(losses),
+            clip_loss=SequenceSummaryStats.from_sequence(clip_losses),
+            vf_loss=SequenceSummaryStats.from_sequence(vf_losses),
+            ent_loss=SequenceSummaryStats.from_sequence(ent_losses),
+            approx_kl=SequenceSummaryStats.from_sequence(approx_kl),
+            clipfrac=SequenceSummaryStats.from_sequence(clipfrac),
+            explained_variance=SequenceSummaryStats.from_sequence(explained_variance),
+            gradient_steps=gradient_steps,
+        )
+
+
+@dataclass(kw_only=True)
+class LagIPPOTrainingStats(IPPOTrainingStats):
+    cf_loss: SequenceSummaryStats
     constraint_prediction: SequenceSummaryStats
 
     @classmethod
-    def from_sequence(
+    def from_sequences(
         cls,
         *,
         losses: Sequence[float],

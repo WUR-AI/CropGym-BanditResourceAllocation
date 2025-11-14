@@ -42,6 +42,12 @@ class IntrinsicCuriosityModuleMARL(IntrinsicCuriosityModule):
 
 class FiLMHead(nn.Module):
     def __init__(self, in_dim, hidden_dim, out_dim, cond_dim, device="mps"):
+        if torch.backends.mps.is_available():
+            device = 'mps'
+        elif torch.cuda.is_available():
+            device = 'cuda'
+        else:
+            device = 'cpu'
         super().__init__()
         self.lin1 = nn.Linear(in_dim, hidden_dim, device=device)
         self.gam1 = nn.Linear(cond_dim, hidden_dim, device=device)
@@ -74,6 +80,12 @@ class BudgetCond(nn.Module):
     """
 
     def __init__(self, n_bins, emb_dim=8, device="mps"):
+        if torch.backends.mps.is_available():
+            device = 'mps'
+        elif torch.cuda.is_available():
+            device = 'cuda'
+        else:
+            device = 'cpu'
         super().__init__()
         # Use a real embedding layer for the categorical bin information
         # n_bins + 1 because bucketize can output values from 0 to n_bins inclusive
@@ -437,6 +449,12 @@ class MaskedActor(Actor):
             noop_prior_p=0.9,  # ~90% prior on action 0
             device='mps'
     ):
+        if torch.backends.mps.is_available():
+            device = 'mps'
+        elif torch.cuda.is_available():
+            device = 'cuda'
+        else:
+            device = 'cpu'
         super().__init__(preprocess_net=preprocess_net, action_shape=action_dim,
                          softmax_output=False, device=device)  # remember for logits
         self.feature_dim = getattr(self.preprocess, "input_dim", getattr(self.preprocess, "state_shape", None))
@@ -584,6 +602,12 @@ class StackedCritic(Critic):
             device='mps',
             **kwargs
     ):
+        if torch.backends.mps.is_available():
+            device = 'mps'
+        elif torch.cuda.is_available():
+            device = 'cuda'
+        else:
+            device = 'cpu'
         super().__init__(
             preprocess_net=preprocess_net,
             device=device,

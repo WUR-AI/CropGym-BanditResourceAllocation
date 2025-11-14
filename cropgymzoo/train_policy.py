@@ -34,6 +34,8 @@ from cropgymzoo.agents.networks import (
 )
 from cropgymzoo.agents.marl_algorithms_tianshou import (
     IPPOPolicy,
+    IRCPOPolicy,
+    IPCPOPolicy,
     IPPOCollector,
     LagrangianIPPOPolicy,
     AECMultiAgentPolicyManager,
@@ -127,12 +129,6 @@ def make_ppo_policy(
     device = "mps" if torch.backends.mps.is_available() else device
     print(f"Using device: {device}")
 
-    if args.lagrangian_ppo:
-        obs_constraint_dim = args.obs_constraint_dim
-        obs_constraint_idx = args.constraint_indices
-
-    idx_budget_features = args.idx_budget_features
-
     if args.architecture == 'lstm':
         network_fn = RecurrentLSTM
     else:
@@ -165,7 +161,7 @@ def make_ppo_policy(
                 concat_mask=args.concat_mask,
                 pool=getattr(args, 'pool', False),
                 device=device,
-            ) if args.lagrangian_ppo else None
+            ) if args.alg in ['lagppo', 'rcpo', 'pcpo'] else None
         else:
             critic_net = ObsMLP(
                 input_dim=obs_dim[0] - (6 * len(get_default_weather_features())) if getattr(args, 'pool', False) else obs_dim[0],
@@ -184,7 +180,7 @@ def make_ppo_policy(
                 activation=torch.nn.Tanh,
                 pool=getattr(args, 'pool', False),
                 device=device,
-            ) if args.lagrangian_ppo else None
+            ) if args.alg in ['lagppo', 'rcpo', 'pcpo'] else None
 
     if args.architecture == 'mlp':
         actor_net = ObsMLP(
@@ -214,7 +210,7 @@ def make_ppo_policy(
             concat_mask=args.concat_mask,
             pool=getattr(args, 'pool', False),
             device=device,
-        ) if args.lagrangian_ppo else None
+        ) if args.alg in ['lagppo', 'rcpo', 'pcpo'] else None
 
     actor = MaskedActor(
         preprocess_net=actor_net,
@@ -235,12 +231,12 @@ def make_ppo_policy(
         concat_mask=args.concat_mask,
         last_hidden_dim=hidden[-1],
         use_film=args.use_film,
-    ).to(device) if args.lagrangian_ppo else None
+    ).to(device) if args.alg in ['lagppo', 'rcpo', 'pcpo'] else None
 
     optim = Adam(
         list(actor.parameters()) + list(critic.parameters()) + list(constraint_critic.parameters()),
         lr=args.lr if args is not None else 1e-3,
-        ) if args.lagrangian_ppo else (
+        ) if args.alg in ['lagppo', 'rcpo', 'pcpo'] else (
         Adam(
             list(actor.parameters()) + list(critic.parameters()),
             lr=args.lr if args is not None else 1e-3,
@@ -251,10 +247,17 @@ def make_ppo_policy(
     dist = lambda logits: torch.distributions.Categorical(logits=logits)
     # dist = torch.distributions.Categorical
 
-    policy_fn = IPPOPolicy if not args.lagrangian_ppo else LagrangianIPPOPolicy
+    if args.alg == 'lagppo':
+        policy_fn = LagrangianIPPOPolicy
+    elif args.alg == 'rcpo':
+        policy_fn = IRCPOPolicy
+    elif args.alg == 'pcpo':
+        policy_fn = IPCPOPolicy
+    else:
+        policy_fn = IPPOPolicy
 
     lagrangian_kwarg = {
-        'constraint_critic': constraint_critic if args.lagrangian_ppo else None,
+        'constraint_critic': constraint_critic if args.alg in ['lagppo', 'rcpo', 'pcpo'] else None,
         'recurrent': True if args.architecture in ['lstm', 'gru'] else False,
         'unroll_len': args.seq_len if args.architecture in ['lstm', 'gru'] else 1,
     }
@@ -385,7 +388,7 @@ def grab_spaces(seed):
 def create_logger(args):
     logdir = args.logdir
     # Logger
-    run_name = f"PPO_{str(args.architecture).upper()}_{'parallel' if args.parallel else 'dummy'}_{datetime.datetime.now():%m%d_%H%M}"
+    run_name = f"{str(args.alg)}_{str(args.architecture).upper()}_{'parallel' if args.parallel else 'dummy'}_{datetime.datetime.now():%m%d_%H%M}"
     run_name = (run_name + "_resume") if args.resume else run_name
     writer = SummaryWriter(os.path.join(logdir, run_name))
     logger = TensorboardLogger(writer)
@@ -507,8 +510,10 @@ def train_gru_ppo(args: Namespace):
         for a in agents
     }
 
-    print(f"Using {'LagrangianIPPO' if args.lagrangian_ppo else 'IPPO'} policy!")
+    print(f"Using {args.alg} policy!")
     print(f"Using ICM Policy!") if args.use_icm else None
+
+    print("OK")
 
     marl_policy_manager = AECMultiAgentPolicyManager(
         policies=list(policies.values()),
