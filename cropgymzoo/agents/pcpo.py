@@ -93,16 +93,16 @@ class IPCPOPolicy(IRCPOPolicy):
         if violation <= 0.0:
             if self.logger is not None:
                 try:
-                    self.logger.write("pcpo/feasible_after_ppo", 1.0)
-                    self.logger.write("pcpo/mean_cost_return", mean_cost_return)
+                    self.logger.write("training/train", self._update_step, {"pcpo/feasible_after_ppo": 1.0})
+                    self.logger.write("training/train", self._update_step, {"pcpo/mean_cost_return": mean_cost_return})
                 except Exception:
                     pass
             return stats
 
         if self.logger is not None:
             try:
-                self.logger.write("pcpo/feasible_after_ppo", 0.0)
-                self.logger.write("pcpo/pre_projection_cost", mean_cost_return)
+                self.logger.write("training/train", self._update_step, {"pcpo/feasible_after_ppo": 0.0})
+                self.logger.write("training/train", self._update_step, {"pcpo/pre_projection_cost": mean_cost_return})
             except Exception:
                 pass
 
@@ -159,15 +159,16 @@ class IPCPOPolicy(IRCPOPolicy):
             if len(approx_kls) > 0 and float(np.mean(approx_kls)) > self.max_proj_kl:
                 if self.logger is not None:
                     try:
-                        self.logger.write("pcpo/projection_early_stop_kl", 1.0)
-                        self.logger.write("pcpo/approx_kl_last", float(np.mean(approx_kls)))
+                        self.logger.write("training/train", self._update_step, {"pcpo/projection_early_stop_kl": 1.0})
+                        self.logger.write("training/train", self._update_step,
+                                          {"pcpo/approx_kl_last": float(np.mean(approx_kls))})
                     except Exception:
                         pass
                 break
 
         if self.logger is not None:
             try:
-                self.logger.write("pcpo/projection_steps", float(proj_steps_taken))
+                self.logger.write("training/train", self._update_step, {"pcpo/projection_steps": float(proj_steps_taken)})
             except Exception:
                 pass
 

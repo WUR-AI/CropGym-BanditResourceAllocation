@@ -308,7 +308,7 @@ class IRCPOPolicy(IPPOPolicy):
                     f"rcpo/cost_limit/{name}": self.cost_limit,
                     f"cost/lagrangian_multiplier/{name}": self.lagrange.lagrangian_multiplier,
                 }
-                self.logger.log_update_data(more_data, step=self._update_step)
+                self.logger.write("training/train", step=self._update_step, data=more_data)
             except Exception:
                 pass
 

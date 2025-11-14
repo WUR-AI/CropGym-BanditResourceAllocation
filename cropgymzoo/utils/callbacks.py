@@ -365,7 +365,7 @@ class CometTianshouLogger(BaseLogger):
         log_dir: str | os.PathLike | None = None,
         train_interval: int = 2000,
         test_interval: int = 1,
-        update_interval: int = 2000,
+        update_interval: int = 1,
         info_interval: int = 1,
         exclude_arrays: bool = True,
         upload_checkpoints: bool = True,

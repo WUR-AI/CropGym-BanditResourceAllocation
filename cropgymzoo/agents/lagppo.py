@@ -293,7 +293,7 @@ class IPPOPolicy(PPOPolicy):
             pass
 
         step = self._update_step
-        self.logger.log_update_data(log_data, step=step)
+        self.logger.write("training/train", step=step, data=log_data)
         self._update_step += 1
 
 
