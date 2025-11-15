@@ -3,6 +3,9 @@ from pathlib import Path
 import torch
 import argparse
 import pickle
+from tqdm import tqdm
+
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import yaml
 
@@ -54,7 +57,7 @@ def run_region_year(
                 saved_model=proper_model_file,
                 render=True,
             )
-            print(f"Running farmer_{i} at {region} in year {year}")
+            # print(f"Running farmer_{i} at {region} in year {year}")
             info = runner.run(years=[year])
 
         if info is None:
@@ -93,18 +96,27 @@ def region_crop_picker(region, crop):
     crop_code = {"sugarbeet": "sb", "winterwheat": "ww", "potato": "pt"}
     return f"field-{crop_code[crop]}-{region_suffix[region]}"
 
+
+# Helper for parallel execution
+def _run_region_year_wrapper(args):
+    region, year, agent, scenario = args
+    info_dict = run_region_year(region, year, agent=agent, scenario=scenario)
+    return region, year, info_dict
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--regions", type=str, help="region name", default="all")
     parser.add_argument("--years", type=int, help="year", default=0)
     parser.add_argument("--agent", type=str, help="agent name", default="baseline")
     parser.add_argument("--scenario", type=str, help="scenario name", default="full_budget")
+    parser.add_argument("--num_workers", type=int, help="number of parallel workers (1 = no parallelism)", default=1)
     args = parser.parse_args()
 
     regions = args.regions
     years = args.years
     agent = args.agent
     scenario = args.scenario
+    num_workers = args.num_workers
 
     if regions == "all":
         regions = ["groningen", "zeeland", "gelderland"]
@@ -116,10 +128,21 @@ if __name__ == "__main__":
         years = [years]
 
     results_dict = {}
-    for region in regions:
-        for year in years:
+    # Create list of (region, year, agent, scenario) jobs
+    jobs = [(region, year, agent, scenario) for region in regions for year in years]
+
+    if num_workers is None or num_workers <= 1:
+        # Fallback to sequential execution
+        for region, year, agent, scenario in tqdm(jobs, desc="Running scenarios"):
             info_dict = run_region_year(region, year, agent=agent, scenario=scenario)
             results_dict[f"{region}_{year}"] = info_dict
+    else:
+        # Parallel execution over regions/years
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            futures = [executor.submit(_run_region_year_wrapper, job) for job in jobs]
+            for region, year, agent, scenario in tqdm(jobs, desc="Running scenarios"):
+                info_dict = run_region_year(region, year, agent=agent, scenario=scenario)
+                results_dict[f"{region}_{year}"] = info_dict
 
     with open(os.path.join(_DEFAULT_RESULTSDIR, f"results_{agent}_{scenario}.pkl"), "wb") as f:
         pickle.dump(results_dict, f)
