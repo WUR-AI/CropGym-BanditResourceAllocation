@@ -152,7 +152,7 @@ class MultiRLAgent(BaseAgent):
                 skew_prior_action=False,
             ) for a in self.agents
         }
-        print(f"Using {'LagrangianIPPO' if args.lagrangian_ppo else 'IPPO'} policy!")
+        print(f"Using {str(args.alg).upper()} policy!")
 
         self.policy_manager = MultiAgentPolicyManager(
             policies=list(policies.values()),
