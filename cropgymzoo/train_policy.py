@@ -127,7 +127,7 @@ def initialize_policy(
 ) -> PPOPolicy | ICMPolicy:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     device = "mps" if torch.backends.mps.is_available() else device
-    print(f"Using device: {device}")
+    # print(f"Using device: {device}")
 
     if args.architecture == 'lstm':
         network_fn = RecurrentLSTM
