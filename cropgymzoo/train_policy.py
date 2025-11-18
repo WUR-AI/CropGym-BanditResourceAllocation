@@ -390,7 +390,7 @@ def grab_spaces(seed):
 def create_logger(args):
     logdir = args.logdir
     # Logger
-    run_name = f"{str(args.alg)}_{str(args.architecture).upper()}_{'parallel' if args.parallel else 'dummy'}_{datetime.datetime.now():%m%d_%H%M}"
+    run_name = f"{str(args.alg).upper()}_{str(args.architecture).upper()}_{'parallel' if args.parallel else 'dummy'}_{datetime.datetime.now():%m%d_%H%M}"
     run_name = (run_name + "_resume") if args.resume else run_name
     writer = SummaryWriter(os.path.join(logdir, run_name))
     logger = TensorboardLogger(writer)
@@ -426,7 +426,7 @@ def train_policy(args: Namespace):
 
     # resume model?
     saved_model = None
-    if getattr(args, "resume", None) is not None:
+    if getattr(args, "resume", None) is not None and args.resume:
         saved_model = load_checkpoint()
         # override args to match
         start_stage = args.start_stage
@@ -438,7 +438,7 @@ def train_policy(args: Namespace):
 
         print("Resuming training from saved model!")
 
-    print(f"\nTraining PPO with {str(args.architecture).upper()} Network")
+    print(f"\nTraining {str(args.alg).upper()} with {str(args.architecture).upper()} Network")
     print(f"Using {'Dummy' if not args.parallel else 'SubProc'}VectorEnv\n")
     print(f"Training with {args.train_envs_num} env(s)\n")
 
@@ -507,7 +507,7 @@ def train_policy(args: Namespace):
             use_icm=args.use_icm,
             logger=logger,
             args=args,
-            skew_prior_action=not args.resume if args.resume is not None else True,
+            skew_prior_action=(args.skew and not args.resume),
         )
         for a in agents
     }
@@ -550,6 +550,7 @@ def train_policy(args: Namespace):
     if args.curriculum:
         curriculum_manager = CurriculumCallbackManager(
             start_stage=args.start_stage,
+            stage_zero_epochs=args.stage_zero,
             min_epochs_per_stage=args.advance_steps,
             # sample from sub-env attribute... Quite dirty this way.
             max_stage=dummy_env.get_field_env_with_idx(0).unwrapped.random_manager.get_max_stage()

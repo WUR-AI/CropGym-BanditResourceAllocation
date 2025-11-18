@@ -62,6 +62,7 @@ if __name__ == "__main__":
     parser.add_argument("--curriculum", action='store_true', dest='curriculum')
     parser.add_argument("--advance_steps", type=int, dest='advance_steps', default=200)
     parser.add_argument("--start_stage", type=int, dest='start_stage', default=0)
+    parser.add_argument("--stage_zero", type=int, dest='stage_zero', default=300)
 
     # Use intrinsic curiosity module
     parser.add_argument("--use_icm", action='store_true', dest='use_icm')
@@ -69,6 +70,10 @@ if __name__ == "__main__":
     # Use feature-wise linear modulation
     parser.add_argument("--use_film", action='store_true', dest='use_film')
     parser.add_argument("--not_use_film", action='store_false', dest='use_film')
+
+    # skew actions
+    parser.add_argument("--skew", action='store_true', dest='skew')
+    parser.add_argument("--not_skew", action='store_false', dest='skew')
 
     # resume model
     parser.add_argument("--resume", action="store_true", dest='resume')
@@ -81,7 +86,7 @@ if __name__ == "__main__":
     parser.add_argument("--no_comet", action='store_true', dest='no_comet')
 
     parser.set_defaults(
-        resume=None,
+        resume=False,
         parallel=False,
         recurrent=True,
         independent=True,
@@ -92,6 +97,7 @@ if __name__ == "__main__":
         use_film=True,
         concat_mask=False,
         pool=False,
+        skew=False,
     )
     hyperparams = parser.parse_args()
 
