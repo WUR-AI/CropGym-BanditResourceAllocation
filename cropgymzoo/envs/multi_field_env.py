@@ -388,6 +388,9 @@ class MultiFieldEnv(AECEnv, EzPickle):
     def get_field_size(self, _agent):
         return self.fields[_agent].unwrapped.area
 
+    def get_farm_area_sum(self):
+        return np.sum([self.fields[a].unwrapped.area for a in self.possible_agents])
+
     def _get_mask(self, _agent):
         return self.fields[_agent].unwrapped.action_mask()
 
@@ -794,7 +797,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
         def format_val(val, width, prec=2):
             return f"{val:>{width}.{prec}f}" if isinstance(val, (int, float)) else f"{val:>{width}}"
 
-        header = f"Farm status; sowing year {self.year} – budget left: {self.global_budget_left} / {self.global_budget} kg N | Cumulative Reward: {self.get_cumulative_reward():.1f}"
+        header = f"Farm status; sowing year {self.year} – budget left: {self.global_budget_left * self.get_farm_area_sum()} / {self.global_budget * self.get_farm_area_sum()} kg N | Cumulative Reward: {self.get_cumulative_reward():.1f}"
         cols = ("Field (area[ha])", "Crop", "Date", "N applied", "Yield[t/ha]", "NUE", "Nsurp", "Profit", "Reward")
         fmt_header = "{:20} {:12} {:10} {:>10} {:>15} {:>7} {:>7} {:>10} {:>10}"
         lines = [header, fmt_header.format(*cols), "-" * 110]
