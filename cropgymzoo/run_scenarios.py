@@ -12,7 +12,7 @@ import yaml
 from cropgymzoo import _SCENARIO_PATH, _DEFAULT_MODEL_DIR, _DEFAULT_RESULTSDIR
 from cropgymzoo.utils.scenario_utils import get_scenario_based_on_loc
 
-from cropgymzoo.eval_policy import MultiRLAgent
+from cropgymzoo.eval_policy import MultiRLAgent, RoTAgent
 
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
@@ -30,8 +30,9 @@ def run_region_year(
 
     _YEAR_PATH = os.path.join(_REGION_PATH, str(year))
 
-    # Loop through farmers
-    for i in range(len(os.listdir(_YEAR_PATH)) - 1):
+    # Loop through farmers with a progress bar
+    num_farmers = len(os.listdir(_YEAR_PATH)) - 1
+    for i in tqdm(range(num_farmers), desc=f"{region}-{year} farmer"):
         info = None
         _FARMER_PATH = os.path.join(_YEAR_PATH, f"farmer_{i}.yaml")
 
@@ -60,8 +61,19 @@ def run_region_year(
             # print(f"Running farmer_{i} at {region} in year {year}")
             info = runner.run(years=[year])
 
+        elif agent == "ROT":
+            runner = RoTAgent(
+                env=env,
+                render=True,
+            )
+
+            info = runner.run(years=[year])
+
         if info is None:
             print(f"No results for farmer_{i} at {region} in year {year}")
+
+        del runner
+        del env
 
         result_dict[f"farmer_{i}"] = info
 
@@ -139,9 +151,12 @@ if __name__ == "__main__":
     else:
         # Parallel execution over regions/years
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            futures = [executor.submit(_run_region_year_wrapper, job) for job in jobs]
-            for region, year, agent, scenario in tqdm(jobs, desc="Running scenarios"):
-                info_dict = run_region_year(region, year, agent=agent, scenario=scenario)
+            futures = {
+                executor.submit(_run_region_year_wrapper, job): job
+                for job in jobs
+            }
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Running scenarios"):
+                region, year, info_dict = future.result()
                 results_dict[f"{region}_{year}"] = info_dict
 
     with open(os.path.join(_DEFAULT_RESULTSDIR, f"results_{agent}_{scenario}.pkl"), "wb") as f:
