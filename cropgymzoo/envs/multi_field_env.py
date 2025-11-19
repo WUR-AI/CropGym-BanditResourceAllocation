@@ -46,20 +46,29 @@ def make_multi_env(
 class MultiFieldEnv(AECEnv, EzPickle):
 
     fertilization_schedule = {
-        "winterwheat": {
-            165: {"clay": 100, "sand": 80, "silt": 80, "peat": 40},
-            190: {"clay": 60, "sand": 40, "silt": 70, "peat": 40},
-            225: {"clay": 60, "sand": 40, "silt": 60, "peat": 40},
+        "winterwheat_max": {
+            5: {"clay": 150, "sand": 100, "silt": 100, "peat": 100},
+            190: {"clay": 90, "sand": 60, "silt": 90, "peat": 60},
         },
-        "potato": {
-            5: {"clay": 130, "sand": 130, "silt": 100, "peat": 130},
-            15: {"clay": 55, "sand": 30, "silt": 55, "peat": 55},
-            35: {"clay": 40, "sand": 40, "silt": 40, "peat": 40},
+        "winterwheat_low": {
+            5: {"clay": 150, "sand": 100, "silt": 100, "peat": 100},
+            190: {"clay": 40, "sand": 10, "silt": 40, "peat": 10},
         },
-        "sugarbeet": {
-            5: {"clay": 40, "sand": 40, "silt": 40, "peat": 40},
-            40: {"clay": 60, "sand": 50, "silt": 40, "peat": 50},
-            75: {"clay": 30, "sand": 30, "silt": 20, "peat": 30},
+        "potato_max": {
+            5: {"clay": 170, "sand": 130, "silt": 130, "peat": 170},
+            30: {"clay": 100, "sand": 130, "silt": 70, "peat": 100},
+        },
+        "potato_low": {
+            5: {"clay": 170, "sand": 130, "silt": 130, "peat": 170},
+            30: {"clay": 50, "sand": 70, "silt": 20, "peat": 50},
+        },
+        "sugarbeet_max": {
+            5: {"clay": 100, "sand": 100, "silt": 110, "peat": 100},
+            20: {"clay": 50, "sand": 40, "silt": 0, "peat": 40},
+        },
+        "sugarbeet_low": {
+            5: {"clay": 100, "sand": 90, "silt": 60, "peat": 90},
+            20: {"clay": 0, "sand": 0, "silt": 0, "peat": 0},
         },
     }
 
@@ -622,6 +631,26 @@ class MultiFieldEnv(AECEnv, EzPickle):
                 break  # stop after first match
 
         return fert / 10  # align with action space
+
+    def rule_of_thumb(self, agent_name, infos, scenario='max'):
+        """Simple farmer rule-based fertilization schedule based on crop + soil."""
+        crop = self.get_per_field_crop_name()[agent_name]
+        soil = self.get_per_field_soil_type()[agent_name]
+
+        dap_plant = infos["DaysAfterPlanting"][-1]  # assume infos contains this
+        fert = 0.0
+
+        # have several identifiers for scenario
+        crop_identifier = crop + '_' + scenario
+
+        # check if today matches any scheduled DAP for this crop
+        for day, soil_map in self.fertilization_schedule.get(crop_identifier, {}).items():
+            if self._is_at_date(dap_plant, day):
+                fert = soil_map.get(soil, 0.0)  # default 0 if soil not found
+                break  # stop after first match
+
+        return fert / 10  # align with action space
+
 
     def _get_each_agent_actions(self) -> dict[str, int]:
         """Rule-based fertiliser policy for warm-up episodes."""

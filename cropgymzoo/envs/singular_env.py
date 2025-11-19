@@ -407,14 +407,52 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
     def overwrite_year(self, year):
         self.year = year
-        end_date = {'crop_end_date': lambda d: d.replace(year=year)} if self.agmt.crop_end_type == "harvest" else {}
-        self.agro_management = self.agmt.update_attributes(crop_start_date=lambda d: d.replace(year=year),
-                                                           campaign_date=lambda d: self._safe_replace_year(d, year),
-                                                           **end_date)
+        end_date = {
+            'crop_end_date': lambda d: d.replace(
+                year=(
+                    year - 1
+                    if self.crop == 'winterwheat'
+                    else year
+                )
+            )
+        } if self.agmt.crop_end_type == "harvest" else {}
+        self.agro_management = self.agmt.update_attributes(
+            crop_start_date=lambda d: d.replace(
+                year=(
+                    year - 1
+                    if self.crop == 'winterwheat'
+                    else year
+                )
+            ),
+            campaign_date=lambda d: self._safe_replace_year(
+                d,
+                (
+                    year - 1
+                    if self.crop == 'winterwheat'
+                    else year
+                )
+            ),
+            **end_date
+        )
         if self.reward_function in reward_functions_with_baseline() and self.original is True:
-            self.baseline_env.agro_management = self.agmt.update_attributes(crop_start_date=lambda d: d.replace(year=year),
-                                                                            campaign_date=lambda d: self._safe_replace_year(d, year),
-                                                                            **end_date)
+            self.baseline_env.agro_management = self.agmt.update_attributes(
+                crop_start_date=lambda d: d.replace(
+                    year=(
+                        year - 1
+                        if self.crop == 'winterwheat'
+                        else year
+                    )
+                ),
+                campaign_date=lambda d: self._safe_replace_year(
+                    d,
+                    (
+                        year - 1
+                        if self.crop == 'winterwheat'
+                        else year
+                    )
+                ),
+                **end_date
+            )
 
     def render(self, mode="human"):
         pass
