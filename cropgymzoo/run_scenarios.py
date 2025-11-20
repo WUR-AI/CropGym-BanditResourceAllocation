@@ -18,7 +18,7 @@ from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
 
 def _get_scenario_code(scenario):
-    if scenario == "full_budget":
+    if scenario in ["full_budget", "full_budget_lp"]:
         return "max"
     elif scenario == "half_budget":
         return "low"
@@ -38,6 +38,8 @@ def run_region_year(
     _REGION_PATH = os.path.join(_SCENARIO_PATH, region)
 
     _YEAR_PATH = os.path.join(_REGION_PATH, str(year))
+
+    year = year - 5 if "_lp" in scenario else year
 
     # Loop through farmers with a progress bar
     num_farmers = len(os.listdir(_YEAR_PATH)) - 1
@@ -184,7 +186,8 @@ if __name__ == "__main__":
                 executor.submit(_run_region_year_wrapper, job): job
                 for job in jobs
             }
-            for future in tqdm(as_completed(futures), total=len(futures), desc="Running scenarios"):
+            for future in tqdm(as_completed(futures), total=len(futures),
+                               desc="-----Running scenarios------"):
                 region, year, info_dict = future.result()
                 # results_dict[f"{region}_{year}"] = info_dict
 
@@ -202,7 +205,8 @@ if __name__ == "__main__":
                 farmer_tag = "_".join(stem_parts[-2:])  # e.g. "farmer_0"
                 key = f"{region}_{year}_{farmer_tag}"
                 with open(pkl_file, "rb") as f:
-                    aggregated_results[key] = pickle.load(f)
+                    temp_dict = pickle.load(f)
+                aggregated_results[key] = temp_dict.get(year, temp_dict)
 
     out_path = base_dir / f"results_{agent}_{scenario}.pkl"
     with open(out_path, "wb") as f:
