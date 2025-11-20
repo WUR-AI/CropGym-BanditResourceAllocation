@@ -17,12 +17,21 @@ from cropgymzoo.eval_policy import MultiRLAgent, RoTAgent
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
 
+def _get_scenario_code(scenario):
+    if scenario == "full_budget":
+        return "max"
+    elif scenario == "half_budget":
+        return "low"
+    else:
+        return "max"
+
 
 def run_region_year(
         region: str,
         year: int,
         agent: str = "baseline",
-        scenario: str = "baseline"
+        scenario: str = "full_budget",
+        render: bool = False,
 ):
     result_dict = {}
 
@@ -34,6 +43,16 @@ def run_region_year(
     num_farmers = len(os.listdir(_YEAR_PATH)) - 1
     for i in tqdm(range(num_farmers), desc=f"{region}-{year} farmer"):
         info = None
+        out_path = os.path.join(
+            _DEFAULT_RESULTSDIR,
+            agent,
+            f"results_{scenario}_{region}_{year}_farmer_{i}.pkl",
+        )
+        # Skip if this farmer's results already exist
+        if os.path.exists(out_path):
+            # Optional: uncomment for debug logging
+            print(f"Skipping {region}-{year} farmer_{i}; results already exist at {out_path}")
+            continue
         _FARMER_PATH = os.path.join(_YEAR_PATH, f"farmer_{i}.yaml")
 
         with open(_FARMER_PATH, 'r') as f:
@@ -42,11 +61,11 @@ def run_region_year(
         env = MultiFieldEnv(
             years=[year],
             training=False,
-            render=True,
+            render=render,
             farm_dict=dict_fields,
         )
 
-        if agent == "MLP":
+        if "MLP" in agent:
             # assume only one file in the folder
             model_path = Path(os.path.join(_DEFAULT_MODEL_DIR, agent))
             model_file = [p for p in model_path.iterdir() if p.is_file()][0]
@@ -56,15 +75,15 @@ def run_region_year(
             runner = MultiRLAgent(
                 env=env,
                 saved_model=proper_model_file,
-                render=True,
+                render=render,
             )
             # print(f"Running farmer_{i} at {region} in year {year}")
-            info = runner.run(years=[year])
+            info = runner.run(years=[year], scenario=_get_scenario_code(scenario))
 
         elif agent == "ROT":
             runner = RoTAgent(
                 env=env,
-                render=True,
+                render=render,
             )
 
             info = runner.run(years=[year])
@@ -75,7 +94,10 @@ def run_region_year(
         del runner
         del env
 
-        result_dict[f"farmer_{i}"] = info
+        with open(out_path, "wb") as f:
+            pickle.dump(info, f)
+
+        # result_dict[f"farmer_{i}"] = info
 
     return result_dict
 
@@ -111,17 +133,19 @@ def region_crop_picker(region, crop):
 
 # Helper for parallel execution
 def _run_region_year_wrapper(args):
-    region, year, agent, scenario = args
-    info_dict = run_region_year(region, year, agent=agent, scenario=scenario)
+    region, year, agent, scenario, render = args
+    info_dict = run_region_year(region, year, agent=agent, scenario=scenario, render=render)
     return region, year, info_dict
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--regions", type=str, help="region name", default="all")
     parser.add_argument("--years", type=int, help="year", default=0)
-    parser.add_argument("--agent", type=str, help="agent name", default="baseline")
+    parser.add_argument("--agent", type=str, help="agent name", default="ROT")
     parser.add_argument("--scenario", type=str, help="scenario name", default="full_budget")
     parser.add_argument("--num_workers", type=int, help="number of parallel workers (1 = no parallelism)", default=1)
+    parser.add_argument("--render", action='store_true', help="render", dest='render')
+    parser.set_defaults(render=False)
     args = parser.parse_args()
 
     regions = args.regions
@@ -129,6 +153,9 @@ if __name__ == "__main__":
     agent = args.agent
     scenario = args.scenario
     num_workers = args.num_workers
+
+    # make subfolder
+    os.makedirs(os.path.join(_DEFAULT_RESULTSDIR, args.agent), exist_ok=True)
 
     if regions == "all":
         regions = ["groningen", "zeeland", "gelderland"]
@@ -141,13 +168,15 @@ if __name__ == "__main__":
 
     results_dict = {}
     # Create list of (region, year, agent, scenario) jobs
-    jobs = [(region, year, agent, scenario) for region in regions for year in years]
+    jobs = [(region, year, agent, scenario, args.render) for region in regions for year in years]
 
     if num_workers is None or num_workers <= 1:
         # Fallback to sequential execution
         for region, year, agent, scenario in tqdm(jobs, desc="Running scenarios"):
-            info_dict = run_region_year(region, year, agent=agent, scenario=scenario)
-            results_dict[f"{region}_{year}"] = info_dict
+            info_dict = run_region_year(region, year, agent=agent, scenario=scenario, render=args.render)
+            with open(os.path.join(_DEFAULT_RESULTSDIR, args.agent, f"results_{region}_{year}.pkl"), "wb") as f:
+                pickle.dump(info_dict, f)
+            # results_dict[f"{region}_{year}"] = info_dict
     else:
         # Parallel execution over regions/years
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
@@ -157,9 +186,26 @@ if __name__ == "__main__":
             }
             for future in tqdm(as_completed(futures), total=len(futures), desc="Running scenarios"):
                 region, year, info_dict = future.result()
-                results_dict[f"{region}_{year}"] = info_dict
+                # results_dict[f"{region}_{year}"] = info_dict
 
-    with open(os.path.join(_DEFAULT_RESULTSDIR, f"results_{agent}_{scenario}.pkl"), "wb") as f:
-        pickle.dump(results_dict, f)
+    # Aggregate all per-farmer pickle files into one big dictionary
+    aggregated_results = {}
+    base_dir = Path(_DEFAULT_RESULTSDIR) / agent
 
-    print(f"Saved results to {os.path.join(_DEFAULT_RESULTSDIR, f'results_{agent}_{scenario}.pkl')}")
+    for region in regions:
+        for year in years:
+            pattern = f"results_{scenario}_{region}_{year}_farmer_*.pkl"
+            for pkl_file in base_dir.glob(pattern):
+                # Example filename: results_full_budget_groningen_2020_farmer_0.pkl
+                stem_parts = pkl_file.stem.split("_")
+                # last part should be like "0" from "farmer_0"; keep the whole farmer tag for clarity
+                farmer_tag = "_".join(stem_parts[-2:])  # e.g. "farmer_0"
+                key = f"{region}_{year}_{farmer_tag}"
+                with open(pkl_file, "rb") as f:
+                    aggregated_results[key] = pickle.load(f)
+
+    out_path = base_dir / f"results_{agent}_{scenario}.pkl"
+    with open(out_path, "wb") as f:
+        pickle.dump(aggregated_results, f)
+
+    print(f"Saved aggregated results to {out_path}")
