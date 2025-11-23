@@ -516,27 +516,27 @@ class PCSEEnv(gym.Env):
                                                                )
 
         # if need to reinitialize wdp
-        need_new_wdp, rm, curr_randomize_flag = self.new_wdp(options)
-
-        if need_new_wdp:
-            # Use an episode-specific seed only when provided; otherwise keep the env seed.
-            seed = options.get('weather_seed', self.seed)
-            self._weather_data_provider = get_openmeteo_provider(
-                location=self._location,
-                seed=seed,
-                training=self.training,
-                random_manager=rm,
-            )
-            # remember state for future resets
-            self._wdp_location = self._location
-            self._wdp_randomize_flag = curr_randomize_flag
-        else:
-            self._weather_data_provider = get_openmeteo_provider(
-                location=self._location,
-                seed=self.seed,
-                training=self.training,
-                random_manager=getattr(self, 'random_manager', None),  # assumed that it's initialised
-            )
+        # need_new_wdp, rm, curr_randomize_flag = self.new_wdp(options)
+        #
+        # if need_new_wdp:
+        #     # Use an episode-specific seed only when provided; otherwise keep the env seed.
+        #     seed = options.get('weather_seed', self.seed)
+        #     self._weather_data_provider = get_openmeteo_provider(
+        #         location=self._location,
+        #         seed=seed,
+        #         training=self.training,
+        #         random_manager=rm,
+        #     )
+        #     # remember state for future resets
+        #     self._wdp_location = self._location
+        #     self._wdp_randomize_flag = curr_randomize_flag
+        # else:
+        self._weather_data_provider = get_openmeteo_provider(
+            location=self._location,
+            seed=self.seed,
+            training=self.training,
+            random_manager=getattr(self, 'random_manager', None),  # assumed that it's initialised
+        )
 
         # Create a PCSE engine / crop growth model
         model = Engine(self._parameter_provider,

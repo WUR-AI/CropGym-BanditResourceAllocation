@@ -109,6 +109,9 @@ class IPPOPolicy(PPOPolicy):
     ):
         self.logger = logger
         self._update_step = 0
+        self.constraint_critic = kwargs.pop('constraint_critic', None)
+        self.recurrent = kwargs.pop('recurrent', False)
+        self.unroll_len = kwargs.pop('unroll_len', 1)
         super().__init__(**kwargs)
 
     def process_fn(self, batch, buffer, indices):
@@ -142,6 +145,46 @@ class IPPOPolicy(PPOPolicy):
             batch.logp_old = torch.cat(logp_old, dim=0).flatten()
         batch: LogpOldProtocol
         return batch
+
+    def _compute_returns(
+        self,
+        batch: RolloutBatchProtocol,
+        buffer: ReplayBuffer,
+        indices: np.ndarray,
+    ) -> BatchWithAdvantagesProtocol:
+        v_s, v_s_ = [], []
+        with torch.no_grad():
+            for minibatch in batch.split(self.max_batchsize, shuffle=False, merge_last=True):
+                v_s.append(self.critic(minibatch.obs, info=minibatch.info))
+                v_s_.append(self.critic(minibatch.obs_next, info=minibatch.info))
+        batch.v_s = torch.cat(v_s, dim=0).flatten()  # old value
+        v_s = batch.v_s.cpu().numpy()
+        v_s_ = torch.cat(v_s_, dim=0).flatten().cpu().numpy()
+        # when normalizing values, we do not minus self.ret_rms.mean to be numerically
+        # consistent with OPENAI baselines' value normalization pipeline. Empirical
+        # study also shows that "minus mean" will harm performances a tiny little bit
+        # due to unknown reasons (on Mujoco envs, not confident, though).
+        # TODO: see todo in PGPolicy.process_fn
+        if self.rew_norm:  # unnormalize v_s & v_s_
+            v_s = v_s * np.sqrt(self.ret_rms.var + self._eps)
+            v_s_ = v_s_ * np.sqrt(self.ret_rms.var + self._eps)
+        unnormalized_returns, advantages = self.compute_episodic_return(
+            batch,
+            buffer,
+            indices,
+            v_s_,
+            v_s,
+            gamma=self.gamma,
+            gae_lambda=self.gae_lambda,
+        )
+        if self.rew_norm:
+            batch.returns = unnormalized_returns / np.sqrt(self.ret_rms.var + self._eps)
+            self.ret_rms.update(unnormalized_returns)
+        else:
+            batch.returns = unnormalized_returns
+        batch.returns = to_torch_as(batch.returns, batch.v_s)
+        batch.adv = to_torch_as(advantages, batch.v_s)
+        return cast(BatchWithAdvantagesProtocol, batch)
 
     def learn(  # type: ignore
         self,

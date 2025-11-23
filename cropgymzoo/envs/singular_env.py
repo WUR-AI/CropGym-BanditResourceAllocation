@@ -126,6 +126,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         'sunflower': {'clay': 150, 'sand': 150, 'silt': 150, 'peat': 150},
     }
 
+    ACTION_LEVELS = [0, 1, 3, 7, 12]  # index 0..4
+
     '''
     Initialize Env for each RL agent
     '''
@@ -157,6 +159,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                  training: bool = False,
                  keep_soil_moisture: bool = False,
                  domain_repeat: int = 10,
+                 special_action_space: bool = False,
                  **kwargs,
     ):
         EzPickle.__init__(
@@ -188,6 +191,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             flatten_obs=flatten_obs,
             keep_soil_moisture=keep_soil_moisture,
             domain_repeat=domain_repeat,
+            special_action_space=special_action_space,
             **kwargs,
         )
         # instance metadata
@@ -197,6 +201,9 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.name = name
         self.soil_type = type
         self.keep_soil_moisture = keep_soil_moisture
+        self.special_action_space = special_action_space
+        if self.special_action_space:
+            action_space = gym.spaces.Discrete(5)
 
         # pcse variables
         self.crop = crop
@@ -299,6 +306,10 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         """
         Computes customized reward and populates info
         """
+        if self.special_action_space:
+            if not isinstance(action, int):
+                action = action.item()
+            action = self.ACTION_LEVELS[action]
 
         # make sure SM is above a certain level
         if self.keep_soil_moisture:
@@ -482,6 +493,10 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
     @staticmethod
     def obs_budget_features():
         return ['BudgetLeft', 'BudgetTotal']
+
+    def make_special_action_space(self):
+        self.action_space = gym.spaces.Discrete(5)
+        self.special_action_space = True
 
 
     '''

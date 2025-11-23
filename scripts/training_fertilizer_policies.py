@@ -74,6 +74,10 @@ if __name__ == "__main__":
     # skew actions
     parser.add_argument("--skew", action='store_true', dest='skew')
     parser.add_argument("--not_skew", action='store_false', dest='skew')
+    parser.add_argument("--idle_penalty", action='store_true', dest='idle_penalty')
+
+    # action space
+    parser.add_argument("--special_action_space", action='store_true', dest='special_action_space')
 
     # resume model
     parser.add_argument("--resume", action="store_true", dest='resume')
@@ -98,6 +102,8 @@ if __name__ == "__main__":
         concat_mask=False,
         pool=False,
         skew=False,
+        special_action_space=False,
+        idle_penalty=False
     )
     hyperparams = parser.parse_args()
 

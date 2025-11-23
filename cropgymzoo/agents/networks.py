@@ -108,45 +108,6 @@ class BudgetCond(nn.Module):
 
         return cond.float()
 
-
-class ActorFiLM(nn.Module):
-    """Condition budget features for actor"""
-    def __init__(self, feat_dim, cont_in=2, n_bins=0, emb_dim=16, hidden=32):
-        super().__init__()
-        self.has_bins = n_bins > 0
-        if self.has_bins:
-            self.bin_emb = nn.Embedding(n_bins, emb_dim)
-            comb_in = emb_dim + cont_in
-        else:
-            self.bin_emb = None
-            comb_in = cont_in
-
-        self.mlp = nn.Sequential(
-            nn.Linear(comb_in, hidden), nn.ReLU(),
-            nn.Linear(hidden, hidden), nn.ReLU()
-        )
-        # produce FiLM params matching feature width
-        self.gamma = nn.Linear(hidden, feat_dim)   # scale
-        self.beta  = nn.Linear(hidden, feat_dim)   # shift
-
-    def forward(self, rem_budget, tot_budget, budget_bin=None):
-        # rem & tot are tensors with shape [B,T] or [B] → we’ll produce [B,T,H]
-        # build continuous block: [rem, frac]
-        frac = (rem_budget / (tot_budget.clamp_min(1e-8))).clamp(0, 10)  # safe
-        cont = torch.stack([rem_budget, frac], dim=-1)  # [..., 2]
-
-        if self.has_bins:
-            z_bin = self.bin_emb(budget_bin)     # [..., emb_dim]
-            z = torch.cat([cont, z_bin], dim=-1)
-        else:
-            z = cont
-        z = z.float()
-        h = self.mlp(z)
-        g = self.gamma(h)
-        b = self.beta(h)
-        return g, b
-
-
 class ObsMLP(MLP):
     def __init__(self, *args, **kwargs):
         self.input_dim = kwargs.pop("input_dim")
@@ -446,7 +407,8 @@ class MaskedActor(Actor):
             last_hidden_dim=None,
             use_film: bool = True,
             prefer_noop=True,  # enable prior
-            noop_prior_p=0.9,  # ~90% prior on action 0
+            noop_prior_p=0.6,  # ~90% prior on action 0
+            idle_penalty=False,
             device='mps'
     ):
         if torch.backends.mps.is_available():
@@ -463,6 +425,8 @@ class MaskedActor(Actor):
         self.last.flatten_input = False
         self.prefer_noop = prefer_noop
         self.noop_prior_p = float(noop_prior_p)
+        self.idle_penalty = idle_penalty
+        self.idle_penalty_value = 1.0
 
         self.n_bins = 5
         self.edges = torch.linspace(0, 1, self.n_bins + 1, device=self.device)[1:-1]
@@ -535,6 +499,10 @@ class MaskedActor(Actor):
 
         if logits.ndim == 1:
             logits = logits.unsqueeze(0)
+
+        if self.idle_penalty:
+            # push *down* all non-zero actions
+            logits[..., 1:] = logits[..., 1:] - self.idle_penalty_value
 
         # mask
         if isinstance(obs, Batch) and "mask" in obs:

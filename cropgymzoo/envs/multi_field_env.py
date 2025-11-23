@@ -99,6 +99,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
             stage: int = 0,
             farm_dict: dict | str = None,
             domain_repeat = 10,
+            special_action_space: bool = False,
     ):
         EzPickle.__init__(
             self,
@@ -115,6 +116,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
             stage=stage,
             farm_dict=farm_dict,
             domain_repeat=domain_repeat,
+            special_action_space=special_action_space,
         )
         super().__init__()
         self.render_mode = None if not render else 'human'
@@ -128,6 +130,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
         self.domain_repeat = domain_repeat
         self._domain_repeat_left = 0
         self.reward_code = reward
+        self.special_action_space = special_action_space
         self.rng, self.seed = gym.utils.seeding.np_random(seed=seed)
 
         self.has_reset = False
@@ -349,6 +352,25 @@ class MultiFieldEnv(AECEnv, EzPickle):
 
         print(f'Allocated budget reductions of {allocations}')
 
+    def set_new_fields(self, farm_dict: dict):
+        for key, field in farm_dict.items():
+            self.fields[key] = ParcelEnv(
+                crop_features=get_wofost_default_crop_features(),
+                weather_features=get_default_weather_features(),
+                action_features=get_default_action_features(),
+                location=(field['soil_lat'], field['soil_lon']),
+                crop=field['crop'],
+                year=2000,
+                name=key,
+                area=field['area'],
+                reward='PNB',
+                original=True,
+                training=False,
+                flatten_obs=True,
+                type=field['type'],
+            )
+        print("Scenario fields initialized!")
+
     def set_curriculum_stage(self, stage: int):
         for agent in self.possible_agents:
             self.fields[agent].unwrapped.random_manager.set_stage(stage)
@@ -441,6 +463,18 @@ class MultiFieldEnv(AECEnv, EzPickle):
     def get_cumulative_reward(self):
         return np.sum([np.cumsum(self.fields[a].unwrapped.infos['Reward'])[-1] for a in self.possible_agents])
 
+    def get_dap(self, agent):
+        return self.fields[agent].unwrapped._calculate_dap()
+
+    def override_action_space(self):
+        self.special_action_space = True
+
+        for agent in self.possible_agents:
+            self.fields[agent].unwrapped.make_special_action_space()
+
+        self.action_spaces = {agent: env.action_space
+                              for agent, env in self.fields.items()}
+
     def _get_global_random_budget(self):
         level = self.get_field_env_with_idx(0).random_manager.budget
 
@@ -501,6 +535,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
                     random_manager=make_default_stage_manager(),
                     domain_repeat=self.domain_repeat,
                     reward=self.reward_code,
+                    special_action_space=self.special_action_space,
                 )
                 self.fields[n] : ParcelEnv = env
             print(f"Fields initialized with seed no. {self.seed}!")
@@ -520,6 +555,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
                     training=False,
                     flatten_obs=True,
                     type=field['type'],
+                    special_action_space=self.special_action_space,
                 )
             print("Scenario fields initialized!")
 
@@ -635,12 +671,20 @@ class MultiFieldEnv(AECEnv, EzPickle):
 
         return fert / 10  # align with action space
 
-    def rule_of_thumb(self, agent_name, infos, scenario='max'):
+    def random_fertilization(self, agent_name):
+        """Random fertilization schedule based on crop + soil."""
+        budget_left  = self.get_per_parcel_budget_left(agent_name)
+
+        fert = self.rng.choice([0, min(80, budget_left)], p=[0.95, 0.05])
+
+        return fert / 10
+
+    def rule_of_thumb(self, agent_name, scenario='max'):
         """Simple farmer rule-based fertilization schedule based on crop + soil."""
         crop = self.get_per_field_crop_name()[agent_name]
         soil = self.get_per_field_soil_type()[agent_name]
 
-        dap_plant = infos["DaysAfterPlanting"][-1]  # assume infos contains this
+        dap_plant = self.get_dap(agent_name)  # assume infos contains this
         fert = 0.0
 
         # have several identifiers for scenario
@@ -797,7 +841,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
         def format_val(val, width, prec=2):
             return f"{val:>{width}.{prec}f}" if isinstance(val, (int, float)) else f"{val:>{width}}"
 
-        header = f"Farm status; sowing year {self.year} – budget left: {self.global_budget_left * self.get_farm_area_sum()} / {self.global_budget * self.get_farm_area_sum()} kg N | Cumulative Reward: {self.get_cumulative_reward():.1f}"
+        header = f"Farm status; sowing year {self.year} – budget left: {round(self.global_budget_left * self.get_farm_area_sum(), 1)} / {round(self.global_budget * self.get_farm_area_sum(), 1)} kg N or {self.global_budget_left} / {self.global_budget} kg N / ha: kg | Cumulative Reward: {self.get_cumulative_reward():.1f}"
         cols = ("Field (area[ha])", "Crop", "Date", "N applied", "Yield[t/ha]", "NUE", "Nsurp", "Profit", "Reward")
         fmt_header = "{:20} {:12} {:10} {:>10} {:>15} {:>7} {:>7} {:>10} {:>10}"
         lines = [header, fmt_header.format(*cols), "-" * 110]

@@ -12,7 +12,7 @@ import yaml
 from cropgymzoo import _SCENARIO_PATH, _DEFAULT_MODEL_DIR, _DEFAULT_RESULTSDIR
 from cropgymzoo.utils.scenario_utils import get_scenario_based_on_loc
 
-from cropgymzoo.eval_policy import MultiRLAgent, RoTAgent
+from cropgymzoo.eval_policy import MultiRLAgent, RoTAgent, RandomAgent
 
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
@@ -74,6 +74,9 @@ def run_region_year(
 
             proper_model_file = model_picker(model_file, dict_fields)
 
+            if proper_model_file["args"].get('special_action_space', False):
+                env.override_action_space()
+
             runner = MultiRLAgent(
                 env=env,
                 saved_model=proper_model_file,
@@ -87,7 +90,10 @@ def run_region_year(
                 env=env,
                 render=render,
             )
+            info = runner.run(years=[year])
 
+        elif agent == "random":
+            runner = RandomAgent(env=env, render=render)
             info = runner.run(years=[year])
 
         if info is None:

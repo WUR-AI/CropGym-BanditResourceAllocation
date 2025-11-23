@@ -219,6 +219,7 @@ def initialize_policy(
         use_film=args.use_film,
         concat_mask = args.concat_mask,
         prefer_noop=skew_prior_action,
+        idle_penalty=args.idle_penalty,
     ).to(device)
     critic = StackedCritic(
         preprocess_net=critic_net,
@@ -327,12 +328,13 @@ def make_vec_env(
         train: bool = True,
         agents: list['str'] = None,
         seed: int = 107,
+        special_action_space: bool = False,
     ) -> SubprocVectorEnv | DummyVectorEnv | MultiAgentVecNormObs:
     """Each subprocess builds → PettingZooEnv"""
     if parallel:
         env_fns = [
-            lambda indep=independent, tr=train, sd=seed+i:
-            get_petting_zoo_env(indep, tr, sd)
+            lambda indep=independent, tr=train, sd=seed+i, sas=special_action_space:
+            get_petting_zoo_env(indep, tr, sd, sas)
             for i, _ in enumerate(range(num_envs))
         ]
         env = SubprocVectorEnv(env_fns, context='spawn')
@@ -350,12 +352,12 @@ def make_vec_env(
     return env
 
 
-def get_petting_zoo_env(indep, training, sd):
-    env = make_env(independent_learning=indep, training=training, seed=sd)
+def get_petting_zoo_env(indep, training, sd, sas):
+    env = make_env(independent_learning=indep, training=training, seed=sd, special_action_space=sas)
     env = PettingZooEnv(env)
     return env
 
-def make_env(independent_learning=True, training=True, seed=107): # type: ignore
+def make_env(independent_learning=True, training=True, seed=107, special_action_space=False,): # type: ignore
     """Return one wrapped PettingZoo environment instance."""
     env = MultiFieldEnv(
         warm_up=0,
@@ -364,17 +366,21 @@ def make_env(independent_learning=True, training=True, seed=107): # type: ignore
         random_budget=False,
         seed=seed,
         reward='PNR',
+        special_action_space=special_action_space,
     )
     return env
 
-def get_dummy_env():
-    env = MultiFieldEnv(reward='PNR')
+def get_dummy_env(args):
+    env = MultiFieldEnv(
+        reward='PNR',
+        special_action_space=args.special_action_space,
+    )
     return env
 
-def grab_spaces(seed):
+def grab_spaces(args):
     # Inspect one spawned env to grab spaces & agent list
-    dummy_env = get_dummy_env()
-    dummy_env.reset(seed=seed)
+    dummy_env = get_dummy_env(args)
+    dummy_env.reset(seed=args.seed)
     sample_obs, _, _, _, _ = dummy_env.unwrapped.last()
     first_agent = dummy_env.get_field_env_with_idx(0).name
     observation_space = dummy_env.sample_observation_space_agent()
@@ -442,7 +448,7 @@ def train_policy(args: Namespace):
     print(f"Using {'Dummy' if not args.parallel else 'SubProc'}VectorEnv\n")
     print(f"Training with {args.train_envs_num} env(s)\n")
 
-    dummy_env, agents, obs_dim, act_dim = grab_spaces(args.seed)
+    dummy_env, agents, obs_dim, act_dim = grab_spaces(args)
 
     # Create vector env
     normalize = True
@@ -454,6 +460,7 @@ def train_policy(args: Namespace):
         train=True,
         agents=agents,
         seed=args.seed,
+        special_action_space=args.special_action_space,
     )
     test_envs = make_vec_env(
         parallel=args.parallel,
@@ -462,6 +469,7 @@ def train_policy(args: Namespace):
         norm=normalize,
         train=False,
         agents=agents,
+        special_action_space=args.special_action_space,
     )
 
     if normalize:
