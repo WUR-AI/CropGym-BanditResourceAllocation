@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 import torch
+import numpy as np
 
 import gymnasium as gym
 import pettingzoo
@@ -92,7 +93,9 @@ class BaseAgent(ABC):
         self.env = env
         self.render = render
 
-    def run(self, years: list, year_key=True) -> dict:
+        self.agents = self.env.possible_agents
+
+    def run(self, years: list, year_key=True, scenario: str = 'max') -> dict:
 
         info_dict = {}
         for year in years:
@@ -104,7 +107,7 @@ class BaseAgent(ABC):
             for agent in self.env.agent_iter():
                 obs, rew, term, trunc, info = self.env.last()
 
-                action = self.get_action(agent)
+                action = self.get_action(agent, env=self.env, scenario=scenario)
 
                 if self.env.terminations[agent]:
                     if year_key:
@@ -114,13 +117,48 @@ class BaseAgent(ABC):
                     self.env.step(None)
                 else:
                     self.env.step(action)
-
+            if self.render:
+                self.env.render()
         return info_dict
 
 
     @abstractmethod
-    def get_action(self, agent: str) -> torch.Tensor:
+    def get_action(self, agent: str, env = None, scenario = None):
         raise NotImplementedError
+
+
+class RoTAgent(BaseAgent):
+    def __init__(
+        self,
+        env: gym.Env | pettingzoo.AECEnv | BaseVectorEnv,
+        render: bool = True,
+    ):
+        super().__init__(env, render)
+
+    def get_action(
+            self,
+            agent: str,
+            env: MultiFieldEnv = None,
+            scenario: str = 'max',
+    ) -> np.ndarray:
+        return env.rule_of_thumb(agent, scenario=scenario)
+
+class RandomAgent(BaseAgent):
+    def __init__(
+        self,
+        env: gym.Env | pettingzoo.AECEnv | BaseVectorEnv,
+        render: bool = True,
+    ):
+        super().__init__(env, render)
+
+    def get_action(
+            self,
+            agent: str,
+            env: MultiFieldEnv = None,
+            scenario: str = 'max',
+    ) -> np.ndarray:
+        return env.random_fertilization(agent)
+
 
 
 class MultiRLAgent(BaseAgent):
@@ -131,9 +169,6 @@ class MultiRLAgent(BaseAgent):
             render: bool = False,
     ):
         super().__init__(env, render)
-
-        self.env = env
-        self.agents = self.env.possible_agents
 
         # dummy_env, agents, obs_dim, act_dim = grab_spaces(seed)
 
@@ -191,7 +226,7 @@ class MultiRLAgent(BaseAgent):
 
         return out
 
-    def run(self, years: list, year_key=True) -> dict:
+    def run(self, years: list, year_key=True, scenario=None) -> dict:
         info_dict = {}
         for i, year in enumerate(years):
             if year_key:
