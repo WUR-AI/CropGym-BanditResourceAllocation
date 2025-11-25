@@ -339,6 +339,18 @@ def create_comet_experiment(
 
     if args.curriculum:
         comet_experiment.add_tag('curriculum')
+    if args.skew:
+        comet_experiment.add_tag('skew')
+    if args.use_film:
+        comet_experiment.add_tag('film')
+    if args.use_icm:
+        comet_experiment.add_tag('icm')
+    if args.special_action_space:
+        comet_experiment.add_tag('special_action_space')
+    if args.idle_penalty:
+        comet_experiment.add_tag('idle_penalty')
+    if args.lr:
+        comet_experiment.add_tag(f'lr_{str(args.lr)}')
 
     if args.resume:
         comet_experiment.add_tag('resume')
