@@ -248,6 +248,31 @@ class IPPOCollector(Collector):
                 info_R = _dict_of_arr_to_arr_of_dicts(info_R)  # type: ignore[unreachable]
             done_R = np.logical_or(terminated_R, truncated_R)
 
+            # --- Align Alive flag with per-agent termination from MultiAgentVecNormObs (if available) ---
+            # Actor IDs for this step (per env) come from the last observation (before we stepped).
+            agent_ids_R = np.array([obs["agent_id"] for obs in last_obs_RO])
+
+            terminateds_map = getattr(self.env, "_terminateds", None)
+            if terminateds_map is not None and last_info_R is not None:
+                patched_infos = []
+                for local_i, info_dict in enumerate(last_info_R):
+                    if info_dict is None:
+                        patched_infos.append(info_dict)
+                        continue
+                    # make a shallow copy so we don't mutate shared structures
+                    info_copy = dict(info_dict)
+                    global_env_id = int(ready_env_ids_R[local_i])
+                    agent_id = agent_ids_R[local_i]
+                    env_term_state = terminateds_map.get(global_env_id, {})
+                    # env_term_state is expected to be a dict[agent_id, bool]
+                    agent_term = bool(env_term_state.get(agent_id, False))
+                    if agent_term:
+                        # force Alive=False on the final transition of this agent
+                        info_copy["Alive"] = False
+                    patched_infos.append(info_copy)
+                last_info_R = np.asarray(patched_infos, dtype=object)
+
+
             current_step_batch_R = cast(
                 CollectStepBatchProtocol,
                 Batch(
@@ -260,7 +285,7 @@ class IPPOCollector(Collector):
                     terminated=terminated_R,
                     truncated=truncated_R,
                     done=done_R,
-                    info=info_R,
+                    info=last_info_R,
                 ),
             )
 
@@ -342,7 +367,6 @@ class IPPOCollector(Collector):
             batch_to_add_R = cast(RolloutBatchProtocol, batch_to_add_R)
 
             # NEW
-            agent_ids_R = np.array([obs["agent_id"] for obs in last_obs_RO])
             env_ids = np.array(ready_env_ids_R)  # optional but handy for debugging
 
             # Add
@@ -363,24 +387,23 @@ class IPPOCollector(Collector):
             # whose obs belongs to the *current* agent. The next time this same agent appears,
             # we want to close the *previous* transition by writing obs_next = current obs.
             for local_i, global_env_id in enumerate(ready_env_ids_R):
-                # agent_id of the actor that produced last_obs_RO[local_i]
-                agent_id = last_obs_RO[local_i]["agent_id"]
+                # Actor of the transition we just wrote for this env
+                acting_agent = agent_ids_R[local_i]  # == last_obs_RO[local_i]["agent_id"]
 
-                # 1) Close previous pending transition for (env, agent)
-                prev_idx = self._pending_idx_by_env_agent.get(int(global_env_id), {}).pop(agent_id, None)
+                # 1) Close previous pending transition for (env, acting_agent), if any
+                pendings_for_env = self._pending_idx_by_env_agent.setdefault(int(global_env_id), {})
+                prev_idx = pendings_for_env.get(acting_agent, None)
                 if prev_idx is not None:
-                    # Write obs_next = current *same-agent* obs (i.e., what the agent sees on its next turn)
-                    if prev_idx is not None:
-                        self._assign_obs_next_row(
-                            self.buffer,
-                            prev_idx,
-                            copy(last_obs_RO[local_i])
-                        )
+                    # Use the *current* obs of this agent as obs_next for its previous transition
+                    # (i.e. "what this agent sees on its next turn")
+                    self._assign_obs_next_row(
+                        self.buffer,
+                        prev_idx,
+                        copy(last_obs_RO[local_i]),
+                    )
 
-                # 2) Register the just-inserted transition as the new pending one
-                self._pending_idx_by_env_agent.setdefault(int(global_env_id), {})[agent_id] = int(
-                    insertion_idx_R[local_i]
-                )
+                # 2) Register the just-inserted transition as the new pending one for (env, acting_agent)
+                pendings_for_env[acting_agent] = int(insertion_idx_R[local_i])
 
             # -_-_-_-
 
@@ -432,6 +455,19 @@ class IPPOCollector(Collector):
                 used to communicate with the vector env, where env ids are selected from this "global" index.
                 Is not suited for selecting from the ready envs (`..._R` arrays), use the local counterpart instead.
                 """
+
+                # Snapshot per-agent termination state *before* resetting envs,
+                # since MultiAgentVecNormObs.reset() will clear or overwrite `_terminateds`.
+                terminateds_snapshot: dict[int, dict[str | int, bool]] = {}
+                terminateds_map = getattr(self.env, "_terminateds", None)
+                if terminateds_map is not None:
+                    for env_global in env_done_global_idx_D:
+                        env_global_int = int(env_global)
+                        env_state = terminateds_map.get(env_global_int, None)
+                        if env_state is not None:
+                            # shallow copy to decouple from any in-place mutations during reset
+                            terminateds_snapshot[env_global_int] = dict(env_state)
+
                 obs_reset_DO, info_reset_D = self.env.reset(
                     env_id=env_done_global_idx_D,
                     **gym_reset_kwargs,
@@ -443,21 +479,72 @@ class IPPOCollector(Collector):
                 self._reset_hidden_state_based_on_type(env_done_local_idx_D, last_hidden_state_RH)
 
                 # --- Step 8b (NEW): Flush any pending transitions for envs that just finished ---
-                for local_done_i, global_env_id in enumerate(env_done_global_idx_D):
+                for local_idx_in_done_array, global_env_id in zip(env_done_local_idx_D, env_done_global_idx_D):
                     pendings = self._pending_idx_by_env_agent.get(int(global_env_id), {})
                     if not pendings:
                         continue
 
-                    # Any placeholder with correct shape is fine because done=True prevents bootstrapping.
-                    # Use the current last_obs_RO[local_done_i] for shape consistency.
-                    terminal_obs_like = copy(last_obs_RO[local_done_i])
+                    # # Use the correct local index into last_obs_RO
+                    # terminal_obs_like = copy(last_obs_RO[local_idx_in_done_array])
+                    #
+                    # for _, prev_idx in list(pendings.items()):
+                    #     self._assign_obs_next_row(
+                    #         self.buffer,
+                    #         prev_idx,
+                    #         terminal_obs_like
+                    #     )
+                    # self._pending_idx_by_env_agent[int(global_env_id)] = {}
 
-                    for _, prev_idx in list(pendings.items()):
+                    # Use the correct local index into last_obs_RO
+                    terminal_obs_like = copy(last_obs_RO[local_idx_in_done_array])
+
+                    # Read per-agent termination state from the snapshot taken before reset.
+                    # Shape: terminateds_snapshot[env_id][agent_id] -> bool
+                    env_term_state = terminateds_snapshot.get(int(global_env_id), {})
+
+                    for agent_id, prev_idx in list(pendings.items()):
+                        # 1) Assign obs_next for the last pending transition of this (env, agent)
                         self._assign_obs_next_row(
                             self.buffer,
                             prev_idx,
-                            terminal_obs_like
+                            terminal_obs_like,
                         )
+
+                        # 2) Ensure that the *final* transition for this agent has Alive=False.
+                        #    This handles the case where the vector env finishes without
+                        #    "dead-stepping" the agent one more time.
+                        row_idx = np.array([int(prev_idx)])
+                        original_stack = self.buffer.stack_num
+                        self.buffer.stack_num = 1
+                        row = self.buffer[row_idx]
+                        self.buffer.stack_num = original_stack
+
+                        info_obj = row.info
+
+                        # Decide whether we should mark this agent as dead:
+                        # if the wrapper exposes per-agent termination, use it;
+                        # otherwise, assume all remaining agents in a finished env are dead.
+                        should_mark_dead = True
+                        if env_term_state:
+                            should_mark_dead = bool(env_term_state.get(agent_id, True))
+
+                        if should_mark_dead:
+                            # Handle array-of-dicts vs direct dict/Batch
+                            if isinstance(info_obj, np.ndarray) and info_obj.dtype == object:
+                                # one-element array of dicts
+                                info_dict = dict(info_obj[0])
+                                info_dict["Alive"] = False
+                                info_obj[0] = info_dict
+                            else:
+                                # dict-like or Batch-like
+                                try:
+                                    info_obj["Alive"] = False
+                                except Exception:
+                                    # if we cannot set it, just skip without crashing
+                                    pass
+                            row.info = info_obj
+                            self.buffer._meta[row_idx] = row
+
                     # Clear all pendings for this env now that the episode ended
                     self._pending_idx_by_env_agent[int(global_env_id)] = {}
 
@@ -774,10 +861,19 @@ class AECMultiAgentPolicyManager(MultiAgentPolicyManager):
     @staticmethod
     def _assert_single_agent(b: Batch, agent):
         aid = np.asarray(b[agent].obs.agent_id)
+        crop = np.asarray(b[agent].info["CropName"])
         if aid.ndim > 1:
             aid = aid[..., -1]
         uniq = np.unique(aid)
+        uniq_crop = np.unique(crop)
         assert (len(uniq) == 1 and uniq[0] == agent), f"Mixed agents: {uniq} for {agent}"
+        assert (len(uniq_crop) == 1), f"Mixed crops: {uniq_crop} for {agent}"
+        if "-sb" in uniq[0]:
+            assert uniq_crop[0] == "sugarbeet", f"Crop mismatch: {uniq} vs {uniq_crop}"
+        elif "-pt" in uniq[0]:
+            assert uniq_crop[0] == "potato", f"Crop mismatch: {uniq} vs {uniq_crop}"
+        elif "-ww" in uniq[0]:
+            assert uniq_crop[0] == "winterwheat", f"Crop mismatch: {uniq} vs {uniq_crop}"
 
     def learn(  # type: ignore
             self,
