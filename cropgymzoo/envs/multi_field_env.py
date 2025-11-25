@@ -841,7 +841,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
         def format_val(val, width, prec=2):
             return f"{val:>{width}.{prec}f}" if isinstance(val, (int, float)) else f"{val:>{width}}"
 
-        header = f"Farm status; sowing year {self.year} – budget left: {round(self.global_budget_left * self.get_farm_area_sum(), 1)} / {round(self.global_budget * self.get_farm_area_sum(), 1)} kg N or {self.global_budget_left} / {self.global_budget} kg N / ha: kg | Cumulative Reward: {self.get_cumulative_reward():.1f}"
+        header = f"Farm status; sowing year {self.year} – budget left: {round(self.global_budget_left * self.get_farm_area_sum(), 1)} / {round(self.global_budget * self.get_farm_area_sum(), 1)} kg N or {self.global_budget_left} / {self.global_budget} kg N / ha | Cumulative Reward: {self.get_cumulative_reward():.1f}"
         cols = ("Field (area[ha])", "Crop", "Date", "N applied", "Yield[t/ha]", "NUE", "Nsurp", "Profit", "Reward")
         fmt_header = "{:20} {:12} {:10} {:>10} {:>15} {:>7} {:>7} {:>10} {:>10}"
         lines = [header, fmt_header.format(*cols), "-" * 110]
