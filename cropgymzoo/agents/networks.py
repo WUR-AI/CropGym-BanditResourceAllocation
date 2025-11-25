@@ -226,7 +226,7 @@ class RecurrentGRU(NetBase[RecurrentStateBatch]):
 
                 # Restore leading dims and concatenate back
                 weather_avg = weather_avg.view(*weather.shape[:-2], self.n_weather_vars)
-                obs = torch.cat([obs_core, weather_avg], dim=-1)
+                obs = torch.cat([obs_core, weather_avg], dim=-1).to(device=self.device)
 
         # feed-forward
         x = self.fc1(obs)  # [B, H] or [B, T, H]
@@ -298,12 +298,13 @@ class RecurrentLSTM(NetBase[RecurrentStateBatch]):
             self.avgpool = nn.AvgPool1d(kernel_size=self.n_days, stride=self.n_days)
 
 
-        self.fc1 = nn.Linear(int(np.prod(self.obs_dim)), hidden_layer_size)
+        self.fc1 = nn.Linear(int(np.prod(self.obs_dim)), hidden_layer_size, device=self.device)
         self.lstm = nn.LSTM(
             input_size=hidden_layer_size,
             hidden_size=hidden_layer_size,
             num_layers=layer_num,
             batch_first=True,
+            device=self.device
         )
         # self.fc2 = nn.Linear(hidden_layer_size, int(np.prod(action_shape)))
         self.output_dim = hidden_layer_size
@@ -344,7 +345,7 @@ class RecurrentLSTM(NetBase[RecurrentStateBatch]):
 
                 # Restore leading dims and concatenate back
                 weather_avg = weather_avg.view(*weather.shape[:-2], self.n_weather_vars)
-                obs = torch.cat([obs_core, weather_avg], dim=-1)
+                obs = torch.cat([obs_core, weather_avg], dim=-1).to(device=self.device)
 
         # feed-forward + add time dim
         x = self.fc1(obs)  # [B, H] or [B, T, H]
