@@ -4,7 +4,7 @@ from typing import Any
 
 import numpy as np
 import torch
-from tianshou.data import ReplayBuffer, to_torch_as
+from tianshou.data import ReplayBuffer, to_torch_as, Batch
 from tianshou.data.types import RolloutBatchProtocol
 from tianshou.utils import RunningMeanStd
 
@@ -219,117 +219,300 @@ class IFOCOPSPolicy(LagrangianIPPOPolicy):
                 old_logits = old_out.logits.detach()
         batch.old_logits = old_logits
 
-        losses, vf_losses, cost_vf_losses, ent_losses = [], [], [], []
-        approx_kls, clipfracs, explained_variances = [], [], []
-        gradient_steps = 0
-        split_batch_size = batch_size or -1
+        if not self.recurrent:
 
-        for _ in range(repeat):
-            # We follow the SafePo idea: multiple passes over the same data,
-            # but break early when KL exceeds target_kl.
-            # At each outer repeat, recompute KL wrt the original old policy.
-            new_out_full = self(batch)
-            if self.action_type == "discrete":
-                new_full_dist = new_out_full.dist
-                old_full_dist = torch.distributions.Categorical(logits=batch.old_logits)
-            else:
-                new_full_dist = new_out_full.dist
-                # For continuous, you may need to reconstruct the old dist here.
-                old_full_dist = new_full_dist.__class__(**new_full_dist.__dict__)  # placeholder
+            losses, vf_losses, cost_vf_losses, ent_losses = [], [], [], []
+            approx_kls, clipfracs, explained_variances = [], [], []
+            gradient_steps = 0
+            split_batch_size = batch_size or -1
 
-            full_kl = torch.distributions.kl_divergence(new_full_dist, old_full_dist)
-            if full_kl.ndim > 1:
-                full_kl = full_kl.sum(-1)
-            mean_kl = full_kl.mean().item()
-            approx_kls.append(mean_kl)
-
-            if mean_kl > self.target_kl:
-                break
-
-            for minibatch in batch.split(split_batch_size, merge_last=True):
-                gradient_steps += 1
-
-                # Rebuild old & new distributions for minibatch
+            for _ in range(repeat):
+                # We follow the SafePo idea: multiple passes over the same data,
+                # but break early when KL exceeds target_kl.
+                # At each outer repeat, recompute KL wrt the original old policy.
+                new_out_full = self(batch)
                 if self.action_type == "discrete":
-                    new_dist = self(minibatch).dist
-                    old_dist = torch.distributions.Categorical(logits=minibatch.old_logits)
+                    new_full_dist = new_out_full.dist
+                    old_full_dist = torch.distributions.Categorical(logits=batch.old_logits)
                 else:
-                    new_dist = self(minibatch).dist
-                    old_dist = new_dist.__class__(**new_dist.__dict__)  # placeholder
+                    new_full_dist = new_out_full.dist
+                    # For continuous, you may need to reconstruct the old dist here.
+                    old_full_dist = new_full_dist.__class__(**new_full_dist.__dict__)  # placeholder
 
-                # log prob and ratio
-                logp = new_dist.log_prob(minibatch.act)
-                if logp.ndim > 1:
-                    logp = logp.sum(-1)
-                ratio = torch.exp(logp - minibatch.logp_old)
+                full_kl = torch.distributions.kl_divergence(new_full_dist, old_full_dist)
+                if full_kl.ndim > 1:
+                    full_kl = full_kl.sum(-1)
+                mean_kl = full_kl.mean().item()
+                approx_kls.append(mean_kl)
 
-                # KL per sample
-                kls = torch.distributions.kl_divergence(new_dist, old_dist)
-                if kls.ndim > 1:
-                    kls = kls.sum(-1)
+                if mean_kl > self.target_kl:
+                    break
 
-                # FOCOPS combined advantage
-                adv = minibatch.focops_adv
-                if self.norm_adv:
-                    mean, std = adv.mean(), adv.std()
-                    adv = (adv - mean) / (std + self._eps)
+                for minibatch in batch.split(split_batch_size, merge_last=True):
+                    gradient_steps += 1
 
-                # Indicator 1[KL <= target_kl]
-                kl_mask = (kls.detach() <= self.target_kl).float()
+                    # Rebuild old & new distributions for minibatch
+                    if self.action_type == "discrete":
+                        new_dist = self(minibatch).dist
+                        old_dist = torch.distributions.Categorical(logits=minibatch.old_logits)
+                    else:
+                        new_dist = self(minibatch).dist
+                        old_dist = new_dist.__class__(**new_dist.__dict__)  # placeholder
 
-                # Policy loss
-                lam_f = float(self.focops_lambda)
-                loss_pi_term = kls - (1.0 / lam_f) * ratio * adv
-                loss_pi = (loss_pi_term * kl_mask).mean()
+                    # log prob and ratio
+                    logp = new_dist.log_prob(minibatch.act)
+                    if logp.ndim > 1:
+                        logp = logp.sum(-1)
+                    ratio = torch.exp(logp - minibatch.logp_old)
 
-                # Value loss for reward
-                value_r = self.critic(minibatch.obs, info=minibatch.info).flatten()
-                vf_loss = (minibatch.returns - value_r).pow(2).mean()
+                    # KL per sample
+                    kls = torch.distributions.kl_divergence(new_dist, old_dist)
+                    if kls.ndim > 1:
+                        kls = kls.sum(-1)
 
-                # Value loss for cost
-                value_c = self.constraint_critic(minibatch.obs, info=minibatch.info).flatten()
-                cost_vf_loss = (minibatch.cost_returns - value_c).pow(2).mean()
+                    # FOCOPS combined advantage
+                    adv = minibatch.focops_adv
+                    if self.norm_adv:
+                        mean, std = adv.mean(), adv.std()
+                        adv = (adv - mean) / (std + self._eps)
 
-                if self.use_critic_norm:
-                    l2_reg_r = sum(p.pow(2).sum() for p in self.critic.parameters())
-                    l2_reg_c = sum(p.pow(2).sum() for p in self.constraint_critic.parameters())
-                    vf_loss = vf_loss + self.critic_l2_coeff * l2_reg_r
-                    cost_vf_loss = cost_vf_loss + self.critic_l2_coeff * l2_reg_c
+                    # Indicator 1[KL <= target_kl]
+                    kl_mask = (kls.detach() <= self.target_kl).float()
 
-                # Entropy (for logging only)
-                ent_loss = new_dist.entropy().mean()
+                    # Policy loss
+                    lam_f = float(self.focops_lambda)
+                    loss_pi_term = kls - (1.0 / lam_f) * ratio * adv
+                    loss_pi = (loss_pi_term * kl_mask).mean()
 
-                # Total loss (with optional 2*V_r + V_c coefficient)
-                if self.use_value_coefficient:
-                    total_loss = loss_pi + 2.0 * vf_loss + cost_vf_loss
-                else:
-                    total_loss = loss_pi + vf_loss + cost_vf_loss
+                    # Value loss for reward
+                    value_r = self.critic(minibatch.obs, info=minibatch.info).flatten()
+                    vf_loss = (minibatch.returns - value_r).pow(2).mean()
 
-                self.optim.zero_grad()
-                total_loss.backward()
-                if self.max_grad_norm:
-                    nn.utils.clip_grad_norm_(
-                        self._actor_critic.parameters(),
-                        max_norm=self.max_grad_norm,
-                    )
-                self.optim.step()
+                    # Value loss for cost
+                    value_c = self.constraint_critic(minibatch.obs, info=minibatch.info).flatten()
+                    cost_vf_loss = (minibatch.cost_returns - value_c).pow(2).mean()
 
-                losses.append(total_loss.item())
-                vf_losses.append(vf_loss.item())
-                cost_vf_losses.append(cost_vf_loss.item())
-                ent_losses.append(ent_loss.item())
+                    if self.use_critic_norm:
+                        l2_reg_r = sum(p.pow(2).sum() for p in self.critic.parameters())
+                        l2_reg_c = sum(p.pow(2).sum() for p in self.constraint_critic.parameters())
+                        vf_loss = vf_loss + self.critic_l2_coeff * l2_reg_r
+                        cost_vf_loss = cost_vf_loss + self.critic_l2_coeff * l2_reg_c
 
-                # These are not meaningful in FOCOPS but we fill them for stats compatibility
-                clipfracs.append(0.0)
+                    # Entropy (for logging only)
+                    ent_loss = new_dist.entropy().mean()
 
-                # Reward critic explained variance
-                def _explained_var(true, pred) -> float:
-                    y_pred = pred.detach().cpu().numpy()
-                    y_true = true.detach().cpu().numpy()
-                    var_y = np.var(y_true)
-                    return np.nan if var_y == 0.0 else 1.0 - np.var(y_true - y_pred) / var_y
+                    # Total loss (with optional 2*V_r + V_c coefficient)
+                    if self.use_value_coefficient:
+                        total_loss = loss_pi + 2.0 * vf_loss + cost_vf_loss
+                    else:
+                        total_loss = loss_pi + vf_loss + cost_vf_loss
 
-                explained_variances.append(_explained_var(minibatch.returns, value_r))
+                    self.optim.zero_grad()
+                    total_loss.backward()
+                    if self.max_grad_norm:
+                        nn.utils.clip_grad_norm_(
+                            self._actor_critic.parameters(),
+                            max_norm=self.max_grad_norm,
+                        )
+                    self.optim.step()
+
+                    losses.append(total_loss.item())
+                    vf_losses.append(vf_loss.item())
+                    cost_vf_losses.append(cost_vf_loss.item())
+                    ent_losses.append(ent_loss.item())
+
+                    # These are not meaningful in FOCOPS but we fill them for stats compatibility
+                    clipfracs.append(0.0)
+
+                    # Reward critic explained variance
+                    def _explained_var(true, pred) -> float:
+                        y_pred = pred.detach().cpu().numpy()
+                        y_true = true.detach().cpu().numpy()
+                        var_y = np.var(y_true)
+                        return np.nan if var_y == 0.0 else 1.0 - np.var(y_true - y_pred) / var_y
+
+                    explained_variances.append(_explained_var(minibatch.returns, value_r))
+        else:
+            losses, vf_losses, cost_vf_losses, ent_losses = [], [], [], []
+            approx_kls, clipfracs, explained_variances = [], [], []
+            gradient_steps = 0
+
+            T = self.burn_in + self.unroll_len
+            seq_batch, h0_collected, valid_mask, learn_mask = self._as_sequences(batch, T)
+
+            # Zero-init hidden state (we rely on internal policy RNN handling)
+            h0_fields = {}
+            hid0 = h0_collected.hidden
+            h0_fields["hidden"] = torch.zeros_like(hid0)
+            if hasattr(h0_collected, "cell") and getattr(h0_collected, "cell") is not None:
+                cel0 = h0_collected.cell
+                h0_fields["cell"] = torch.zeros_like(cel0)
+            h0 = Batch(h0_fields)  # currently unused, but kept for future stateful interfaces
+
+            B = seq_batch.adv.shape[0]
+            bs = batch_size or B
+
+            def _flatten_info_batch(info_batch: Batch) -> Batch:
+                flat_dict = {}
+                for k, v in info_batch.items():
+                    if k in ["CropName", "Date"]:
+                        continue
+                    t = v if torch.is_tensor(v) else torch.as_tensor(v)
+                    if t.ndim >= 2:
+                        flat_dict[k] = t.reshape(-1, *t.shape[2:])
+                    else:
+                        flat_dict[k] = t.reshape(-1)
+                return Batch(flat_dict)
+
+            for _ in range(repeat):
+                for s in range(0, B, bs):
+                    e = min(s + bs, B)
+                    mb = seq_batch[s:e]
+                    mb_valid = valid_mask[s:e]
+                    mb_learn = learn_mask[s:e]
+
+                    # Ensure obs has detach_state flag for RNN forward
+                    mb_obs = mb.obs
+                    mb_obs["detach_state"] = False
+
+                    # Forward full sequence through policy RNN
+                    out_seq = self(Batch(obs=mb_obs, info=mb.info), state=None)
+                    new_dist = out_seq.dist
+
+                    # --- log prob and ratio -------------------------------------------------
+                    act_bt = mb.act
+                    if act_bt.ndim == 3 and act_bt.shape[-1] == 1:
+                        act_bt = act_bt.squeeze(-1)
+
+                    logp = new_dist.log_prob(act_bt)
+                    if logp.ndim > 2:
+                        # sum over action dim if needed
+                        logp = logp.sum(-1)
+
+                    logp_old_bt = mb.logp_old
+                    if logp_old_bt.ndim == 3 and logp_old_bt.shape[-1] == 1:
+                        logp_old_bt = logp_old_bt.squeeze(-1)
+
+                    logratio = logp - logp_old_bt
+                    ratio = logratio.exp().float()
+
+                    # --- KL per sample: flatten logits so shapes match ----------------------
+                    if self.action_type == "discrete":
+                        new_logits_bt = new_dist.logits  # e.g. [B, T, 9] or [N, 9]
+                        old_logits_bt = mb.old_logits  # e.g. [B, T, 9]
+
+                        # Flatten to [N, num_actions] on both
+                        new_logits_flat = new_logits_bt.reshape(-1, new_logits_bt.shape[-1])
+                        old_logits_flat = old_logits_bt.reshape(-1, old_logits_bt.shape[-1])
+
+                        new_cat_flat = torch.distributions.Categorical(logits=new_logits_flat)
+                        old_cat_flat = torch.distributions.Categorical(logits=old_logits_flat)
+
+                        kls_flat = torch.distributions.kl_divergence(new_cat_flat, old_cat_flat)  # [N]
+                        # reshape back to match logp/logp_old shape (usually [B, T])
+                        kls = kls_flat.view_as(logp_old_bt)
+                    else:
+                        # Continuous case: fall back to usual KL
+                        old_dist = new_dist.__class__(**new_dist.__dict__)
+                        kls = torch.distributions.kl_divergence(new_dist, old_dist)
+                        if kls.ndim > 2:
+                            kls = kls.sum(-1)
+
+                    # FOCOPS combined advantage on sequences
+                    adv = mb.focops_adv
+                    if self.norm_adv:
+                        mean, std = adv[mb_learn].mean(), adv[mb_learn].std()
+                        adv = (adv - mean) / (std + self._eps)
+
+                    # Masks: only learn on valid (non-pad) and post-burn-in steps
+                    step_mask = (mb_learn & mb_valid).float()
+                    if isinstance(step_mask, torch.Tensor):
+                        step_mask = step_mask.to(device=ratio.device)
+
+                    # KL mask: trust region per step
+                    kl_mask = (kls.detach() <= self.target_kl).float()
+                    if isinstance(kl_mask, torch.Tensor):
+                        kl_mask = kl_mask.to(device=ratio.device)
+                    eff_mask = (step_mask * kl_mask).detach()
+                    denom = eff_mask.sum().clamp_min(1.0)
+
+                    lam_f = float(self.focops_lambda)
+                    loss_pi_term = kls - (1.0 / lam_f) * ratio * adv
+                    loss_pi = (loss_pi_term * eff_mask).sum() / denom
+
+                    # Critic losses: flatten obs and info, then reshape back
+                    flat_obs = mb.obs.obs.reshape(-1, mb.obs.obs.shape[-1])
+                    if hasattr(mb.obs, "mask") and mb.obs.mask is not None:
+                        if mb.obs.mask.ndim >= 2:
+                            mask_from_obs = mb.obs.mask.reshape(-1, *mb.obs.mask.shape[2:])
+                        else:
+                            mask_from_obs = mb.obs.mask.reshape(-1)
+                    else:
+                        mask_from_obs = None
+
+                    flat_info = _flatten_info_batch(mb.info)
+
+                    if mask_from_obs is not None:
+                        value_r = self.critic(Batch(obs=flat_obs, mask=mask_from_obs), info=flat_info).reshape(
+                            mb.returns.shape)
+                        value_c = self.constraint_critic(Batch(obs=flat_obs, mask=mask_from_obs),
+                                                         info=flat_info).reshape(mb.cost_returns.shape)
+                    else:
+                        value_r = self.critic(Batch(obs=flat_obs), info=flat_info).reshape(mb.returns.shape)
+                        value_c = self.constraint_critic(Batch(obs=flat_obs), info=flat_info).reshape(
+                            mb.cost_returns.shape)
+
+                    # MSE on valid learning steps only
+                    vf_loss = ((mb.returns - value_r).pow(2) * step_mask).sum() / step_mask.sum().clamp_min(1.0)
+                    cost_vf_loss = ((mb.cost_returns - value_c).pow(2) * step_mask).sum() / step_mask.sum().clamp_min(
+                        1.0)
+
+                    if self.use_critic_norm:
+                        l2_reg_r = sum(p.pow(2).sum() for p in self.critic.parameters())
+                        l2_reg_c = sum(p.pow(2).sum() for p in self.constraint_critic.parameters())
+                        vf_loss = vf_loss + self.critic_l2_coeff * l2_reg_r
+                        cost_vf_loss = cost_vf_loss + self.critic_l2_coeff * l2_reg_c
+
+                    ent = new_dist.entropy()
+                    if ent.ndim > 2:
+                        ent = ent.sum(-1)
+                    ent_loss = (ent * step_mask).sum() / step_mask.sum().clamp_min(1.0)
+
+                    if self.use_value_coefficient:
+                        total_loss = loss_pi + 2.0 * vf_loss + cost_vf_loss
+                    else:
+                        total_loss = loss_pi + vf_loss + cost_vf_loss
+
+                    self.optim.zero_grad()
+                    total_loss.backward()
+                    if self.max_grad_norm:
+                        nn.utils.clip_grad_norm_(
+                            self._actor_critic.parameters(),
+                            max_norm=self.max_grad_norm,
+                        )
+                    self.optim.step()
+
+                    gradient_steps += 1
+
+                    # Mean KL on effective steps
+                    mean_kl = (kls * step_mask).sum().item() / step_mask.sum().clamp_min(1.0).item()
+                    approx_kls.append(mean_kl)
+                    clipfracs.append(0.0)
+
+                    def _explained_var(true, pred, mask_tensor) -> float:
+                        mask_flat = mask_tensor.bool().cpu().numpy().ravel()
+                        y_true = true.detach().cpu().numpy().ravel()[mask_flat]
+                        y_pred = pred.detach().cpu().numpy().ravel()[mask_flat]
+                        if y_true.size == 0:
+                            return np.nan
+                        var_y = np.var(y_true)
+                        return np.nan if var_y == 0.0 else 1.0 - np.var(y_true - y_pred) / var_y
+
+                    explained_variances.append(_explained_var(mb.returns, value_r, step_mask))
+                    losses.append(total_loss.item())
+                    vf_losses.append(vf_loss.item())
+                    cost_vf_losses.append(cost_vf_loss.item())
+                    ent_losses.append(ent_loss.item())
 
         # Build training stats compatible with IPPOTrainingStats
         # For clip_loss we can just reuse loss_pi; for cost_vf_loss we don't

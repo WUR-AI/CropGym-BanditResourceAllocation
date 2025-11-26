@@ -409,11 +409,19 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             Lseg = e - s
             if Lseg <= 0:
                 continue
-            for off in range(0, Lseg, T):
-                ws, we = s + off, min(s + off + T, e)
-                assert (aid[ws:we] == aid[ws]).all(), "Window mixes agents"
-                assert (env_id[ws:we] == env_id[ws]).all(), "Window mixes envs"
-                windows.append((ws, we))
+            # for off in range(0, Lseg, T):
+            #     ws, we = s + off, min(s + off + T, e)
+            #     assert (aid[ws:we] == aid[ws]).all(), "Window mixes agents"
+            #     assert (env_id[ws:we] == env_id[ws]).all(), "Window mixes envs"
+            assert Lseg <= T, f"Episode length {Lseg} exceeds T={T}. Increase unroll_len."
+            ws, we = s, e  # exactly one window per (env,agent,episode) segment
+
+            # If this segment is longer than T, either:
+            # (a) bump T up dynamically to fit, or
+            # (b) cap at T and drop the tail (not ideal).
+            # For “proper” Option A you’d typically just let T = Lseg here.
+            # That implies making T dynamic instead of passing it in.
+            windows.append((ws, we))
 
         B = len(windows)
 
@@ -557,6 +565,21 @@ class LagrangianIPPOPolicy(IPPOPolicy):
         if const_returns is not None:
             const_returns = stack_time('const_returns')
 
+        # FOCOPS / cost fields support
+        cost_adv = getattr(flat, 'cost_adv', None)
+        cost_returns = getattr(flat, 'cost_returns', None)
+        focops_adv = getattr(flat, 'focops_adv', None)
+        old_logits = getattr(flat, 'old_logits', None)
+
+        if cost_adv is not None:
+            cost_adv = stack_time('cost_adv')
+        if cost_returns is not None:
+            cost_returns = stack_time('cost_returns')
+        if focops_adv is not None:
+            focops_adv = stack_time('focops_adv')
+        if old_logits is not None:
+            old_logits = stack_time('old_logits')
+
         # 4) Initial hidden (and optional LSTM cell) state for each window from the first element’s stored state
         # Assumes collector saved pre-action state per step in flat.policy.hidden_state[agent_id],
         # with keys 'hidden' (and optionally 'cell' for LSTM).
@@ -648,6 +671,14 @@ class LagrangianIPPOPolicy(IPPOPolicy):
             seq.const_adv = const_adv
         if const_returns is not None:
             seq.const_returns = const_returns
+        if cost_adv is not None:
+            seq.cost_adv = cost_adv
+        if cost_returns is not None:
+            seq.cost_returns = cost_returns
+        if focops_adv is not None:
+            seq.focops_adv = focops_adv
+        if old_logits is not None:
+            seq.old_logits = old_logits
 
         learn_mask = valid_mask.clone()
         if self.burn_in > 0:
@@ -1053,6 +1084,8 @@ class LagrangianIPPOPolicy(IPPOPolicy):
                     # Masked reductions
                     def masked_mean(x):
                         m = mb_learn
+                        if isinstance(x, torch.Tensor):
+                            m = m.to(x.device)
                         return (x * m).sum() / m.sum().clamp_min(1)
 
                     clip_loss = masked_mean(pg)
