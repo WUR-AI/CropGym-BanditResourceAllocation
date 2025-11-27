@@ -141,7 +141,7 @@ class RoTAgent(BaseAgent):
             env: MultiFieldEnv = None,
             scenario: str = 'max',
     ) -> np.ndarray:
-        return env.rule_of_thumb(agent, scenario=scenario)
+        return env.rule_of_thumb(agent)
 
 class RandomAgent(BaseAgent):
     def __init__(

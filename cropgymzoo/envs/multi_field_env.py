@@ -654,6 +654,30 @@ class MultiFieldEnv(AECEnv, EzPickle):
         print('Successfully saved!')
         return warm_up_infos
 
+    def get_handbook_dict(self, agent):
+        n_init = self.fields[agent].unwrapped.infos['NAVAIL'][0]
+        sb = 200 - (1.7 * min(n_init, 60))
+        pt_cl = 285 - (1.1 * min(n_init, 60))
+        pt_s = 300 - (1.8 * min(n_init, 30))
+        ww_1 = min(100, 140 - n_init)
+        ww_2 = min(80, 200 - n_init)
+        ww_3 = min(30, n_init)
+        handbook = {
+            "sugarbeet": {
+                0: {"clay": sb, "sand": sb, "silt": sb, "peat": sb},
+            },
+            "potato": {
+                0: {"clay": min(200, pt_cl), "sand": min(170, pt_s), "silt": min(200, pt_cl), "peat": min(170, pt_s)},
+                30: {"clay": pt_cl, "sand": pt_s, "silt": pt_cl, "peat": pt_s},
+            },
+            "winterwheat": {
+                0: {"clay": ww_1, "sand": ww_1, "silt": ww_1, "peat": ww_1},
+                120: {"clay": ww_2, "sand": ww_2, "silt": ww_2, "peat": ww_2},
+                # 70: {"clay": ww_3, "sand": ww_3, "silt": ww_3, "peat": ww_3},
+            }
+        }
+        return handbook
+
     def farmers_practice(self, agent_name, infos):
         """Simple farmer rule-based fertilization schedule based on crop + soil."""
         crop = self.get_per_field_crop_name()[agent_name]
@@ -683,20 +707,20 @@ class MultiFieldEnv(AECEnv, EzPickle):
         """Simple farmer rule-based fertilization schedule based on crop + soil."""
         crop = self.get_per_field_crop_name()[agent_name]
         soil = self.get_per_field_soil_type()[agent_name]
+        budget_left  = self.get_per_parcel_budget_left(agent_name)
 
         dap_plant = self.get_dap(agent_name)  # assume infos contains this
         fert = 0.0
 
-        # have several identifiers for scenario
-        crop_identifier = crop + '_' + scenario
-
         # check if today matches any scheduled DAP for this crop
-        for day, soil_map in self.fertilization_schedule.get(crop_identifier, {}).items():
+        for day, soil_map in self.get_handbook_dict(agent_name).get(crop, {}).items():
             if self._is_at_date(dap_plant, day):
                 fert = soil_map.get(soil, 0.0)  # default 0 if soil not found
                 break  # stop after first match
 
-        return fert / 10  # align with action space
+        allowed_fert = min(max(0, budget_left), fert)
+
+        return allowed_fert / 10  # align with action space
 
 
     def _get_each_agent_actions(self) -> dict[str, int]:

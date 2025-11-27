@@ -18,7 +18,7 @@ from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
 
 def _get_scenario_code(scenario):
-    if scenario in ["full_budget", "full_budget_lp"]:
+    if scenario in ["full_budget", "full_budget-lp"]:
         return "max"
     elif scenario == "half_budget":
         return "low"
@@ -39,7 +39,7 @@ def run_region_year(
 
     _YEAR_PATH = os.path.join(_REGION_PATH, str(year))
 
-    year = year - 5 if "_lp" in scenario else year
+    year = year - 5 if "-lp" in scenario else year
 
     # Loop through farmers with a progress bar
     num_farmers = len(os.listdir(_YEAR_PATH)) - 1
@@ -67,6 +67,11 @@ def run_region_year(
             farm_dict=dict_fields,
         )
 
+        if "reduced" in scenario:
+            for ag in env.possible_agents:
+                env.set_per_parcel_budget(ag, env.get_per_parcel_max_budget(ag) - 100)
+                assert env.get_per_parcel_budget(ag) < env.get_per_parcel_max_budget(ag)
+
         if "MLP" in agent:
             # assume only one file in the folder
             model_path = Path(os.path.join(_DEFAULT_MODEL_DIR, agent))
@@ -83,7 +88,7 @@ def run_region_year(
                 render=render,
             )
             # print(f"Running farmer_{i} at {region} in year {year}")
-            info = runner.run(years=[year], scenario=_get_scenario_code(scenario))
+            info = runner.run(years=[year])
 
         elif agent == "ROT":
             runner = RoTAgent(
@@ -200,6 +205,9 @@ if __name__ == "__main__":
     # Aggregate all per-farmer pickle files into one big dictionary
     aggregated_results = {}
     base_dir = Path(_DEFAULT_RESULTSDIR) / agent
+
+    if "-lp" in scenario:
+        years = [year - 5 for year in years]
 
     for region in regions:
         for year in years:
