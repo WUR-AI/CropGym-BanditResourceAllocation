@@ -139,9 +139,10 @@ class IPPOPolicy(PPOPolicy):
         # )
         # batch: LogpOldProtocol
         logp_old = []
+        agent = batch.obs.agent_id[0]
         with torch.no_grad():
             for minibatch in batch.split(self.max_batchsize, shuffle=False, merge_last=True):
-                logp_old.append(self(minibatch).dist.log_prob(minibatch.act))
+                logp_old.append(self(minibatch, state=minibatch.policy.hidden_state[agent]).dist.log_prob(minibatch.act))
             batch.logp_old = torch.cat(logp_old, dim=0).flatten()
         batch: LogpOldProtocol
         return batch
