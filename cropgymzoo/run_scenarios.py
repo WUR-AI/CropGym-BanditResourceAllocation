@@ -181,26 +181,28 @@ if __name__ == "__main__":
 
     results_dict = {}
     # Create list of (region, year, agent, scenario) jobs
-    jobs = [(region, year, agent, scenario, args.render) for region in regions for year in years]
+    all_jobs = [(region, year, agent, scenario, args.render) for region in regions for year in years]
+    sliced_jobs = [all_jobs[i:i+3] for i in range(0, len(all_jobs), 3)]
 
     if num_workers is None or num_workers <= 1:
         # Fallback to sequential execution
-        for region, year, agent, scenario in tqdm(jobs, desc="Running scenarios"):
+        for region, year, agent, scenario in tqdm(all_jobs, desc="Running scenarios"):
             info_dict = run_region_year(region, year, agent=agent, scenario=scenario, render=args.render)
             with open(os.path.join(_DEFAULT_RESULTSDIR, args.agent, f"results_{region}_{year}.pkl"), "wb") as f:
                 pickle.dump(info_dict, f)
             # results_dict[f"{region}_{year}"] = info_dict
     else:
         # Parallel execution over regions/years
-        with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            futures = {
-                executor.submit(_run_region_year_wrapper, job): job
-                for job in jobs
-            }
-            for future in tqdm(as_completed(futures), total=len(futures),
-                               desc="-----Running scenarios------"):
-                region, year, info_dict = future.result()
-                # results_dict[f"{region}_{year}"] = info_dict
+        for jobs in tqdm(sliced_jobs, desc="Slicing jobs"):
+            with ProcessPoolExecutor(max_workers=num_workers) as executor:
+                futures = {
+                    executor.submit(_run_region_year_wrapper, job): job
+                    for job in jobs
+                }
+                for future in tqdm(as_completed(futures), total=len(futures),
+                                   desc="-----Running scenarios------"):
+                    region, year, info_dict = future.result()
+                    # results_dict[f"{region}_{year}"] = info_dict
 
     # Aggregate all per-farmer pickle files into one big dictionary
     aggregated_results = {}
