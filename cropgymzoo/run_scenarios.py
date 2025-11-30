@@ -5,6 +5,28 @@ import argparse
 import pickle
 from tqdm import tqdm
 
+from dataclasses import dataclass
+from typing import Hashable, List
+import numpy as np
+
+@dataclass
+class FieldResponse:
+    alpha: float
+    beta: float
+    r2: float
+    n_points: int
+
+@dataclass
+class FarmAllocationResult:
+    farm_id: Hashable
+    year: int
+    field_ids: List[Hashable]
+    N_opt: np.ndarray          # kg per field
+    alpha: np.ndarray          # slope per field
+    area: np.ndarray           # ha per field
+    N_per_ha: np.ndarray       # kg/ha per field (allocation scaled to area)
+    frac_of_rate: np.ndarray   # N_per_ha / farm_rate (allocation scaled to rate)
+
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import yaml
@@ -31,6 +53,7 @@ def run_region_year(
         year: int,
         agent: str = "baseline",
         scenario: str = "full_budget",
+        allocator: str = "None",
         render: bool = False,
 ):
     result_dict = {}
@@ -41,6 +64,8 @@ def run_region_year(
 
     year = year - 5 if "-lp" in scenario else year
 
+    name_allocator = "" if allocator is None else f"_{allocator}"
+
     # Loop through farmers with a progress bar
     num_farmers = len(os.listdir(_YEAR_PATH)) - 1
     for i in tqdm(range(num_farmers), desc=f"{region}-{year} farmer"):
@@ -48,7 +73,7 @@ def run_region_year(
         out_path = os.path.join(
             _DEFAULT_RESULTSDIR,
             agent,
-            f"results_{scenario}_{region}_{year}_farmer_{i}.pkl",
+            f"results_{scenario}_{region}_{year}" + name_allocator + f"_farmer_{i}.pkl",
         )
         # Skip if this farmer's results already exist
         if os.path.exists(out_path):
@@ -67,10 +92,36 @@ def run_region_year(
             farm_dict=dict_fields,
         )
 
-        if "reduced" in scenario:
+        if "reduced" in scenario and allocator == "None":
             for ag in env.possible_agents:
                 env.set_per_parcel_budget(ag, env.get_per_parcel_max_budget(ag) - 100)
                 assert env.get_per_parcel_budget(ag) < env.get_per_parcel_max_budget(ag)
+
+        if allocator is not None and "LP" in allocator:
+            if year not in [2015, 2016, 2017, 2018, 2019]:
+                year = year - 5
+            if allocator == "LP_low":
+                name = "lp_results_reduced.pkl"
+            else:  # "LP_max"
+                name = "lp_results.pkl"
+
+            with open(os.path.join(_DEFAULT_RESULTSDIR, "LP", name), "rb") as f:
+                lp = pickle.load(f)
+
+            alloc_info = lp["lp_allocations"][f"{region}_farmer_{i}"][year]
+
+            alloc_vec = alloc_info["N_per_ha"]
+            alloc_fields = alloc_info["field_ids"]
+
+            assert len(alloc_vec) == len(env.possible_agents) == len(alloc_fields)
+
+            for (alloc, field_name) in zip(alloc_vec, alloc_fields):
+                env.set_per_parcel_budget(field_name, alloc)
+                assert env.get_per_parcel_budget_left(field_name) <= alloc
+
+            if year in [2015, 2016, 2017, 2018, 2019]:
+                year = year + 5
+
 
         if "MLP" in agent:
             # assume only one file in the folder
@@ -146,8 +197,8 @@ def region_crop_picker(region, crop):
 
 # Helper for parallel execution
 def _run_region_year_wrapper(args):
-    region, year, agent, scenario, render = args
-    info_dict = run_region_year(region, year, agent=agent, scenario=scenario, render=render)
+    region, year, agent, scenario, allocator, render = args
+    info_dict = run_region_year(region, year, agent=agent, scenario=scenario, allocator=allocator, render=render)
     return region, year, info_dict
 
 if __name__ == "__main__":
@@ -156,6 +207,7 @@ if __name__ == "__main__":
     parser.add_argument("--years", type=int, help="year", default=0)
     parser.add_argument("--agent", type=str, help="agent name", default="ROT")
     parser.add_argument("--scenario", type=str, help="scenario name", default="full_budget")
+    parser.add_argument("--allocator", type=str, help="allocator name", default=None)
     parser.add_argument("--num_workers", type=int, help="number of parallel workers (1 = no parallelism)", default=1)
     parser.add_argument("--render", action='store_true', help="render", dest='render')
     parser.set_defaults(render=False)
@@ -166,6 +218,7 @@ if __name__ == "__main__":
     agent = args.agent
     scenario = args.scenario
     num_workers = args.num_workers
+    allocator = args.allocator
 
     # make subfolder
     os.makedirs(os.path.join(_DEFAULT_RESULTSDIR, args.agent), exist_ok=True)
@@ -181,15 +234,13 @@ if __name__ == "__main__":
 
     results_dict = {}
     # Create list of (region, year, agent, scenario) jobs
-    all_jobs = [(region, year, agent, scenario, args.render) for region in regions for year in years]
+    all_jobs = [(region, year, agent, scenario, allocator, args.render) for region in regions for year in years]
     sliced_jobs = [all_jobs[i:i+3] for i in range(0, len(all_jobs), 3)]
 
     if num_workers is None or num_workers <= 1:
         # Fallback to sequential execution
-        for region, year, agent, scenario in tqdm(all_jobs, desc="Running scenarios"):
-            info_dict = run_region_year(region, year, agent=agent, scenario=scenario, render=args.render)
-            with open(os.path.join(_DEFAULT_RESULTSDIR, args.agent, f"results_{region}_{year}.pkl"), "wb") as f:
-                pickle.dump(info_dict, f)
+        for region, year, agent, scenario, allocator, args.render in tqdm(all_jobs, desc="Running scenarios"):
+            info_dict = run_region_year(region, year, agent=agent, scenario=scenario, allocator=allocator, render=args.render)
             # results_dict[f"{region}_{year}"] = info_dict
     else:
         # Parallel execution over regions/years
@@ -211,9 +262,11 @@ if __name__ == "__main__":
     if "-lp" in scenario:
         years = [year - 5 for year in years]
 
+    name_al = "" if allocator is None else f"_{allocator}"
+
     for region in regions:
         for year in years:
-            pattern = f"results_{scenario}_{region}_{year}_farmer_*.pkl"
+            pattern = f"results_{scenario}_{region}_{year}" + name_al + f"_farmer_*.pkl"
             for pkl_file in base_dir.glob(pattern):
                 # Example filename: results_full_budget_groningen_2020_farmer_0.pkl
                 stem_parts = pkl_file.stem.split("_")
@@ -224,7 +277,8 @@ if __name__ == "__main__":
                     temp_dict = pickle.load(f)
                 aggregated_results[key] = temp_dict.get(year, temp_dict)
 
-    out_path = base_dir / f"results_{agent}_{scenario}.pkl"
+    out_name = f"results_{agent}_{scenario}" + name_al + ".pkl"
+    out_path = base_dir / out_name
     with open(out_path, "wb") as f:
         pickle.dump(aggregated_results, f)
 
