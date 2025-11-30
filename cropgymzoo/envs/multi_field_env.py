@@ -664,14 +664,14 @@ class MultiFieldEnv(AECEnv, EzPickle):
         ww_3 = min(30, n_init)
         handbook = {
             "sugarbeet": {
-                0: {"clay": sb, "sand": sb, "silt": sb, "peat": sb},
+                5: {"clay": sb, "sand": sb, "silt": sb, "peat": sb},
             },
             "potato": {
-                0: {"clay": min(200, pt_cl), "sand": min(170, pt_s), "silt": min(200, pt_cl), "peat": min(170, pt_s)},
+                5: {"clay": min(200, pt_cl), "sand": min(170, pt_s), "silt": min(200, pt_cl), "peat": min(170, pt_s)},
                 30: {"clay": pt_cl, "sand": pt_s, "silt": pt_cl, "peat": pt_s},
             },
             "winterwheat": {
-                0: {"clay": ww_1, "sand": ww_1, "silt": ww_1, "peat": ww_1},
+                5: {"clay": ww_1, "sand": ww_1, "silt": ww_1, "peat": ww_1},
                 120: {"clay": ww_2, "sand": ww_2, "silt": ww_2, "peat": ww_2},
                 # 70: {"clay": ww_3, "sand": ww_3, "silt": ww_3, "peat": ww_3},
             }
@@ -865,7 +865,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
         def format_val(val, width, prec=2):
             return f"{val:>{width}.{prec}f}" if isinstance(val, (int, float)) else f"{val:>{width}}"
 
-        header = f"Farm status; sowing year {self.year} – budget left: {round(self.global_budget_left * self.get_farm_area_sum(), 1)} / {round(self.global_budget * self.get_farm_area_sum(), 1)} kg N or {self.global_budget_left} / {self.global_budget} kg N / ha | Cumulative Reward: {self.get_cumulative_reward():.1f}"
+        header = f"Farm status; sowing year {self.year} – budget left: {round(self.global_budget_left * self.get_farm_area_sum(), 1)} / {round(self._get_global_budget() * self.get_farm_area_sum(), 1)} kg N or {self.global_budget_left} / {self._get_global_budget()} kg N / ha (Max. {self._get_global_max_budget()}) | Cum. Reward: {self.get_cumulative_reward():.1f}"
         cols = ("Field (area[ha])", "Crop", "Date", "N applied", "Yield[t/ha]", "NUE", "Nsurp", "Profit", "Reward")
         fmt_header = "{:20} {:12} {:10} {:>10} {:>15} {:>7} {:>7} {:>10} {:>10}"
         lines = [header, fmt_header.format(*cols), "-" * 110]
