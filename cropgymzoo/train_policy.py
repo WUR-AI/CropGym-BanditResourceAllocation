@@ -95,9 +95,11 @@ def load_checkpoint():
 
     model_path = Path(_DEFAULT_RESUMEDIR)
 
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
+
     checkpoint = None
     for entry in model_path.iterdir():
-        checkpoint = torch.load(entry, weights_only=False) if str(entry).endswith(".pth") else None
+        checkpoint = torch.load(entry, map_location=device, weights_only=False) if str(entry).endswith(".pth") else None
         if checkpoint is not None:
             break
     else:
