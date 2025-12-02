@@ -1,6 +1,5 @@
 import os
 from pathlib import Path
-import torch
 import argparse
 import pickle
 from tqdm import tqdm
@@ -8,6 +7,9 @@ from tqdm import tqdm
 from dataclasses import dataclass
 from typing import Hashable, List
 import numpy as np
+
+from cropgymzoo.utils.agent_helpers import model_picker
+
 
 @dataclass
 class FieldResponse:
@@ -32,7 +34,6 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import yaml
 
 from cropgymzoo import _SCENARIO_PATH, _DEFAULT_MODEL_DIR, _DEFAULT_RESULTSDIR
-from cropgymzoo.utils.scenario_utils import get_scenario_based_on_loc
 
 from cropgymzoo.eval_policy import MultiRLAgent, RoTAgent, RandomAgent
 
@@ -164,29 +165,6 @@ def run_region_year(
         # result_dict[f"farmer_{i}"] = info
 
     return result_dict
-
-def model_picker(model_file, dict_fields):
-    orig_model_dict = torch.load(model_file, weights_only=False)
-
-    assert isinstance(orig_model_dict, dict)
-
-    new_model_dict = {}
-    new_obs_rms_dict = {}
-    for name, field in dict_fields.items():
-        crop = field['crop']
-        coor = (field['soil_lat'], field['soil_lon'])
-        region = get_scenario_based_on_loc(coor)
-
-        orig_agent_name = region_crop_picker(region, crop)
-        new_model_dict[name] = orig_model_dict["models"][orig_agent_name]
-        if isinstance(orig_model_dict["obs_rms"], dict):
-            new_obs_rms_dict[name] = orig_model_dict["obs_rms"][orig_agent_name]
-
-    orig_model_dict['models'] = new_model_dict
-    if new_obs_rms_dict:
-        orig_model_dict['obs_rms'] = new_obs_rms_dict
-
-    return orig_model_dict
 
 
 def region_crop_picker(region, crop):
