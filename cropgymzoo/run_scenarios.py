@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Hashable, List
 import numpy as np
 
-from cropgymzoo.utils.agent_helpers import model_picker
+from cropgymzoo.utils.model_picker import model_picker
 
 
 @dataclass
