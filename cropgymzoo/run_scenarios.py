@@ -8,8 +8,6 @@ from dataclasses import dataclass
 from typing import Hashable, List
 import numpy as np
 
-from cropgymzoo.utils.model_picker import model_picker
-
 
 @dataclass
 class FieldResponse:
@@ -165,12 +163,6 @@ def run_region_year(
         # result_dict[f"farmer_{i}"] = info
 
     return result_dict
-
-
-def region_crop_picker(region, crop):
-    region_suffix = {"groningen": "n", "zeeland": "s", "gelderland": "e"}
-    crop_code = {"sugarbeet": "sb", "winterwheat": "ww", "potato": "pt"}
-    return f"field-{crop_code[crop]}-{region_suffix[region]}"
 
 
 # Helper for parallel execution
