@@ -481,26 +481,47 @@ class MultiFieldEnv(AECEnv, EzPickle):
         # get dict of default max budget
         parcel_budgets = {a: self.get_per_parcel_max_budget(a) for a in self.possible_agents}
 
-        percentage = 1 - (level * 0.1)
+        # Maximum reduction allowed by the curriculum level (kg/ha)
+        # e.g. level 1 -> 20, level 2 -> 40, ... capped at 160
+        max_level_reduction = min(float(level) * 20.0, 160.0)
 
-        lowest_budgets = {
-            a: float(np.ceil(parcel_budgets[a] * percentage / 10) * 10)
-            for a in self.possible_agents
-        }
+        for agent, max_budget in parcel_budgets.items():
+            # If this parcel's max budget is lower than 160, don't reduce it at all
+            # if max_budget < 160.0 or max_level_reduction <= 0.0:
+            #     reduction_choices = [0.0]
+            # else:
+            # Max reduction for this parcel is constrained by both level and its own max budget
+            effective_max_reduction = min(max_level_reduction, max_budget)
 
-        # get random reductions by choice for each agent limited by the default budget of the parcel
-        # change the logic of random allocation here if needed!
-        choices = {}
-        for (a, max_budget), (_, lowest_budget) in zip(parcel_budgets.items(), lowest_budgets.items()):
-            list_choice = [*np.arange(lowest_budget, max_budget, 10.)]
-            # probs = self.left_heavy_weights(len(list_choice))
-            choices[a] = self.rng.choice(list_choice) #, p=probs)
-            # choice = self.rng.uniform(low=lowest_budget, high=max_budget)
-            # choices[a] = choice
+            # Build {0, 20, 40, ..., effective_max_reduction} in 20 kg/ha steps
+            n_steps = int(effective_max_reduction // 20.0)
+            reduction_choices = [20.0 * i for i in range(n_steps + 1)]
 
-        # set random budget reduction for each parcel
-        for (_agent, choice), (_, budget) in zip(choices.items(), parcel_budgets.items()):
-            self.set_per_parcel_budget(_agent, choice)
+            # Sample a reduction and set the new budget
+            reduction = float(self.rng.choice(reduction_choices))
+            new_budget = max_budget - reduction
+            self.set_per_parcel_budget(agent, new_budget)
+
+        # percentage = 1 - (level * 0.1)
+        #
+        # lowest_budgets = {
+        #     a: float(np.ceil(parcel_budgets[a] * percentage / 10) * 10)
+        #     for a in self.possible_agents
+        # }
+        #
+        # # get random reductions by choice for each agent limited by the default budget of the parcel
+        # # change the logic of random allocation here if needed!
+        # choices = {}
+        # for (a, max_budget), (_, lowest_budget) in zip(parcel_budgets.items(), lowest_budgets.items()):
+        #     list_choice = [*np.arange(lowest_budget, max_budget, 10.)]
+        #     # probs = self.left_heavy_weights(len(list_choice))
+        #     choices[a] = self.rng.choice(list_choice) #, p=probs)
+        #     # choice = self.rng.uniform(low=lowest_budget, high=max_budget)
+        #     # choices[a] = choice
+        #
+        # # set random budget reduction for each parcel
+        # for (_agent, choice), (_, budget) in zip(choices.items(), parcel_budgets.items()):
+        #     self.set_per_parcel_budget(_agent, choice)
 
         self.set_global_budget(self._get_global_budget())
 
