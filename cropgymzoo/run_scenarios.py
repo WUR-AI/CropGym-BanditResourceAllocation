@@ -94,8 +94,10 @@ def run_region_year(
         )
 
         if "reduced" in scenario and allocator == "None":
+            env.allocate_bandit_budgets([10 for _ in env.possible_agents])
             for ag in env.possible_agents:
-                env.set_per_parcel_budget(ag, env.get_per_parcel_max_budget(ag) - 100)
+            #     env.set_per_parcel_budget(ag, env.get_per_parcel_max_budget(ag) - 100)
+            #     env.global_allocated_budget = env._get_global_budget_left()
                 assert env.get_per_parcel_budget(ag) < env.get_per_parcel_max_budget(ag)
 
         if allocator is not None and "LP" in allocator:
@@ -131,7 +133,7 @@ def run_region_year(
 
             proper_model_file = model_picker(model_file, dict_fields)
 
-            if proper_model_file["args"].get('special_action_space', False):
+            if getattr(proper_model_file["args"], 'special_action_space', False):
                 env.override_action_space()
 
             runner = MultiRLAgent(
