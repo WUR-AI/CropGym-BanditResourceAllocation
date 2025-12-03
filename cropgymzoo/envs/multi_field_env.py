@@ -167,6 +167,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
 
         self.global_budget = self._get_global_max_budget() if not self.random_budget else self._get_global_random_budget()
         self.global_budget_left = self.global_budget
+        self.global_allocated_budget  = self.global_budget
 
         self.total_area = np.sum([self.get_field_size(agent) for agent in self.possible_agents])
 
@@ -350,6 +351,8 @@ class MultiFieldEnv(AECEnv, EzPickle):
             allocation = agent_max - reduction
             self.set_per_parcel_budget(agent, allocation)
 
+        self.global_allocated_budget = self._get_global_budget_left()
+
         print(f'Allocated budget reductions of {allocations}')
 
     def set_new_fields(self, farm_dict: dict):
@@ -502,28 +505,11 @@ class MultiFieldEnv(AECEnv, EzPickle):
             new_budget = max_budget - reduction
             self.set_per_parcel_budget(agent, new_budget)
 
-        # percentage = 1 - (level * 0.1)
-        #
-        # lowest_budgets = {
-        #     a: float(np.ceil(parcel_budgets[a] * percentage / 10) * 10)
-        #     for a in self.possible_agents
-        # }
-        #
-        # # get random reductions by choice for each agent limited by the default budget of the parcel
-        # # change the logic of random allocation here if needed!
-        # choices = {}
-        # for (a, max_budget), (_, lowest_budget) in zip(parcel_budgets.items(), lowest_budgets.items()):
-        #     list_choice = [*np.arange(lowest_budget, max_budget, 10.)]
-        #     # probs = self.left_heavy_weights(len(list_choice))
-        #     choices[a] = self.rng.choice(list_choice) #, p=probs)
-        #     # choice = self.rng.uniform(low=lowest_budget, high=max_budget)
-        #     # choices[a] = choice
-        #
-        # # set random budget reduction for each parcel
-        # for (_agent, choice), (_, budget) in zip(choices.items(), parcel_budgets.items()):
-        #     self.set_per_parcel_budget(_agent, choice)
+        new_global_budget = self._get_global_budget()
 
-        self.set_global_budget(self._get_global_budget())
+        self.global_allocated_budget = new_global_budget
+
+        self.set_global_budget(new_global_budget)
 
     @staticmethod
     def left_heavy_weights(x: int, steepness: float = 1.1) -> list[float]:
@@ -643,13 +629,13 @@ class MultiFieldEnv(AECEnv, EzPickle):
         return day - 3 <= dap <= day + 3
 
     def _warm_up(self, warm_up_counter):
-        print("Checking if warm up was done...")
-        if os.path.isfile(os.path.join(_CONFIG_PATH, 'warm_up_infos.pkl')):
-            with open(os.path.join(_CONFIG_PATH, 'warm_up_infos.pkl'), 'rb') as f:
-                warm_up_infos = pickle.load(f)
-            print("Loaded warm up info!")
-            return warm_up_infos
-        print("No file found...")
+        # print("Checking if warm up was done...")
+        # if os.path.isfile(os.path.join(_CONFIG_PATH, 'warm_up_infos.pkl')):
+        #     with open(os.path.join(_CONFIG_PATH, 'warm_up_infos.pkl'), 'rb') as f:
+        #         warm_up_infos = pickle.load(f)
+        #     print("Loaded warm up info!")
+        #     return warm_up_infos
+        # print("No file found...")
         warm_up_infos: deque[dict] = deque(maxlen=100)
         options = {}
         print('Starting warm up...')
@@ -660,7 +646,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
             iter_info = {}
             for agent in self.agent_iter():
                 _, _, _, _, infos = self.last()
-                action = self.farmers_practice(agent, infos)
+                action = self.rule_of_thumb(agent)
                 if self.terminations[agent]:
                     iter_info[agent] = infos
                     self.step(None)
@@ -886,7 +872,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
         def format_val(val, width, prec=2):
             return f"{val:>{width}.{prec}f}" if isinstance(val, (int, float)) else f"{val:>{width}}"
 
-        header = f"Farm status; sowing year {self.year} – budget left: {round(self.global_budget_left * self.get_farm_area_sum(), 1)} / {round(self._get_global_budget() * self.get_farm_area_sum(), 1)} kg N or {self.global_budget_left} / {self._get_global_budget()} kg N / ha (Max. {self._get_global_max_budget()}) | Cum. Reward: {self.get_cumulative_reward():.1f}"
+        header = f"Farm status; sowing year {self.year} – budget left: {round(self.global_budget_left * self.get_farm_area_sum(), 1)} / {round(self.global_allocated_budget * self.get_farm_area_sum(), 1)} kg N or {self.global_budget_left} / {self.global_allocated_budget} kg N / ha (Max. {self._get_global_max_budget()}) | Cum. Reward: {self.get_cumulative_reward():.1f}"
         cols = ("Field (area[ha])", "Crop", "Date", "N applied", "Yield[t/ha]", "NUE", "Nsurp", "Profit", "Reward")
         fmt_header = "{:20} {:12} {:10} {:>10} {:>15} {:>7} {:>7} {:>10} {:>10}"
         lines = [header, fmt_header.format(*cols), "-" * 110]
