@@ -3,6 +3,7 @@ import yaml
 from cropgymzoo import _SCENARIO_PATH
 from itertools import chain
 import torch
+from pathlib import Path
 
 def get_scenario_based_on_name(name: str):
     if '-s' in name:
@@ -44,7 +45,10 @@ def region_crop_picker(region, crop):
 
 
 def model_picker(model_file, dict_fields):
-    orig_model_dict = torch.load(model_file, weights_only=False)
+    if isinstance(model_file, str or Path):
+        orig_model_dict = torch.load(model_file, weights_only=False)
+    else:
+        orig_model_dict = model_file
 
     assert isinstance(orig_model_dict, dict)
 

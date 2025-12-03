@@ -7,6 +7,7 @@ import torch
 import numpy as np
 
 import datetime
+import pickle
 
 from cropgymzoo.eval_allocator import run_eval_allocator
 from cropgymzoo.agents.nn_agp import NNAGPBandit
@@ -16,8 +17,36 @@ from cropgymzoo.envs.allocation_env import AllocationBandit
 from tianshou.utils.statistics import RunningMeanStd
 
 
+def farm_int_mapper(x: int):
+    """
+    Maps a global farm index (0–52) to (region, farmer_id).
+
+    Regions:
+        Gelderland: 0–11  (12 farms)
+        Groningen: 12–24  (13 farms)
+        Zeeland:   25–52  (27 farms)
+
+    Returns:
+        (region_name: str, farmer_id: int)
+    """
+
+    if not (0 <= x <= 52):
+        raise ValueError(f"farm index must be between 0 and 52, got {x}")
+
+    # Gelderland (0–11)
+    if x < 12:
+        return "gelderland", x
+
+    # Groningen (12–24)
+    if x < 12 + 13:  # up to index 24
+        return "groningen", x - 12
+
+    # Zeeland (25–52)
+    return "zeeland", x - (12 + 13)
+
+
 def train_allocator(args):
-    log_folder_name = f"NN-AGP-Bandit_{datetime.datetime.now():%m%d-%H%M}"
+    log_folder_name = f"Bandit_{args.method}_{datetime.datetime.now():%m%d-%H%M}"
     # initialize comet if using
     comet_experiment = None
     if args.use_comet:
@@ -30,10 +59,6 @@ def train_allocator(args):
         seed=args.seed,
         flat_context=True,
     )
-
-    # misc
-    rng = np.random.RandomState(args.seed)
-    torch.set_default_dtype(torch.float32)
 
     # context and action dims
     d_theta, d_x = env.observation_space.shape[0], env.action_space.shape[0]
@@ -52,6 +77,69 @@ def train_allocator(args):
         device=torch.device("cpu")
     )
 
+    training_loop(env, bandit, args, comet_experiment, log_folder_name)
+
+    print("Training Complete!")
+
+
+def train_allocator_for_farm(args):
+    farm_int = args.farm
+    render = args.render
+
+    region, farm_id = farm_int_mapper(farm_int)
+
+    print(f"Training Farm {region}_{farm_int}!")
+    print(f"Using {args.model_dir} RL policy!")
+
+    training_years = list(range(2000, 2020))
+
+    log_folder_name = f"Bandit_{datetime.datetime.now():%m%d}"
+    # initialize comet if using
+    comet_experiment = None
+    if args.use_comet:
+        comet_experiment = _setup_bandit_comet(args)
+
+    env = AllocationBandit(
+        warm_up_eps=2,
+        args=args,
+        seed=args.seed,
+        flat_context=True,
+        years=training_years,
+        region=region,
+        farm_id=farm_id,
+        render=render,
+    )
+
+    # context and action dims
+    d_theta, d_x = env.observation_space.shape[0], env.action_space.shape[0]
+
+    # the paper suggested this
+    m = d_theta // 10 + d_x // 3 + 3
+    print(f"d_theta: {d_theta}, d_x: {d_x}. So, m: {m}")
+
+    # put the bandit algorithm here
+    bandit = NNAGPBandit(
+        d_theta=d_theta,
+        d_x=d_x,
+        m=m,  # vector len of multi output GP
+        Q=args.q,  # number of shared GP outputs
+        lr=args.bandit_lr,
+        device=torch.device("cpu")
+    )
+
+    training_loop(env, bandit, args, comet_experiment, log_folder_name, region=region, farm_id=farm_id)
+
+    print(f"Training for Farm {region}_{farm_id} Complete!")
+
+
+
+def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experiment = None,
+                log_folder_name: str = None, region: str | None = None, farm_id: int | None = None):
+
+    # misc
+    rng = np.random.RandomState(args.seed)
+    torch.set_default_dtype(torch.float32)
+
     # make action candidates for each round. Get super arms and randomly sample
     action_candidates = env.super_arms
     num_candidates = args.action_candidate_length
@@ -61,8 +149,12 @@ def train_allocator(args):
 
     test_step = 0
 
+    method = args.method
+
     # put the training loop here
     for t in range(1, args.rounds + 1):
+        if region is not None or farm_id is not None:
+            env.get_rotation_year(rng.choice([2020, 2021, 2022, 2023, 2024]))
         theta_t, env_info = env.reset(
             options={
                 'year': rng.choice(env.years),
@@ -105,7 +197,10 @@ def train_allocator(args):
 
         if not args.streaming:
             # pick by UCB (or switch to bandit.select_ts(...))
-            x_t, selection_info = bandit.select_ucb(theta_t, x_cand, delta=0.1)
+            if method == "ucb":
+                x_t, selection_info = bandit.select_ucb(theta_t, x_cand, delta=0.1)
+            else:
+                x_t, selection_info = bandit.select_ts(theta_t, x_cand, delta=0.1)
             if isinstance(x_t, np.ndarray):
                 x_t = torch.from_numpy(x_t)
             if comet_experiment:
@@ -147,18 +242,21 @@ def train_allocator(args):
             # test bandit
             bandit.model.eval()
             # edit?
-            years: list = [2000]
+            years: list = [2020, 2021, 2022, 2023, 2024]
 
+            info_dict = {}
             for year in years:
-                raw_reward, normalized_reward = run_eval_allocator(
+                raw_reward, normalized_reward, infos = run_eval_allocator(
                     env=env,
                     bandit=bandit,
                     year=year,
                     rms=rms,
                     experiment=comet_experiment,
                     step=t,
+                    method=method,
                     candidate_size=50_0000,
                 )
+                info_dict[year] = infos
                 print(f"test year: {year}, reward: {raw_reward}")
                 if comet_experiment:
                     comet_experiment.log_metrics(
@@ -168,27 +266,34 @@ def train_allocator(args):
                         },
                         step=test_step,
                     )
+            if comet_experiment:
+                data = pickle.dumps(info_dict)
+                comet_experiment.log_asset(
+                    file_data=data,
+                    file_name=f"s{args.seed}_bandit_test_info.pkl",
+                    step=test_step,
+                )
 
             test_step += 10
 
             bandit.model.train()
 
+        farm_name = f"{region}_{farm_id}" if region is not None else None
+
         # save the model iteratively
-        if t % 10 == 0:
+        if t % 5 == 0:
             file_dir = bandit.save(
                 seed=args.seed,
                 t=t,
                 name=log_folder_name,
                 args=args,
                 rms=rms,
+                farm_id=farm_name,
             )
 
             if comet_experiment:
                 comet_experiment.log_asset(
                     file_dir,
-                    file_name=f"s{args.seed}_bandit_{t}",
+                    file_name=f"s{args.seed}_{args.method}_bandit_{t}",
                     step=t,
                 )
-
-    print("Training Complete!")
-

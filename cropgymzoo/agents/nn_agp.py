@@ -72,7 +72,9 @@ class Matern32(nn.Module):
         xx = (Xs**2).sum(1, keepdim=True)
         yy = (Ys**2).sum(1, keepdim=True).T
         d2 = xx + yy - 2.0 * (Xs @ Ys.T)
-        r = d2.clamp_min_(0).sqrt()
+        # Add small epsilon before sqrt to avoid infinite/NaN gradients at r=0
+        eps = 1e-12
+        r = (d2.clamp_min(0.0) + eps).sqrt()
         sqrt3r = math.sqrt(3.0) * r
         return (1.0 + sqrt3r) * torch.exp(-sqrt3r)
 
@@ -237,10 +239,10 @@ class NNAGP(nn.Module):
       - collaborative MOGP for K(x,x')
       - exact GP posterior over f(x;theta) using K̃
     """
-    def __init__(self, d_theta: int, d_x: int, m: int, Q: int = 1, device: Optional[torch.device] = None):
+    def __init__(self, d_theta: int, d_x: int, m: int, Q: int = 1, kernel='matern', device: Optional[torch.device] = None):
         super().__init__()
         self.g_net = FeatureNet(d_theta, m)
-        self.mogp = CollaborativeMOGP(d_x, m, Q=Q)
+        self.mogp = CollaborativeMOGP(d_x, m, Q=Q, shared_kernel=kernel, indep_kernel=kernel)
         self.raw_noise = nn.Parameter(torch.tensor(-2.0))  # σ_ε ≈ 0.12
         self.jitter = 1e-3
         self.device = device or torch.device("cpu")
@@ -282,10 +284,9 @@ class NNAGP(nn.Module):
         act, context_in, y = act.to(self.device), context_in.to(self.device), y.to(self.device)
         G = self.g_net(context_in)                        # (n,m)
         Kt = self.mogp.K_tilde(act, context_in, act, context_in, G, G)  # (n,n)
-        Kt = 0.5 * (Kt + Kt.T)
-        Kn = add_jitter(Kt, self.jitter) + self.noise**2 * torch.eye(act.shape[0], device=act.device)
-        L = torch.linalg.cholesky(Kn)
-        # L = self._robust_cholesky(Kt)
+
+        # Use robust Cholesky that adds noise^2 I and jitter internally
+        L = self._robust_cholesky(Kt)
         alpha = torch.cholesky_solve(y.unsqueeze(1), L).squeeze(1)  # (n,)
 
         log_det = 2.0 * torch.log(torch.diag(L)).sum()
@@ -316,9 +317,8 @@ class NNAGP(nn.Module):
         if need_refit:
             G_tr = self.g_net(train_Theta)
             Kt = self.mogp.K_tilde(train_X, train_Theta, train_X, train_Theta, G_tr, G_tr)
-            Kn = add_jitter(Kt, self.jitter) + self.noise**2 * torch.eye(train_X.shape[0], device=device)
-            L = torch.linalg.cholesky(Kn)
-            # L = self._robust_cholesky(Kt)
+            # Use robust Cholesky that adds noise^2 I and jitter internally
+            L = self._robust_cholesky(Kt)
             alpha = torch.cholesky_solve(y.unsqueeze(1), L).squeeze(1)
             self._train_cache = {"Theta": train_Theta, "X": train_X, "y": y, "L": L, "alpha": alpha, "G": G_tr}
         else:
@@ -515,20 +515,68 @@ class NNAGPBandit:
 
         return best_x, {"best_ucb": best_ucb, "beta_t": beta_t}
 
-    # choose x_t by Thompson Sampling over candidates
     @torch.no_grad()
-    def select_ts(self, theta_t: torch.Tensor, X_candidates: torch.Tensor) -> Tuple[torch.Tensor, SelectionInfo]:
+    def select_ts(
+        self,
+        theta_t: torch.Tensor,
+        X_candidates: torch.Tensor,
+        deterministic: bool = False,
+        seed: Optional[int] = None,
+    ) -> Tuple[torch.Tensor, SelectionInfo]:
+        """Thompson sampling over a finite candidate set.
+
+        For the current context theta_t and a finite set of candidate actions X_candidates,
+        draw a sample from the joint posterior over {f(x; theta_t)} for x in X_candidates
+        and pick the maximizer.
+        """
+        # Cold start: no data yet, pick a random arm
         if len(self.y_hist) == 0:
             idx = torch.randint(0, X_candidates.shape[0], (1,)).item()
             mu = torch.zeros(X_candidates.shape[0])
             std = torch.ones(X_candidates.shape[0])
             return X_candidates[idx], SelectionInfo(mu=mu, std=std, rule="ts")
-        X = torch.vstack(self.x_hist); Theta = torch.vstack(self.theta_hist); y = torch.hstack(self.y_hist)
-        mu, std, cov = self.model.posterior_on_candidates(X_candidates, theta_t.unsqueeze(0), X, Theta, y)
-        # exact correlated sample
-        Lc = torch.linalg.cholesky(add_jitter(cov))
-        z = torch.randn(mu.shape[0], device=mu.device)
-        sample = mu + Lc @ z
+
+        # Stack history
+        X = torch.vstack(self.x_hist)
+        Theta = torch.vstack(self.theta_hist)
+        y = torch.hstack(self.y_hist)
+
+        # Get posterior over candidates, including the covariance
+        mu, std, cov = self.model.posterior_on_candidates(
+            X_candidates,
+            theta_t.unsqueeze(0),
+            X,
+            Theta,
+            y,
+            calculate_covariance=True,
+        )
+
+        # Deterministic = greedy on posterior mean; otherwise Thompson sampling
+        if deterministic:
+            sample = mu
+        else:
+            # Sample a function draw over the candidate set
+            if seed is not None:
+                # Make sampling reproducible if a seed is provided
+                g = torch.Generator(device=mu.device)
+                g.manual_seed(seed)
+                if cov is not None:
+                    Lc = torch.linalg.cholesky(cov)
+                    z = torch.randn(mu.shape[0], generator=g, device=mu.device)
+                    sample = mu + Lc @ z
+                else:
+                    z = torch.randn_like(mu, generator=g)
+                    sample = mu + std * z
+            else:
+                if cov is not None:
+                    Lc = torch.linalg.cholesky(cov)
+                    z = torch.randn(mu.shape[0], device=mu.device)
+                    sample = mu + Lc @ z
+                else:
+                    # Fallback: assume independence if covariance is not provided
+                    z = torch.randn_like(mu)
+                    sample = mu + std * z
+
         idx = int(torch.argmax(sample).item())
         return X_candidates[idx], SelectionInfo(mu=mu.cpu(), std=std.cpu(), sampled_vals=sample.cpu(), rule="ts")
 
@@ -589,10 +637,15 @@ class NNAGPBandit:
             name: str = None,
             args = None,
             rms = None,
+            farm_id: str = None,
+            method: str = "ucb",
     ):
-        file_dir = os.path.join(_DEFAULT_LOGDIR, name)
+        if farm_id is None:
+            file_dir = os.path.join(_DEFAULT_LOGDIR, name)
+        else:
+            file_dir = os.path.join(_DEFAULT_LOGDIR, name, farm_id)
         os.makedirs(file_dir, exist_ok=True)
-        name_file = f"s{seed}_model{t if t is not None else ''}.pth"
+        name_file = f"s{seed}_{method}_model{t if t is not None else ''}.pth"
         file_dir = os.path.join(
                 file_dir,
                 name_file,

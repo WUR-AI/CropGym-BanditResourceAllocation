@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from typing import Hashable, List
 import numpy as np
 
+from cropgymzoo.utils.scenario_utils import model_picker
+
 
 @dataclass
 class FieldResponse:
