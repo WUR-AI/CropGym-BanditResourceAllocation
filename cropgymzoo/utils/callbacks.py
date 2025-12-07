@@ -587,7 +587,7 @@ def get_checkpoint(path):
     return latest_file
 
 
-def _setup_bandit_comet(args):
+def _setup_bandit_comet(args, region = None, farm_int = None):
     if not os.path.isdir(os.path.join(_BASE_PATH, 'comet')):
         print("Not using comet!")
         return
@@ -609,10 +609,10 @@ def _setup_bandit_comet(args):
 
     experiment.log_code(folder=_SOURCE_PATH)
 
-    name = f"s{args.seed}-allocation-agent-{datetime.now():%m%d-%H%M}"
+    name = f"Bandit_{args.method}_{datetime.now():%m%d}"
+    if region is not None:
+        name = f"Bandit_{region}_{farm_int}_{datetime.now():%m%d}"
     experiment.set_name(name)
-    experiment.add_tag("allocation-bandit")
-    experiment.add_tag("NN-AGP")
 
     # log hyperparameters (robustly)
     experiment.log_parameters({k: v for k, v in vars(args).items()})

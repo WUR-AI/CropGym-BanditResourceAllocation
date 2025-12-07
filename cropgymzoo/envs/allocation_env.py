@@ -1,5 +1,7 @@
+import os
 import argparse
 import itertools
+import yaml
 
 import numpy as np
 import gymnasium as gym
@@ -9,8 +11,11 @@ from cropgymzoo.utils.agent_helpers import _make_super_arms, _make_base_arms, _m
 
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 from cropgymzoo.utils.defaults import get_default_years
-from cropgymzoo.train_policy import load_model, make_ppo_policy
+from cropgymzoo.utils.scenario_utils import model_picker
+from cropgymzoo.train_policy import load_model, initialize_policy
 from cropgymzoo.eval_policy import MultiRLAgent
+
+from cropgymzoo import _SCENARIO_PATH
 
 
 # ---------------------------------------------------------------------
@@ -23,15 +28,18 @@ class AllocationBandit(gym.Env):
     metadata = {"render_modes": []}
 
     def __init__(
-        self,
-        delta_kg: float = 20.0,
-        warm_up_eps: int = 10,
-        cap: float = 0.4,
-        years: list = get_default_years(),
-        seed: int = 107,
-        action_type: str = 'continuous',
-        args: argparse.Namespace = None,
-        flat_context: bool = True,
+            self,
+            delta_kg: float = 20.0,
+            warm_up_eps: int = 10,
+            cap: float = 1.0,
+            years: list = get_default_years(),
+            seed: int = 107,
+            action_type: str = 'continuous',
+            args: argparse.Namespace = None,
+            flat_context: bool = True,
+            region: str = None,
+            farm_id: int = None,
+            render: bool = False,
     ):
         super().__init__()
 
@@ -46,6 +54,9 @@ class AllocationBandit(gym.Env):
         self.years = years
         self.year = None
         self.cap = cap
+        self.region = region
+        self.farm_id = farm_id
+        self.render = render
 
         # The MARL env
         self._init_envs(args)
@@ -78,7 +89,7 @@ class AllocationBandit(gym.Env):
 
     def step(self, action):
         # check if action is valid
-        assert self.action_space.contains(action), "invalid action"
+        assert self.action_space.contains(action), f"{action} is an invalid action"
 
         # save action this episode
         self.infos['AllocationAction'] = action
@@ -99,6 +110,7 @@ class AllocationBandit(gym.Env):
         # convert budget left as profit
         budget_lefts = np.array([self.infos['AgentInfos'][agent]['BudgetLeft'][-1] for agent in self.parcel_meta_infos.keys()])
         fertilizer_prices = np.array([self.infos['AgentInfos'][agent]['FertilizerPrice'][-1] for agent in self.parcel_meta_infos.keys()])
+        areas = np.array([self.infos['AgentInfos'][agent]['area'][-1] for agent in self.parcel_meta_infos.keys()])
 
         self.infos['BudgetLeft'] = budget_lefts
         self.infos['FertilizerPrice'] = fertilizer_prices
@@ -108,10 +120,12 @@ class AllocationBandit(gym.Env):
         # add with actual profit
         profit = np.array([np.sum(self.infos['AgentInfos'][agent]['Profit']) for agent in self.parcel_meta_infos.keys()])
 
-        # log in infos, will be erased in next round
-        self.infos['Profit'] = profit
+        weighted_profit = profit @ areas
 
-        reward = np.sum(profit) + budget_left_profit
+        # log in infos, will be erased in next round
+        self.infos['Profit'] = weighted_profit
+
+        reward = np.sum(weighted_profit) + budget_left_profit
         self.infos['Reward'] = reward
 
         return reward
@@ -179,6 +193,13 @@ class AllocationBandit(gym.Env):
     '''
     Helper functions
     '''
+
+    def get_rotation_year(self, year):
+        assert year in [2020, 2021, 2022, 2023, 2024]
+        with open(os.path.join(_SCENARIO_PATH, f"{self.region}", f"{year}", f"farmer_{self.farm_id}.yaml"), 'r') as f:
+            dict_fields = yaml.safe_load(f)
+
+        self.farm.set_new_fields(dict_fields)
 
     def _construct_info(self, options=None):
         if options is not None:
@@ -267,18 +288,26 @@ class AllocationBandit(gym.Env):
     '''
 
     def _init_envs(self, args):
+        dict_fields = None
+        if args.farm > 0:
+            with open(os.path.join(_SCENARIO_PATH, f"{self.region}", "2020", f"farmer_{self.farm_id}.yaml"), 'rb') as f:
+                dict_fields = yaml.safe_load(f)
+
         self.farm = MultiFieldEnv(
             warm_up=self.warm_up_eps,
             years=self.years,
+            farm_dict=dict_fields,
         )
 
         self.env_agent = None
         if args is not None and hasattr(args, 'use_model'):
             saved_model = load_model(args)
+            if args.farm > 0:
+                saved_model = model_picker(saved_model, dict_fields)
             self.env_agent = MultiRLAgent(
                 env = self.farm,
                 saved_model=saved_model,
-                render=False,
+                render=args.render,
             )
             self.farm = self.env_agent.env
 
@@ -287,6 +316,7 @@ class AllocationBandit(gym.Env):
         # Set up action space based on farm
         self.base_arms = _make_base_arms(self, cap=self.cap)
         self.super_arms = _make_super_arms(self, self.base_arms)
+        self.super_arms_reduced = _make_super_arms(self, self.base_arms, reduced=True)
         self.top_super_arms = _make_topk_super_arms(
             self.base_arms,
             self.farm.possible_agents,
@@ -308,7 +338,7 @@ class AllocationBandit(gym.Env):
                 ]
             )
         if self.action_type == 'continuous':
-            self.action_space = spaces.Box(low=0, high=20, shape=(self.n_fields,), dtype=np.float32)
+            self.action_space = spaces.Box(low=0.0, high=30.0, shape=(self.n_fields,), dtype=np.float32)
 
         # Observation space
         if not self.flat_context:

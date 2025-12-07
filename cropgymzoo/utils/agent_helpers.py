@@ -17,14 +17,30 @@ def _make_base_arms(self, cap: float = 0.4) -> dict[str, np.ndarray]:
     return base
 
 
-def _make_super_arms(self, base_arms: dict[str, np.ndarray]) -> np.ndarray:
+def _make_super_arms(self, base_arms: dict[str, np.ndarray], reduced: bool= False, to_reduce: float = 100.0) -> np.ndarray:
     """
     Cartesian product over the per-farm base arms, returned as an array of shape (num_arms, N).
     Each row is an N-length reduction vector, e.g., [10, 40, 20, 30, 40, 0] for N=6.
     """
     grids = [base_arms[a] for a in self.farm.possible_agents]  # fixed order
     super_arms = np.array(list(itertools.product(*grids)), dtype=np.float32)
-    return super_arms
+
+    if not reduced:
+        return super_arms
+
+    # Compute the "reduced" global cap as if each field had at most `per_field_limit`
+    max_budgets = np.array(
+        [self.farm.get_per_parcel_max_budget(a) - to_reduce for a in self.farm.possible_agents],
+        dtype=np.float32,
+    )
+    # Effective per-field cap when pretending each field was limited to `per_field_limit`
+    # effective_caps = np.minimum(max_budgets, float(per_field_limit))
+    global_cap = float(max_budgets.sum()) / 10.0
+
+    # Keep only combinations whose total reduction stays within this global cap
+    total_reductions = super_arms.sum(axis=1)
+    mask = total_reductions <= global_cap + 1e-6  # small tolerance for float errors
+    return super_arms[mask]
 
 def _make_topk_super_arms(
     base_arms: dict[str, np.ndarray],

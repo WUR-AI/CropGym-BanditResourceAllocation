@@ -17,6 +17,7 @@ def run_eval_allocator(
         streaming=False,
         method='ucb',
         candidate_size=24000,
+        scenario='full',
 ):
 
     """Run eval allocator."""
@@ -33,7 +34,10 @@ def run_eval_allocator(
     # convert to numpy
     theta_t = torch.from_numpy(theta_t)
 
-    allocation_actions = env.super_arms
+    if scenario == 'full':
+        allocation_actions = env.super_arms
+    else:  # scenario == 'reduced'
+        allocation_actions = env.super_arms_reduced
 
     if not streaming:
         # candidate set for actions; sampled from the super_arms array
