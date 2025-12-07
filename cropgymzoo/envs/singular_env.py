@@ -661,7 +661,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         total_constraint = 0.0
         total_constraint += self._get_frequency_constraint(terminated)
         total_constraint += self._get_dvs_constraint()
-        total_constraint += self._get_consecutive_constraint()
+        if self.crop == 'winterwheat':
+            total_constraint += self._get_consecutive_constraint()
         # total_constraint += self._get_budget_constraint(terminated)
         # total_constraint += self._get_nue_constraint()
         # total_constraint += self._get_nsurp_constraint()
