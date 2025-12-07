@@ -2,6 +2,7 @@ import datetime
 import os
 import math
 from dataclasses import dataclass
+from collections import deque
 from typing import List, Tuple, Optional, Literal
 
 import torch
@@ -403,9 +404,9 @@ def ucb_components(mu: torch.Tensor, std: torch.Tensor, beta_t: float):
 class NNAGPBandit:
     def __init__(self, d_theta: int, d_x: int, m: int = 8, Q: int = 1, lr: float = 1e-4, device: Optional[torch.device] = None):
         self.model = NNAGP(d_theta, d_x, m=m, Q=Q, device=device or torch.device("cpu"))
-        self.theta_hist: List[torch.Tensor] = []
-        self.x_hist: List[torch.Tensor] = []
-        self.y_hist: List[torch.Tensor] = []
+        self.theta_hist: deque[torch.Tensor] = deque(maxlen=300)
+        self.x_hist: deque[torch.Tensor] = deque(maxlen=300)
+        self.y_hist: deque[torch.Tensor] = deque(maxlen=300)
         self.t = 1
 
         self.opt = torch.optim.AdamW(
@@ -418,9 +419,9 @@ class NNAGPBandit:
     def train_step(self, steps: int = 200, lr: float = 3e-3) -> float:
         if len(self.y_hist) == 0:
             return 0.0
-        x = torch.vstack(self.x_hist)
-        theta = torch.vstack(self.theta_hist)
-        y = torch.hstack(self.y_hist)
+        x = torch.vstack(tuple(self.x_hist))
+        theta = torch.vstack(tuple(self.theta_hist))
+        y = torch.hstack(tuple(self.y_hist))
         self.model._clear_cache()
 
         loss_val = 0.0
@@ -451,9 +452,9 @@ class NNAGPBandit:
             std = torch.ones(X_candidates.shape[0])
             return X_candidates[idx], SelectionInfo(mu=mu, std=std, ucb=None, beta_t=None, rule="ucb")
 
-        X = torch.vstack(self.x_hist)
-        Theta = torch.vstack(self.theta_hist)
-        y = torch.hstack(self.y_hist)
+        X = torch.vstack(tuple(self.x_hist))
+        Theta = torch.vstack(tuple(self.theta_hist))
+        y = torch.hstack(tuple(self.y_hist))
         mu, std, _ = self.model.posterior_on_candidates(
             X_candidates,
             theta_t.unsqueeze(0),
@@ -491,9 +492,9 @@ class NNAGPBandit:
             idx = torch.randint(0, all_actions.shape[0], (1,)).item()
             return all_actions[idx], None
 
-        X = torch.vstack(self.x_hist)
-        Theta = torch.vstack(self.theta_hist)
-        y = torch.hstack(self.y_hist)
+        X = torch.vstack(tuple(self.x_hist))
+        Theta = torch.vstack(tuple(self.theta_hist))
+        y = torch.hstack(tuple(self.y_hist))
         beta_t = beta_finite_candidates(
             self.t,
             chunk, # use chunk size conservatively
@@ -537,9 +538,9 @@ class NNAGPBandit:
             return X_candidates[idx], SelectionInfo(mu=mu, std=std, rule="ts")
 
         # Stack history
-        X = torch.vstack(self.x_hist)
-        Theta = torch.vstack(self.theta_hist)
-        y = torch.hstack(self.y_hist)
+        X = torch.vstack(tuple(self.x_hist))
+        Theta = torch.vstack(tuple(self.theta_hist))
+        y = torch.hstack(tuple(self.y_hist))
 
         # Get posterior over candidates, including the covariance
         mu, std, cov = self.model.posterior_on_candidates(
@@ -589,11 +590,11 @@ class NNAGPBandit:
 
     def export_posterior(self):
         """Return everything needed for posterior predictions."""
-        X = torch.vstack(self.x_hist) if self.x_hist else torch.empty(0, self.model.mogp.k_shared[
+        X = torch.vstack(tuple(self.x_hist)) if self.x_hist else torch.empty(0, self.model.mogp.k_shared[
             0].raw_lengthscale.numel())
-        Theta = torch.vstack(self.theta_hist) if self.theta_hist else torch.empty(0,
+        Theta = torch.vstack(tuple(self.theta_hist)) if self.theta_hist else torch.empty(0,
                                                                                   self.model.g_net.net[0].in_features)
-        y = torch.hstack(self.y_hist) if self.y_hist else torch.empty(0)
+        y = torch.hstack(tuple(self.y_hist)) if self.y_hist else torch.empty(0)
         cache = None
         if self.model._train_cache:
             # optional speed-up: store Cholesky and alpha so we don’t recompute
