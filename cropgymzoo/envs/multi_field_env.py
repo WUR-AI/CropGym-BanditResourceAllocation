@@ -466,6 +466,9 @@ class MultiFieldEnv(AECEnv, EzPickle):
     def get_cumulative_reward(self):
         return np.sum([np.cumsum(self.fields[a].unwrapped.infos['Reward'])[-1] for a in self.possible_agents])
 
+    def get_agent_non_zero_action_count(self, agent):
+        return self.fields[agent].unwrapped.infos['NonZeroActionCount'][-1]
+
     def get_dap(self, agent):
         return self.fields[agent].unwrapped._calculate_dap()
 
@@ -557,7 +560,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
                     year=2000,
                     name=key,
                     area=field['area'],
-                    reward='PNB',
+                    reward=self.reward_code,
                     original=True,
                     training=False,
                     flatten_obs=True,
@@ -706,7 +709,9 @@ class MultiFieldEnv(AECEnv, EzPickle):
         """Random fertilization schedule based on crop + soil."""
         budget_left  = self.get_per_parcel_budget_left(agent_name)
 
-        fert = self.rng.choice([0, min(80, budget_left)], p=[0.95, 0.05])
+        fert = 0.0
+        if self.get_agent_non_zero_action_count(agent_name) <= 4:
+            fert = self.rng.choice([0, min(80, max(budget_left, 0))], p=[0.95, 0.05])
 
         return fert / 10
 
