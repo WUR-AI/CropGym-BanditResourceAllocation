@@ -5,6 +5,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 import torch
 
 import numpy as np
+import os
 
 import datetime
 import pickle
@@ -14,6 +15,7 @@ from cropgymzoo.agents.nn_agp import NNAGPBandit
 from cropgymzoo.utils.agent_helpers import min_max_normalize
 from cropgymzoo.utils.callbacks import _setup_bandit_comet, log_selection_info, log_model_histograms
 from cropgymzoo.envs.allocation_env import AllocationBandit
+from cropgymzoo import _DEFAULT_LOGDIR
 from tianshou.utils.statistics import RunningMeanStd
 
 
@@ -93,11 +95,14 @@ def train_allocator_for_farm(args):
 
     training_years = list(range(2000, 2020))
 
-    log_folder_name = f"Bandit_{datetime.datetime.now():%m%d}"
+    log_folder_name = f"Bandit_{region}_{farm_int}_{datetime.datetime.now():%m%d}"
     # initialize comet if using
     comet_experiment = None
     if args.use_comet:
         comet_experiment = _setup_bandit_comet(args)
+        comet_experiment.add_tags([f"{region}_{farm_id}"])
+        comet_experiment.add_tag(f"{args.method}")
+        comet_experiment.add_tag(f"{args.model_dir}")
 
     env = AllocationBandit(
         warm_up_eps=2,
@@ -244,35 +249,40 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
             # edit?
             years: list = [2020, 2021, 2022, 2023, 2024]
 
-            info_dict = {}
-            for year in years:
-                raw_reward, normalized_reward, infos = run_eval_allocator(
-                    env=env,
-                    bandit=bandit,
-                    year=year,
-                    rms=rms,
-                    experiment=comet_experiment,
-                    step=t,
-                    method=method,
-                    candidate_size=50_0000,
-                )
-                info_dict[year] = infos
-                print(f"test year: {year}, reward: {raw_reward}")
+            scenarios = ['full', 'reduced']
+            for scenario in scenarios:
+                info_dict = {}
+                for year in years:
+                    raw_reward, normalized_reward, infos = run_eval_allocator(
+                        env=env,
+                        bandit=bandit,
+                        year=year,
+                        rms=rms,
+                        experiment=comet_experiment,
+                        step=t,
+                        method=method,
+                        candidate_size=9_000_000_000,
+                        scenario=scenario,
+                    )
+                    info_dict[year] = infos
+                    print(f"test year: {year}, reward: {raw_reward}")
+                    if comet_experiment:
+                        comet_experiment.log_metrics(
+                            {
+                                f"reward/scenario_{scenario}/test_year:{year}/raw": float(raw_reward),
+                                f"reward/scenario_{scenario}/test_year:{year}/normalized": float(normalized_reward),
+                            },
+                            step=test_step,
+                        )
                 if comet_experiment:
-                    comet_experiment.log_metrics(
-                        {
-                            f"reward/test_year:{year}/raw": float(raw_reward),
-                            f"reward/test_year:{year}/normalized": float(normalized_reward),
-                        },
+                    pickle_path = os.path.join(_DEFAULT_LOGDIR, log_folder_name, f"bandit_{region}_{farm_id}_{scenario}_info.pkl")
+                    with open(pickle_path, "wb") as f:
+                        pickle.dump(info_dict, f)
+                    comet_experiment.log_asset(
+                        file_data=pickle_path,
+                        file_name=f"bandit_{region}_{farm_id}_{scenario}_info.pkl",
                         step=test_step,
                     )
-            if comet_experiment:
-                data = pickle.dumps(info_dict)
-                comet_experiment.log_asset(
-                    file_data=data,
-                    file_name=f"s{args.seed}_bandit_test_info.pkl",
-                    step=test_step,
-                )
 
             test_step += 10
 
