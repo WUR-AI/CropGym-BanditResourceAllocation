@@ -587,7 +587,7 @@ def get_checkpoint(path):
     return latest_file
 
 
-def _setup_bandit_comet(args, region = None, farm_int = None):
+def _setup_bandit_comet(args, region = None, farm_id = None):
     if not os.path.isdir(os.path.join(_BASE_PATH, 'comet')):
         print("Not using comet!")
         return
@@ -609,9 +609,9 @@ def _setup_bandit_comet(args, region = None, farm_int = None):
 
     experiment.log_code(folder=_SOURCE_PATH)
 
-    name = f"Bandit_{args.method}_{datetime.now():%m%d}"
+    name = f"Bandit_{args.model_dir}_{args.method}_{datetime.now():%m%d}"
     if region is not None:
-        name = f"Bandit_{region}_{farm_int}_{datetime.now():%m%d}"
+        name = f"Bandit_{args.model_dir}_{region}_{farm_id}_{datetime.now():%m%d}"
     experiment.set_name(name)
 
     # log hyperparameters (robustly)

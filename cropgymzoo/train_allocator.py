@@ -13,10 +13,11 @@ import pickle
 from cropgymzoo.eval_allocator import run_eval_allocator
 from cropgymzoo.agents.nn_agp import NNAGPBandit
 from cropgymzoo.utils.agent_helpers import min_max_normalize
-from cropgymzoo.utils.callbacks import _setup_bandit_comet, log_selection_info, log_model_histograms
+from cropgymzoo.utils.callbacks import _setup_bandit_comet, log_selection_info, log_model_histograms, fig_to_chw_uint8
 from cropgymzoo.envs.allocation_env import AllocationBandit
 from cropgymzoo import _DEFAULT_LOGDIR
 from tianshou.utils.statistics import RunningMeanStd
+from cropgymzoo.utils.plotters import plot_results
 
 
 def farm_int_mapper(x: int):
@@ -99,7 +100,7 @@ def train_allocator_for_farm(args):
     # initialize comet if using
     comet_experiment = None
     if args.use_comet:
-        comet_experiment = _setup_bandit_comet(args)
+        comet_experiment = _setup_bandit_comet(args, region=region, farm_id=farm_id)
         comet_experiment.add_tags([f"{region}_{farm_id}"])
         comet_experiment.add_tag(f"{args.method}")
         comet_experiment.add_tag(f"{args.model_dir}")
@@ -240,12 +241,16 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
             )
         bandit.update(theta_t, x_t, y_t)
 
+        test_per_round = 10
+
         # eval the allocator after rounds
-        if t % 10 == 0:
+        if t % test_per_round == 0:
             # test bandit
             bandit.model.eval()
             # edit?
             years: list = [2020, 2021, 2022, 2023, 2024]
+
+            rewards = []
 
             scenarios = ['full', 'reduced']
             for scenario in scenarios:
@@ -264,6 +269,7 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
                     )
                     info_dict[year] = infos
                     print(f"test year: {year}, reward: {raw_reward}")
+                    rewards.append(raw_reward)
                     if comet_experiment:
                         comet_experiment.log_metrics(
                             {
@@ -272,7 +278,22 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
                             },
                             step=test_step,
                         )
+                        comet_experiment.log_figure(
+                            figure_name=f"image/plot_year:{year}",
+                            figure=plot_results(
+                                step_info['AgentInfos'],
+                                variable_list=['DVS', 'Profit', 'Reward', 'Action', 'Yield', 'BudgetLeft'],
+                                show=False,
+                            ),
+                            step=test_step,
+                        )
                 if comet_experiment:
+                    comet_experiment.log_metrics(
+                        {
+                            f"reward/mean/raw": float(np.sum(rewards)),
+                        },
+                        step=test_step,
+                    )
                     pickle_path = os.path.join(_DEFAULT_LOGDIR, log_folder_name, f"bandit_{region}_{farm_id}_{scenario}_info.pkl")
                     with open(pickle_path, "wb") as f:
                         pickle.dump(info_dict, f)
@@ -282,7 +303,7 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
                         step=test_step,
                     )
 
-            test_step += 10
+            test_step += test_per_round
 
             bandit.model.train()
 
