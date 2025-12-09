@@ -366,7 +366,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
                 year=2000,
                 name=key,
                 area=field['area'],
-                reward='PNB',
+                reward=self.reward_code,
                 original=True,
                 training=False,
                 flatten_obs=True,
