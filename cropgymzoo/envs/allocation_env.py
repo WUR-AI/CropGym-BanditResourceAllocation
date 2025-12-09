@@ -2,6 +2,7 @@ import os
 import argparse
 import itertools
 import yaml
+import torch
 
 import numpy as np
 import gymnasium as gym
@@ -88,6 +89,12 @@ class AllocationBandit(gym.Env):
         return self._get_context(), self._construct_info(options)
 
     def step(self, action):
+
+        if isinstance(action, torch.Tensor):
+            action = action.detach().cpu().numpy()
+
+        action = np.asarray(action, dtype=np.float32)
+
         # check if action is valid
         assert self.action_space.contains(action), f"{action} is an invalid action"
 
@@ -283,6 +290,59 @@ class AllocationBandit(gym.Env):
     def add_stats_to_context(self, info):
         self.farm.warm_up_infos.append(info)
 
+    def sample_super_arms(
+            self,
+            n_candidates: int,
+            reduced: bool = False,
+            rng: np.random.RandomState | None = None,
+    ) -> np.ndarray:
+        """
+        Sample `n_candidates` combinatorial arms without enumerating all of them.
+
+        Each candidate is a length-n_fields vector; entry i is sampled from the
+        discrete base arms of field i.
+
+        If `reduced=True`, you can enforce your 'reduced' scenario logic here
+        (e.g. global budget reduction).
+        """
+        if rng is None:
+            rng = self.rng
+
+        n_fields = self.n_fields
+        candidates = np.empty((n_candidates, n_fields), dtype=np.float32)
+
+        # Assume base_arms is a dict: agent_id -> 1D np.array of allowed values
+        agents = list(self.farm.possible_agents)
+
+        for k in range(n_candidates):
+            vec = []
+            for a in agents:
+                vals = self.base_arms[a]  # discrete values for this field
+                val = rng.choice(vals)
+                vec.append(val)
+            candidates[k] = np.array(vec, dtype=np.float32)
+
+        if reduced:
+            # Example: enforce a global-budget-like constraint
+            # adapt this to your old super_arms_limit / reduced semantics
+            candidates = self._apply_reduced_constraint(candidates)
+
+        return candidates
+
+    def _apply_reduced_constraint(self, arms: np.ndarray) -> np.ndarray:
+        """
+        Filter arms according to your 'reduced' scenario logic.
+        For example, you could limit total applied N vs global_budget * cap.
+        """
+        # Example: keep arms whose total is <= some fraction of global_budget
+        limit = self.global_budget * self.cap
+        totals = arms.sum(axis=1)
+        mask = totals <= limit
+        # If everything gets filtered, fall back to unfiltered
+        if not mask.any():
+            return arms
+        return arms[mask]
+
     '''
     Init helpers
     '''
@@ -315,17 +375,20 @@ class AllocationBandit(gym.Env):
 
         # Set up action space based on farm
         self.base_arms = _make_base_arms(self, cap=self.cap)  # if len(self.farm.possible_agents) < 8 else 0.4)
-        self.super_arms = _make_super_arms(self, self.base_arms)
-        self.super_arms_reduced = _make_super_arms(self, self.base_arms, reduced=True)
-        assert self.super_arms.size > self.super_arms_reduced.size
-        self.top_super_arms = _make_topk_super_arms(
-            self.base_arms,
-            self.farm.possible_agents,
-            top_k=3
-        )
-        self.super_arm_to_idx = {
-            tuple(a): i for i, a in enumerate(self.super_arms)
-        }
+        # self.super_arms = _make_super_arms(self, self.base_arms)
+        # self.super_arms_reduced = _make_super_arms(self, self.base_arms, reduced=True)
+        # assert self.super_arms.size > self.super_arms_reduced.size
+        # self.top_super_arms = _make_topk_super_arms(
+        #     self.base_arms,
+        #     self.farm.possible_agents,
+        #     top_k=3
+        # )
+        # self.super_arm_to_idx = {
+        #     tuple(a): i for i, a in enumerate(self.super_arms)
+        # }
+
+        highs = np.array(self.max_budgets, dtype=np.float32)
+        lows = np.zeros_like(highs, dtype=np.float32)
 
         # Action space
         # discrete and multi_discrete is not implemented properly yet.
@@ -339,7 +402,7 @@ class AllocationBandit(gym.Env):
                 ]
             )
         if self.action_type == 'continuous':
-            self.action_space = spaces.Box(low=0.0, high=30.0, shape=(self.n_fields,), dtype=np.float32)
+            self.action_space = spaces.Box(low=lows, high=highs, shape=(self.n_fields,), dtype=np.float32)
 
         # Observation space
         if not self.flat_context:

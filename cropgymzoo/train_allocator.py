@@ -145,8 +145,7 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
     rng = np.random.RandomState(args.seed)
     torch.set_default_dtype(torch.float32)
 
-    # make action candidates for each round. Get super arms and randomly sample
-    action_candidates = env.super_arms
+    # action candidates for each round
     num_candidates = args.action_candidate_length
 
     # initialize running mean
@@ -176,12 +175,11 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
         # convert to numpy
         theta_t = torch.from_numpy(theta_t)
 
-        if not args.streaming and args.action_candidate_length < action_candidates.shape[0]:
-            # candidate set for actions; sampled from the super_arms array
-            indices = torch.randperm(action_candidates.shape[0])[:num_candidates]
-            x_cand = action_candidates[indices]
-        else:
-            x_cand = action_candidates
+        x_cand = env.sample_super_arms(
+            n_candidates=num_candidates,
+            reduced=False,
+            rng=rng,
+        )
         x_cand = torch.from_numpy(x_cand)
 
         # train the surrogate a bit on accumulated data

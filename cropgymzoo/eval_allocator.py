@@ -34,15 +34,14 @@ def run_eval_allocator(
     # convert to numpy
     theta_t = torch.from_numpy(theta_t)
 
-    if scenario == 'full':
-        allocation_actions = env.super_arms
-    else:  # scenario == 'reduced'
-        allocation_actions = env.super_arms_reduced
+    allocation_actions = env.sample_super_arms(
+            n_candidates=candidate_size,
+            reduced=scenario == 'reduced',
+        )
 
     if not streaming:
         # candidate set for actions; sampled from the super_arms array
-        indices = torch.randperm(allocation_actions.shape[0])[:candidate_size]
-        x_cand = allocation_actions[indices]
+        x_cand = allocation_actions
         x_cand = torch.from_numpy(x_cand)
 
         if method == 'ucb':
