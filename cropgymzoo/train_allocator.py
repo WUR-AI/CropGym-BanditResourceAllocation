@@ -26,7 +26,7 @@ def farm_int_mapper(x: int):
     Regions:
         Gelderland: 0–11  (12 farms)
         Groningen: 12–24  (13 farms)
-        Zeeland:   25–52  (27 farms)
+        Zeeland:   25–51  (27 farms)
 
     Returns:
         (region_name: str, farmer_id: int)
@@ -90,12 +90,12 @@ def train_allocator_for_farm(args):
 
     region, farm_id = farm_int_mapper(farm_int)
 
-    print(f"Training Farm {region}_{farm_int}!")
+    print(f"Training Farm {region}_{farm_id}!")
     print(f"Using {args.model_dir} RL policy!")
 
     training_years = list(range(2000, 2020))
 
-    log_folder_name = f"Bandit_{region}_{farm_int}_{datetime.datetime.now():%m%d}"
+    log_folder_name = f"Bandit_{region}_{farm_id}_{datetime.datetime.now():%m%d}"
     # initialize comet if using
     comet_experiment = None
     if args.use_comet:

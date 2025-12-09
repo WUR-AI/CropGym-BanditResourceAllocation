@@ -93,7 +93,7 @@ def run_region_year(
             farm_dict=dict_fields,
         )
 
-        if "reduced" in scenario and allocator == "None":
+        if "reduced" in scenario and allocator is None:
             env.allocate_bandit_budgets([10 for _ in env.possible_agents])
             for ag in env.possible_agents:
             #     env.set_per_parcel_budget(ag, env.get_per_parcel_max_budget(ag) - 100)

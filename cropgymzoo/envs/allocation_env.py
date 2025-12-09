@@ -65,7 +65,7 @@ class AllocationBandit(gym.Env):
         self._init_meta_info()
 
         # init spaces
-        self.bins = float(delta_kg)
+        self.bins = float(delta_kg) if len(self.farm.possible_agents) < 8 else 60.0
         self._init_spaces()
 
         self._construct_info()
@@ -289,7 +289,7 @@ class AllocationBandit(gym.Env):
 
     def _init_envs(self, args):
         dict_fields = None
-        if args.farm > 0:
+        if args.farm is not None:
             with open(os.path.join(_SCENARIO_PATH, f"{self.region}", "2020", f"farmer_{self.farm_id}.yaml"), 'rb') as f:
                 dict_fields = yaml.safe_load(f)
 
@@ -302,7 +302,7 @@ class AllocationBandit(gym.Env):
         self.env_agent = None
         if args is not None and hasattr(args, 'use_model'):
             saved_model = load_model(args)
-            if args.farm > 0:
+            if args.farm is not None:
                 saved_model = model_picker(saved_model, dict_fields)
             self.env_agent = MultiRLAgent(
                 env = self.farm,
@@ -314,9 +314,10 @@ class AllocationBandit(gym.Env):
     def _init_spaces(self):
 
         # Set up action space based on farm
-        self.base_arms = _make_base_arms(self, cap=self.cap)
+        self.base_arms = _make_base_arms(self, cap=self.cap)  # if len(self.farm.possible_agents) < 8 else 0.4)
         self.super_arms = _make_super_arms(self, self.base_arms)
         self.super_arms_reduced = _make_super_arms(self, self.base_arms, reduced=True)
+        assert self.super_arms.size > self.super_arms_reduced.size
         self.top_super_arms = _make_topk_super_arms(
             self.base_arms,
             self.farm.possible_agents,

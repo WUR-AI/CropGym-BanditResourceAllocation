@@ -19,7 +19,7 @@ if __name__ == '__main__':
     parser.add_argument("--no_comet", action='store_false', dest='use_comet')
     parser.add_argument("--streaming", action='store_true', dest='streaming')
     parser.add_argument("--q", type=int, default=1)
-    parser.add_argument("--farm", type=int, default=0)
+    parser.add_argument("--farm", type=int, default=None)
     parser.add_argument("--method", type=str, default='ucb')
     parser.add_argument("--kernel", type=str, default='matern')
     parser.set_defaults(
@@ -30,7 +30,7 @@ if __name__ == '__main__':
     )
     args = parser.parse_args()
 
-    if args.farm > 0:
+    if args.farm is not None:
         train_allocator_for_farm(args)
     else:
         train_allocator(args)
