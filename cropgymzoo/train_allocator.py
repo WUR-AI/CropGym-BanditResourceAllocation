@@ -259,7 +259,7 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
                         experiment=comet_experiment,
                         step=t,
                         method=method,
-                        candidate_size=9_000_000_000,
+                        candidate_size=200_000,
                         scenario=scenario,
                     )
                     info_dict[year] = infos

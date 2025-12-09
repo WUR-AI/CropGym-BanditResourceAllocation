@@ -343,6 +343,56 @@ class AllocationBandit(gym.Env):
             return arms
         return arms[mask]
 
+    def sample_neighbors(
+            self,
+            center: np.ndarray,
+            n_neighbors: int = 32,
+            reduced: bool = False,
+            rng: np.random.RandomState | None = None,
+    ) -> np.ndarray:
+        """
+        Sample discrete neighbor arms around a given center arm.
+
+        center: shape (n_fields,) array of reductions/budgets
+        Returns: shape (n_neighbors, n_fields)
+        """
+        if rng is None:
+            rng = self.rng
+
+        center = np.asarray(center, dtype=np.float32)
+        n_fields = self.n_fields
+        agents = list(self.farm.possible_agents)
+
+        neighbors = np.tile(center, (n_neighbors, 1)).astype(np.float32)
+
+        for k in range(n_neighbors):
+            # how many fields to perturb in this neighbor (1–3, bounded by n_fields)
+            n_changes = int(rng.integers(1, min(3, n_fields) + 1))
+            idx_fields = rng.choice(n_fields, size=n_changes, replace=False)
+
+            for j in idx_fields:
+                a = agents[j]
+                vals = self.base_arms[a]  # 1D np.array of allowed discrete values for this field
+                cur_val = neighbors[k, j]
+
+                # find closest index to current value
+                idx = int(np.argmin(np.abs(vals - cur_val)))
+
+                # move one step up/down if possible, otherwise random neighbor
+                step = int(rng.choice([-1, 1]))
+                new_idx = idx + step
+                if new_idx < 0 or new_idx >= len(vals):
+                    # if we're at the edge, pick some random index
+                    new_idx = int(rng.integers(0, len(vals)))
+                neighbors[k, j] = vals[new_idx]
+
+        if reduced:
+            # If you already have a reduced/global-budget constraint, apply it here.
+            # E.g., if you defined `_apply_reduced_constraint` as before:
+            neighbors = self._apply_reduced_constraint(neighbors)
+
+        return neighbors
+
     '''
     Init helpers
     '''

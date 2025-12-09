@@ -118,12 +118,12 @@ def extract_info(agent_id, counters, rewards, info, agent_idx):
     return counters
 
 
-def min_max_normalize(x, min_val=0, max_val=300000) -> float:
+def min_max_normalize(x, min_val=0, max_val=10_000_000) -> float:
     """Scale from [min_val, max_val] -> [0, 1]."""
     return (x - min_val) / (max_val - min_val)
 
 
-def min_max_denormalize(x_norm, min_val=0, max_val=300000) -> float:
+def min_max_denormalize(x_norm, min_val=0, max_val=10_000_000) -> float:
     """Scale from [0, 1] -> [min_val, max_val]."""
     return x_norm * (max_val - min_val) + min_val
 
