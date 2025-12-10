@@ -6,6 +6,7 @@ import torch
 
 import numpy as np
 import os
+import matplotlib.pyplot as plt
 
 import datetime
 import pickle
@@ -204,13 +205,13 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
             if method == "ucb":
                 x_t, selection_info = bandit.select_ucb(theta_t, x_cand, delta=0.1)
             else:
-                x_t, selection_info = bandit.select_ts(theta_t, x_cand, delta=0.1)
+                x_t, selection_info = bandit.select_ts(theta_t, x_cand)
             if isinstance(x_t, np.ndarray):
                 x_t = torch.from_numpy(x_t)
             if comet_experiment:
                 log_selection_info(comet_experiment, selection_info, t)
         else:
-            x_t, best = bandit.select_ucb_streaming(theta_t, torch.from_numpy(action_candidates), delta=0.1)
+            x_t, best = bandit.select_ucb_streaming(theta_t, torch.from_numpy(x_cand), delta=0.1)
             if isinstance(x_t, np.ndarray):
                 x_t = torch.from_numpy(x_t)
             if comet_experiment:
@@ -264,7 +265,7 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
                         experiment=comet_experiment,
                         step=t,
                         method=method,
-                        candidate_size=200_000,
+                        candidate_size=100_000,
                         scenario=scenario,
                     )
                     info_dict[year] = infos
@@ -278,15 +279,17 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
                             },
                             step=test_step,
                         )
-                        comet_experiment.log_figure(
-                            figure_name=f"image/plot_year:{year}",
-                            figure=plot_results(
+                        fig = plot_results(
                                 step_info['AgentInfos'],
                                 variable_list=['DVS', 'Profit', 'Reward', 'Action', 'Yield', 'BudgetLeft'],
                                 show=False,
-                            ),
+                            )
+                        comet_experiment.log_figure(
+                            figure_name=f"image/{scenario}/plot_year:{year}",
+                            figure=fig,
                             step=test_step,
                         )
+                        plt.close(fig)
                 if comet_experiment:
                     comet_experiment.log_metrics(
                         {
