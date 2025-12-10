@@ -26,6 +26,7 @@ from cropgymzoo.utils.defaults import (
     get_default_action_features
 )
 from cropgymzoo.utils.curriculum import make_default_stage_manager
+from cropgymzoo.utils.scenario_utils import choose_soil_type
 
 
 def make_multi_env(
@@ -357,6 +358,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
 
     def set_new_fields(self, farm_dict: dict, year: int = None):
         for key, field in farm_dict.items():
+            soil_type = choose_soil_type(crop=field['crop'], location=(field['soil_lat'], field['soil_lon']))
             self.fields[key] = ParcelEnv(
                 crop_features=get_wofost_default_crop_features(),
                 weather_features=get_default_weather_features(),
@@ -370,7 +372,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
                 original=True,
                 training=False,
                 flatten_obs=True,
-                type=field['type'],
+                type=soil_type,
             )
         print("Scenario fields initialized!")
 
@@ -551,6 +553,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
             print(f"Fields initialized with seed no. {self.seed}!")
         else:
             for key, field in farm_dict.items():
+                soil_type = choose_soil_type(crop=field['crop'], location=(field['soil_lat'], field['soil_lon']))
                 self.fields[key] = ParcelEnv(
                     crop_features=get_wofost_default_crop_features(),
                     weather_features=get_default_weather_features(),
@@ -564,7 +567,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
                     original=True,
                     training=False,
                     flatten_obs=True,
-                    type=field['type'],
+                    type=soil_type,
                     special_action_space=self.special_action_space,
                 )
             print("Scenario fields initialized!")

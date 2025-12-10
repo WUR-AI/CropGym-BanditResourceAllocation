@@ -7,6 +7,50 @@ from pathlib import Path, PosixPath
 
 from cropgymzoo import _SCENARIO_PATH
 
+import hashlib
+from typing import Tuple
+
+def _stable_uniform_01(key: str) -> float:
+    h = hashlib.sha256(key.encode("utf-8")).digest()
+    # Take first 8 bytes as an integer
+    val = int.from_bytes(h[:8], "big")
+    return (val % 10**8) / 10**8  # in [0, 1)
+
+
+def choose_soil_type(crop: str, location: Tuple[float, float]) -> str:
+    """
+    Deterministic soil type based on region (via location)
+    and crop/location key.
+    """
+    region = get_scenario_based_on_loc(location)
+
+    if region == "groningen":
+        options = ["clay", "silt"]
+        probs = [0.4, 0.6]
+    elif region == "gelderland":
+        options = ["sand", "silt"]
+        probs = [0.6, 0.4]
+    elif region == "zeeland":
+        options = ["silt", "sand", "clay"]
+        probs = [0.4, 0.3, 0.3]
+    else:
+        options = ["clay", "silt", "sand"]
+        probs = [1/3, 1/3, 1/3]
+
+    # Build a deterministic key from crop + location
+    lat, lon = location
+    key = f"{crop}_{lat:.6f}_{lon:.6f}"
+    r = _stable_uniform_01(key)  # in [0,1)
+
+    cum = 0.0
+    for opt, p in zip(options, probs):
+        cum += p
+        if r <= cum:
+            return opt
+
+    # Numerical safety net (shouldn't happen if probs sum to 1)
+    return options[-1]
+
 def get_scenario_based_on_name(name: str):
     if '-s' in name:
         return 'zeeland'
