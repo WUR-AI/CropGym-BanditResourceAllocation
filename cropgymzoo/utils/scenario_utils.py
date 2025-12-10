@@ -1,9 +1,11 @@
 import os
 import yaml
-from cropgymzoo import _SCENARIO_PATH
 from itertools import chain
+from copy import deepcopy
 import torch
 from pathlib import Path, PosixPath
+
+from cropgymzoo import _SCENARIO_PATH
 
 def get_scenario_based_on_name(name: str):
     if '-s' in name:
@@ -45,10 +47,12 @@ def region_crop_picker(region, crop):
 
 
 def model_picker(model_file, dict_fields):
+    # OK, make sure to deepcopy so there is no inplace stuff going on
     if isinstance(model_file, (str, Path, PosixPath)):
-        orig_model_dict = torch.load(model_file, weights_only=False)
+        model_dict = torch.load(model_file, weights_only=False)
+        orig_model_dict = deepcopy(model_dict)
     else:
-        orig_model_dict = model_file
+        orig_model_dict = deepcopy(model_file)
 
     assert isinstance(orig_model_dict, dict)
 

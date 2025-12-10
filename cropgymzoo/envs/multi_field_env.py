@@ -355,7 +355,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
 
         print(f'Allocated budget reductions of {allocations}')
 
-    def set_new_fields(self, farm_dict: dict):
+    def set_new_fields(self, farm_dict: dict, year: int = None):
         for key, field in farm_dict.items():
             self.fields[key] = ParcelEnv(
                 crop_features=get_wofost_default_crop_features(),
@@ -363,7 +363,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
                 action_features=get_default_action_features(),
                 location=(field['soil_lat'], field['soil_lon']),
                 crop=field['crop'],
-                year=2000,
+                year=self.year if year is None else year,
                 name=key,
                 area=field['area'],
                 reward=self.reward_code,

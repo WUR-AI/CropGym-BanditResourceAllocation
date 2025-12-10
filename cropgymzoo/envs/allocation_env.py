@@ -1,6 +1,6 @@
 import os
 import argparse
-import itertools
+from copy import deepcopy
 import yaml
 import torch
 
@@ -14,7 +14,7 @@ from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 from cropgymzoo.utils.defaults import get_default_years
 from cropgymzoo.utils.scenario_utils import model_picker
 from cropgymzoo.train_policy import load_model, initialize_policy
-from cropgymzoo.eval_policy import MultiRLAgent
+from cropgymzoo.eval_policy import MultiRLAgent, load_policy
 
 from cropgymzoo import _SCENARIO_PATH
 
@@ -58,6 +58,7 @@ class AllocationBandit(gym.Env):
         self.region = region
         self.farm_id = farm_id
         self.render = render
+        self.saved_model = None
 
         # The MARL env
         self._init_envs(args)
@@ -206,7 +207,15 @@ class AllocationBandit(gym.Env):
         with open(os.path.join(_SCENARIO_PATH, f"{self.region}", f"{year}", f"farmer_{self.farm_id}.yaml"), 'r') as f:
             dict_fields = yaml.safe_load(f)
 
-        self.farm.set_new_fields(dict_fields)
+        self.farm.set_new_fields(dict_fields, year=year)
+
+        # after setting new fields, replace the working RL agents
+        saved_model = model_picker(self.original_saved_model, dict_fields)
+
+        # load model in runner
+        policy_manager, obs_rms = load_policy(self.farm, saved_model)
+        self.env_agent.policy_manager = policy_manager
+        self.env_agent.obs_rms = obs_rms
 
     def _construct_info(self, options=None):
         if options is not None:
@@ -412,8 +421,9 @@ class AllocationBandit(gym.Env):
         self.env_agent = None
         if args is not None and hasattr(args, 'use_model'):
             saved_model = load_model(args)
+            self.original_saved_model = deepcopy(saved_model)
             if args.farm is not None:
-                saved_model = model_picker(saved_model, dict_fields)
+                saved_model = model_picker(self.original_saved_model, dict_fields)
             self.env_agent = MultiRLAgent(
                 env = self.farm,
                 saved_model=saved_model,

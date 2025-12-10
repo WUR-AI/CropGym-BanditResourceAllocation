@@ -27,9 +27,8 @@ def load_policy(
 ):
     args = saved_model['args']
 
-    agent = env.agents[0]
     obs_dim = env.sample_observation_space_agent().shape
-    act_dim = env.action_spaces[agent].n
+    act_dim = env.action_spaces[env.possible_agents[0]].n
 
     policies = {
         a: initialize_policy(
@@ -39,9 +38,8 @@ def load_policy(
             use_icm=args.use_icm,
             args=args,
             skew_prior_action=False,
-        ) for a in env.agents
+        ) for a in env.possible_agents
     }
-    print(f"Using {'LagrangianIPPO' if args.lagrangian_ppo else 'IPPO'} policy!")
 
     policy_manager = MultiAgentPolicyManager(
         policies=list(policies.values()),

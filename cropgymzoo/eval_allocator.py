@@ -121,6 +121,8 @@ def run_eval_allocator(
         hill_steps: int = 3,
         neighbors_per_step: int = 32,
 ):
+    # ensure rotation is correct
+    env.get_rotation_year(year)
 
     """Run eval allocator."""
     theta_t, env_info = env.reset(
