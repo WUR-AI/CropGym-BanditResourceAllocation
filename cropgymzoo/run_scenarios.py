@@ -55,6 +55,7 @@ def run_region_year(
         agent: str = "baseline",
         scenario: str = "full_budget",
         allocator: str = "None",
+        subset: bool = False,
         render: bool = False,
 ):
     result_dict = {}
@@ -69,12 +70,17 @@ def run_region_year(
 
     # Loop through farmers with a progress bar
     num_farmers = len(os.listdir(_YEAR_PATH)) - 1
+    if subset:
+        num_farmers = 2
     for i in tqdm(range(num_farmers), desc=f"{region}-{year} farmer"):
         info = None
+        name = f"results_{scenario}_{region}_{year}" + name_allocator + f"_farmer_{i}.pkl"
+        if subset:
+            name = f"results_{scenario}_{region}_{year}" + name_allocator + f"_subset_farmer_{i}.pkl"
         out_path = os.path.join(
             _DEFAULT_RESULTSDIR,
             agent,
-            f"results_{scenario}_{region}_{year}" + name_allocator + f"_farmer_{i}.pkl",
+            name,
         )
         # Skip if this farmer's results already exist
         if os.path.exists(out_path):
@@ -171,8 +177,8 @@ def run_region_year(
 
 # Helper for parallel execution
 def _run_region_year_wrapper(args):
-    region, year, agent, scenario, allocator, render = args
-    info_dict = run_region_year(region, year, agent=agent, scenario=scenario, allocator=allocator, render=render)
+    region, year, agent, scenario, allocator, subset, render = args
+    info_dict = run_region_year(region, year, agent=agent, scenario=scenario, allocator=allocator, subset=subset, render=render)
     return region, year, info_dict
 
 if __name__ == "__main__":
@@ -184,7 +190,8 @@ if __name__ == "__main__":
     parser.add_argument("--allocator", type=str, help="allocator name", default=None)
     parser.add_argument("--num_workers", type=int, help="number of parallel workers (1 = no parallelism)", default=1)
     parser.add_argument("--render", action='store_true', help="render", dest='render')
-    parser.set_defaults(render=False)
+    parser.add_argument("--subset", action='store_true', dest='subset')
+    parser.set_defaults(render=False, subset=False)
     args = parser.parse_args()
 
     regions = args.regions
@@ -193,6 +200,7 @@ if __name__ == "__main__":
     scenario = args.scenario
     num_workers = args.num_workers
     allocator = args.allocator
+    subset = args.subset
 
     # make subfolder
     os.makedirs(os.path.join(_DEFAULT_RESULTSDIR, args.agent), exist_ok=True)
@@ -206,15 +214,18 @@ if __name__ == "__main__":
     else:
         years = [years]
 
+    if subset:
+        years = [2020]
+
     results_dict = {}
     # Create list of (region, year, agent, scenario) jobs
-    all_jobs = [(region, year, agent, scenario, allocator, args.render) for region in regions for year in years]
+    all_jobs = [(region, year, agent, scenario, allocator, subset, args.render) for region in regions for year in years]
     sliced_jobs = [all_jobs[i:i+3] for i in range(0, len(all_jobs), 3)]
 
     if num_workers is None or num_workers <= 1:
         # Fallback to sequential execution
         for region, year, agent, scenario, allocator, args.render in tqdm(all_jobs, desc="Running scenarios"):
-            info_dict = run_region_year(region, year, agent=agent, scenario=scenario, allocator=allocator, render=args.render)
+            info_dict = run_region_year(region, year, agent=agent, scenario=scenario, allocator=allocator, subset=subset, render=args.render)
             # results_dict[f"{region}_{year}"] = info_dict
     else:
         # Parallel execution over regions/years
@@ -241,17 +252,23 @@ if __name__ == "__main__":
     for region in regions:
         for year in years:
             pattern = f"results_{scenario}_{region}_{year}" + name_al + f"_farmer_*.pkl"
+            if subset:
+                pattern = f"results_{scenario}_{region}_{year}" + name_al + "_subset_farmer_*.pkl"
             for pkl_file in base_dir.glob(pattern):
                 # Example filename: results_full_budget_groningen_2020_farmer_0.pkl
                 stem_parts = pkl_file.stem.split("_")
                 # last part should be like "0" from "farmer_0"; keep the whole farmer tag for clarity
                 farmer_tag = "_".join(stem_parts[-2:])  # e.g. "farmer_0"
                 key = f"{region}_{year}_{farmer_tag}"
+                if subset:
+                    key = f"{region}_{year}_subset_{farmer_tag}"
                 with open(pkl_file, "rb") as f:
                     temp_dict = pickle.load(f)
                 aggregated_results[key] = temp_dict.get(year, temp_dict)
 
     out_name = f"results_{agent}_{scenario}" + name_al + ".pkl"
+    if subset:
+        out_name = f"results_{agent}_{scenario}" + name_al + "_subset.pkl"
     out_path = base_dir / out_name
     with open(out_path, "wb") as f:
         pickle.dump(aggregated_results, f)
