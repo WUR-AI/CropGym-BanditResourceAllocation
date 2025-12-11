@@ -333,21 +333,54 @@ class AllocationBandit(gym.Env):
 
         if reduced:
             # Example: enforce a global-budget-like constraint
-            # adapt this to your old super_arms_limit / reduced semantics
             candidates = self._apply_reduced_constraint(candidates)
 
         return candidates
 
     def _apply_reduced_constraint(self, arms: np.ndarray) -> np.ndarray:
         """
-        Filter arms according to your 'reduced' scenario logic.
-        For example, you could limit total applied N vs global_budget * cap.
+        Enforce the 'reduced' scenario on sampled reduction vectors.
+
+        Parameters
+        ----------
+        arms : np.ndarray
+            Array of shape (n_candidates, n_fields), where each entry is a
+            *reduction* (kg N/ha) for a given field.
+
+        Idea
+        ----
+        We treat the farm as if each field's max budget was lowered by a fixed
+        amount (e.g. 100 kg/ha), but we still allow *redistribution* of that
+        reduction across fields.
+
+        Let:
+            reduction_per_field = 100 kg/ha   (example)
+            required_total_reduction = reduction_per_field * n_fields
+
+        Then we keep only those candidate vectors whose total reduction
+        across fields is at least `required_total_reduction`.
+
+        If filtering would remove all candidates, we fall back to the
+        unfiltered set.
         """
-        # Example: keep arms whose total is <= some fraction of global_budget
-        limit = self.global_budget * self.cap
-        totals = arms.sum(axis=1)
-        mask = totals <= limit
-        # If everything gets filtered, fall back to unfiltered
+        arms = np.asarray(arms, dtype=np.float32)
+
+        # Sanity check: arms should have one column per field
+        assert arms.shape[1] == self.n_fields, (
+            f"Expected arms with {self.n_fields} fields, got {arms.shape[1]}"
+        )
+
+        # How much we want to reduce per field in the 'reduced' scenario (kg/ha)
+        reduction_per_field = 100.0
+        required_total_reduction = reduction_per_field * float(self.n_fields)
+
+        # Total reduction per candidate
+        row_sums = arms.sum(axis=1)
+
+        # Keep arms that meet or exceed the required total reduction
+        mask = row_sums >= required_total_reduction
+
+        # If everything gets filtered out, fall back to unfiltered
         if not mask.any():
             return arms
         return arms[mask]
