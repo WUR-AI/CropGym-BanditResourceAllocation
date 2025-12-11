@@ -597,7 +597,7 @@ def _setup_bandit_comet(args, region = None, farm_id = None):
     # prefer env vars; fall back to sensible defaults
     experiment = Experiment(
         api_key=api_key,
-        project_name="cropgymzoo_allocation_experiments",
+        project_name="cropgymzoo_allocation_experiments_paper",
         workspace="cropgymzoo",
         log_code=True,
         auto_metric_logging=True,
