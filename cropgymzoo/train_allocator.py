@@ -242,7 +242,7 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
             )
         bandit.update(theta_t, x_t, y_t)
 
-        test_per_round = 10
+        test_per_round = 5
 
         # eval the allocator after rounds
         if t % test_per_round == 0:
