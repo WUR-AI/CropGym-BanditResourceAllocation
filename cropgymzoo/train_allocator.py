@@ -290,6 +290,11 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
                             step=test_step,
                         )
                         plt.close(fig)
+                pickle_path = os.path.join(_DEFAULT_LOGDIR, f"Bandit_{args.model_dir}_{scenario}",
+                                           f"bandit_{region}_{farm_id}_info_{test_step}.pkl")
+                os.makedirs(os.path.dirname(pickle_path), exist_ok=True)
+                with open(pickle_path, "wb") as f:
+                    pickle.dump(info_dict, f)
                 if comet_experiment:
                     comet_experiment.log_metrics(
                         {
@@ -297,10 +302,6 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
                         },
                         step=test_step,
                     )
-                    pickle_path = os.path.join(_DEFAULT_LOGDIR, log_folder_name, f"bandit_{region}_{farm_id}_{scenario}_info.pkl")
-                    os.makedirs(os.path.dirname(pickle_path), exist_ok=True)
-                    with open(pickle_path, "wb") as f:
-                        pickle.dump(info_dict, f)
                     comet_experiment.log_asset(
                         file_data=pickle_path,
                         file_name=f"bandit_{region}_{farm_id}_{scenario}_info.pkl",
