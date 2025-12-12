@@ -93,11 +93,11 @@ def train_allocator_for_farm(args):
     region, farm_id = farm_int_mapper(farm_int)
 
     print(f"Training Farm {region}_{farm_id}!")
-    print(f"Using {args.model_dir} RL policy!")
+    print(f"Using {args.model_dir} policy!")
 
     training_years = list(range(2000, 2020))
 
-    log_folder_name = f"Bandit_{region}_{farm_id}_{datetime.datetime.now():%m%d}"
+    log_folder_name = f"Bandit_{args.model_dir}_{region}_{farm_id}_{datetime.datetime.now():%m%d}"
     # initialize comet if using
     comet_experiment = None
     if args.use_comet:
