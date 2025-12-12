@@ -298,6 +298,7 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
                         step=test_step,
                     )
                     pickle_path = os.path.join(_DEFAULT_LOGDIR, log_folder_name, f"bandit_{region}_{farm_id}_{scenario}_info.pkl")
+                    os.makedirs(os.path.dirname(pickle_path), exist_ok=True)
                     with open(pickle_path, "wb") as f:
                         pickle.dump(info_dict, f)
                     comet_experiment.log_asset(
