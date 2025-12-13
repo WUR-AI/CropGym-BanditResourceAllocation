@@ -3,13 +3,23 @@ from pathlib import Path
 import argparse
 import pickle
 from tqdm import tqdm
-
 from dataclasses import dataclass
-from typing import Hashable, List
-import numpy as np
+from typing import Dict, Tuple, List, Hashable
 
 from cropgymzoo.utils.scenario_utils import model_picker
 
+
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
+import yaml
+
+from cropgymzoo import _SCENARIO_PATH, _DEFAULT_MODEL_DIR, _DEFAULT_RESULTSDIR
+
+from cropgymzoo.eval_policy import MultiRLAgent, RoTAgent, RandomAgent
+
+from cropgymzoo.envs.multi_field_env import MultiFieldEnv
+
+import numpy as np
 
 @dataclass
 class FieldResponse:
@@ -23,22 +33,12 @@ class FarmAllocationResult:
     farm_id: Hashable
     year: int
     field_ids: List[Hashable]
-    N_opt: np.ndarray          # kg per field
-    alpha: np.ndarray          # slope per field
+    N_opt_ha: np.ndarray       # kg/ha per field (LP decision)
+    N_opt_abs: np.ndarray      # kg per field (rate * area)
+    alpha: np.ndarray          # slope per field (per +1 kg/ha)
     area: np.ndarray           # ha per field
-    N_per_ha: np.ndarray       # kg/ha per field (allocation scaled to area)
-    frac_of_rate: np.ndarray   # N_per_ha / farm_rate (allocation scaled to rate)
-
-from concurrent.futures import ProcessPoolExecutor, as_completed
-
-import yaml
-
-from cropgymzoo import _SCENARIO_PATH, _DEFAULT_MODEL_DIR, _DEFAULT_RESULTSDIR
-
-from cropgymzoo.eval_policy import MultiRLAgent, RoTAgent, RandomAgent
-
-from cropgymzoo.envs.multi_field_env import MultiFieldEnv
-
+    bmax_rate: np.ndarray      # kg/ha per field
+    frac_of_rate: np.ndarray   # N_opt_ha / farm_rate
 
 def _get_scenario_code(scenario):
     if scenario in ["full_budget", "full_budget-lp"]:
@@ -107,29 +107,35 @@ def run_region_year(
                 assert env.get_per_parcel_budget(ag) < env.get_per_parcel_max_budget(ag)
 
         if allocator is not None and "LP" in allocator:
-            if year not in [2015, 2016, 2017, 2018, 2019]:
-                year = year - 5
-            if allocator == "LP_low":
-                name = "lp_results_reduced.pkl"
-            else:  # "LP_max"
-                name = "lp_results.pkl"
+            # LP allocations are precomputed and stored under results/LP
+            # If scenario has -lp, the evaluation year is shifted earlier for realism.
+            lp_year = year
+            if lp_year not in [2015, 2016, 2017, 2018, 2019] and "-lp" in scenario:
+                lp_year = lp_year - 5
 
-            with open(os.path.join(_DEFAULT_RESULTSDIR, "LP", name), "rb") as f:
+            # Pick the correct LP file (normal vs reduced)
+            lp_suffix = "reduced_" if allocator == "LP_low" else ""
+            lp_name = f"lp_results_{lp_suffix}{agent}.pkl"
+
+            with open(os.path.join(_DEFAULT_RESULTSDIR, "LP", lp_name), "rb") as f:
                 lp = pickle.load(f)
 
-            alloc_info = lp["lp_allocations"][f"{region}_farmer_{i}"][year]
+            alloc_info = lp["lp_allocations"][f"{region}_farmer_{i}"][lp_year]
 
-            alloc_vec = alloc_info["N_per_ha"]
+            # LP allocations are stored as kg/ha
+            alloc_vec = alloc_info.get("N_opt_ha", alloc_info.get("N_per_ha"))
             alloc_fields = alloc_info["field_ids"]
 
             assert len(alloc_vec) == len(env.possible_agents) == len(alloc_fields)
 
-            for (alloc, field_name) in zip(alloc_vec, alloc_fields):
-                env.set_per_parcel_budget(field_name, alloc)
-                assert env.get_per_parcel_budget_left(field_name) <= alloc
+            alloc_reductions = np.asarray([(env.get_per_parcel_max_budget(ag) - alloc_vec[i])/10 for i, ag in enumerate(env.possible_agents)])
 
-            if year in [2015, 2016, 2017, 2018, 2019]:
-                year = year + 5
+            env.allocate_bandit_budgets(alloc_reductions)
+
+            # for alloc, field_name in zip(alloc_vec, alloc_fields):
+            #     alloc = float(alloc)
+            #     env.set_per_parcel_budget(field_name, alloc)
+            #     assert env.get_per_parcel_budget_left(field_name) <= alloc
 
 
         if "MLP" in agent:
@@ -224,8 +230,16 @@ if __name__ == "__main__":
 
     if num_workers is None or num_workers <= 1:
         # Fallback to sequential execution
-        for region, year, agent, scenario, allocator, args.render in tqdm(all_jobs, desc="Running scenarios"):
-            info_dict = run_region_year(region, year, agent=agent, scenario=scenario, allocator=allocator, subset=subset, render=args.render)
+        for region, year, agent, scenario, allocator, subset_job, render_job in tqdm(all_jobs, desc="Running scenarios"):
+            info_dict = run_region_year(
+                region,
+                year,
+                agent=agent,
+                scenario=scenario,
+                allocator=allocator,
+                subset=subset_job,
+                render=render_job,
+            )
             # results_dict[f"{region}_{year}"] = info_dict
     else:
         # Parallel execution over regions/years
