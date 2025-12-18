@@ -244,6 +244,8 @@ class MultiFieldEnv(AECEnv, EzPickle):
             self._was_dead_step(None)
             return
 
+        self._clear_rewards()
+
         agent = self.agent_selection
         is_last = self._agent_selector.is_last()
 
