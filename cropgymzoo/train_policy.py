@@ -331,18 +331,20 @@ def make_vec_env(
         agents: list['str'] = None,
         seed: int = 107,
         special_action_space: bool = False,
+        reward: str = 'PNR',
+        concise_obs: bool = False
     ) -> SubprocVectorEnv | DummyVectorEnv | MultiAgentVecNormObs:
     """Each subprocess builds → PettingZooEnv"""
     if parallel:
         env_fns = [
-            lambda indep=independent, tr=train, sd=seed+i, sas=special_action_space:
-            get_petting_zoo_env(indep, tr, sd, sas)
+            lambda indep=independent, tr=train, sd=seed+i, sas=special_action_space, rew=reward, obs=concise_obs:
+            get_petting_zoo_env(indep, tr, sd, sas, rew, obs)
             for i, _ in enumerate(range(num_envs))
         ]
         env = SubprocVectorEnv(env_fns, context='spawn')
         # env = ShmemVectorEnv(env_fns)
     else:
-        env_fns = [partial(get_petting_zoo_env, independent, train) for _ in range(1)]
+        env_fns = [partial(get_petting_zoo_env, independent, train, seed, special_action_space, reward, concise_obs) for _ in range(1)]
         env = DummyVectorEnv(env_fns)
     if norm:
         env = MultiAgentVecNormObs(
@@ -354,12 +356,12 @@ def make_vec_env(
     return env
 
 
-def get_petting_zoo_env(indep, training, sd, sas):
-    env = make_env(independent_learning=indep, training=training, seed=sd, special_action_space=sas)
+def get_petting_zoo_env(indep, training, sd, sas, rew, obs):
+    env = make_env(independent_learning=indep, training=training, seed=sd, special_action_space=sas, reward=rew, concise_obs=obs)
     env = PettingZooEnv(env)
     return env
 
-def make_env(independent_learning=True, training=True, seed=107, special_action_space=False,): # type: ignore
+def make_env(independent_learning=True, training=True, seed=107, special_action_space=False, reward='PNR', concise_obs=False): # type: ignore
     """Return one wrapped PettingZoo environment instance."""
     env = MultiFieldEnv(
         warm_up=0,
@@ -367,15 +369,17 @@ def make_env(independent_learning=True, training=True, seed=107, special_action_
         training=training,
         random_budget=False,
         seed=seed,
-        reward='PNR',
+        reward=reward,
         special_action_space=special_action_space,
+        concise_obs=concise_obs,
     )
     return env
 
 def get_dummy_env(args):
     env = MultiFieldEnv(
-        reward='PNR',
+        reward=args.reward,
         special_action_space=args.special_action_space,
+        concise_obs=args.concise_obs,
     )
     return env
 
@@ -432,6 +436,11 @@ def train_policy(args: Namespace):
     Script to train a field-agent
     """
 
+    if not hasattr(args, 'reward'):
+        args.reward = 'PNR'
+    if not hasattr(args, 'concise_obs'):
+        args.concise_obs = False
+
     # resume model?
     saved_model = None
     if getattr(args, "resume", None) is not None and args.resume:
@@ -449,6 +458,7 @@ def train_policy(args: Namespace):
     print(f"\nTraining {str(args.alg).upper()} with {str(args.architecture).upper()} Network")
     print(f"Using {'Dummy' if not args.parallel else 'SubProc'}VectorEnv\n")
     print(f"Training with {args.train_envs_num} env(s)\n")
+    print(f"Using {args.reward} reward!")
 
     dummy_env, agents, obs_dim, act_dim = grab_spaces(args)
 
@@ -463,6 +473,8 @@ def train_policy(args: Namespace):
         agents=agents,
         seed=args.seed,
         special_action_space=args.special_action_space,
+        reward=args.reward,
+        concise_obs=args.concise_obs,
     )
     test_envs = make_vec_env(
         parallel=args.parallel,
@@ -472,6 +484,8 @@ def train_policy(args: Namespace):
         train=False,
         agents=agents,
         special_action_space=args.special_action_space,
+        reward=args.reward,
+        concise_obs=args.concise_obs,
     )
 
     if normalize:

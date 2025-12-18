@@ -101,6 +101,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
             farm_dict: dict | str = None,
             domain_repeat = 10,
             special_action_space: bool = False,
+            concise_obs: bool = False,
     ):
         EzPickle.__init__(
             self,
@@ -118,6 +119,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
             farm_dict=farm_dict,
             domain_repeat=domain_repeat,
             special_action_space=special_action_space,
+            concise_obs=concise_obs,
         )
         super().__init__()
         self.render_mode = None if not render else 'human'
@@ -133,6 +135,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
         self.reward_code = reward
         self.special_action_space = special_action_space
         self.rng, self.seed = gym.utils.seeding.np_random(seed=seed)
+        self.concise_obs = concise_obs
 
         self.has_reset = False
 
@@ -550,6 +553,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
                     domain_repeat=self.domain_repeat,
                     reward=self.reward_code,
                     special_action_space=self.special_action_space,
+                    concise_obs=self.concise_obs,
                 )
                 self.fields[n] : ParcelEnv = env
             print(f"Fields initialized with seed no. {self.seed}!")
@@ -571,6 +575,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
                     flatten_obs=True,
                     type=soil_type,
                     special_action_space=self.special_action_space,
+                    concise_obs=self.concise_obs,
                 )
             print("Scenario fields initialized!")
 

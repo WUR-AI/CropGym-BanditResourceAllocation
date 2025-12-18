@@ -53,7 +53,9 @@ from cropgymzoo.utils.defaults import (
     get_default_weather_features,
     get_default_action_features,
     get_default_misc_features,
-    get_default_soil_pc_features
+    get_default_soil_pc_features,
+    get_concise_misc_features,
+    get_wofost_concise_crop_features,
 )
 from cropgymzoo.utils.curriculum import make_default_stage_manager
 from cropgymzoo.utils.scenario_utils import get_scenario_based_on_name, get_scenario_based_on_loc, get_coords_for_soil
@@ -160,6 +162,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                  keep_soil_moisture: bool = False,
                  domain_repeat: int = 10,
                  special_action_space: bool = False,
+                 concise_obs: bool = False,
                  **kwargs,
     ):
         EzPickle.__init__(
@@ -192,6 +195,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             keep_soil_moisture=keep_soil_moisture,
             domain_repeat=domain_repeat,
             special_action_space=special_action_space,
+            concise_obs=concise_obs,
             **kwargs,
         )
         # instance metadata
@@ -204,7 +208,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.special_action_space = special_action_space
         if self.special_action_space:
             action_space = gym.spaces.Discrete(5)
-
+        self.concise_obs = concise_obs
         # pcse variables
         self.crop = crop
         self.crop_features = crop_features
@@ -212,6 +216,9 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.action_features = action_features
         self.misc_features = misc_features
         self.soil_features = soil_features
+        if self.concise_obs:
+            self.crop_features = get_wofost_concise_crop_features()
+            self.misc_features = get_concise_misc_features()
         self.year = year
         self.location = location
         self.year_list = year_list
@@ -691,6 +698,9 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             'price_crop': self.crop_price,
             'budget_left': self.budget_left,
         }
+        yield_fn = {
+            "fresh_yield_fn": self._get_fresh_weight,
+        }
         reward, growth = self.reward_class.return_reward(
             output,
             amount,
@@ -699,11 +709,13 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             **prices
             if self.reward_function in ['PNY', 'PNB', 'PNR', 'MPN']
             else {},
-            fresh_yield_fn=self._get_fresh_weight
+            **yield_fn
             if self.crop in ['winterwheat', 'sugarbeet', 'potato']
-            else None
+            and self.reward_function in ['PNY', 'PNB', 'PNR', 'MPN']
+            else {},
         )
         del prices
+        del yield_fn
 
         reward += self._terminated_reward_signal(output, reward, terminated)
 
@@ -757,6 +769,15 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             if self.baseline_information is not None and self.original:
                 final_reward = round(final_reward - x, 1)
             return final_reward
+
+        elif terminated and self.reward_function == 'NSU':
+            return self.reward_container.calculate_reward_nsurp(
+                n_fertilized=self.reward_container.get_total_fertilization,
+                n_output=process_pcse.get_n_storage_organ(output),
+                no3_depo=get_no3_deposition_pcse(output),
+                nh4_depo=get_nh4_deposition_pcse(output),
+                crop_name=self.crop
+            )
 
         return 0
 
@@ -895,7 +916,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
     def _init_infos(self):
         self.infos = {
-            "Date": [], "SinDay": [], "CosDay": [],
+            "Date": [],
             **{name: [] for name in self.crop_features},
             **{name: [] for name in self.weather_features},
             **{name: [] for name in self.action_features},
@@ -1373,6 +1394,10 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         elif self.reward_function == 'NUE':
             self.reward_class = self.rewards_obj.NUE(self.timestep, costs_nitrogen)
+            self.reward_container = self.rewards_obj.ContainerNUE(self.timestep, costs_nitrogen)
+
+        elif self.reward_function == "NSU":
+            self.reward_class = self.rewards_obj.NSU(self.timestep, costs_nitrogen)
             self.reward_container = self.rewards_obj.ContainerNUE(self.timestep, costs_nitrogen)
 
         elif self.reward_function == 'PNB':

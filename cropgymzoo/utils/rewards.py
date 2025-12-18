@@ -277,6 +277,25 @@ class Rewards:
 
             return reward, growth
 
+    class NSU(Rew):
+        """
+        Sparse reward based on calculated nitrogen surplus
+        """
+
+        def __init__(self, timestep, costs_nitrogen):
+            super().__init__(timestep, costs_nitrogen)
+            self.timestep = timestep
+            self.costs_nitrogen = costs_nitrogen
+
+        def return_reward(self, output, amount, output_baseline=None, multiplier=1, obj=None):
+            obj.calculate_amount(amount)
+            obj.calculate_cost_cumulative(amount)
+            obj.calculate_positive_reward_cumulative(output, output_baseline, multiplier)
+            reward = 0
+            growth = process_pcse.compute_growth_storage_organ(output, self.timestep, multiplier)
+
+            return reward, growth
+
     class PNB(Rew):
         """
         Profit, NUE, Budget left reward function
@@ -1062,6 +1081,11 @@ class Rewards:
 
             return self.formula_nue(n_surplus, nue, end_yield)
 
+        def calculate_reward_nsurp(self, n_fertilized, n_output, no3_depo=None, nh4_depo=None, crop_name=None):
+            n_surplus = get_surplus_n(n_fertilized, n_output, no3_depo=no3_depo, nh4_depo=nh4_depo, crop_name=crop_name)
+
+            return self.nsurplus_score(n_surplus)
+
         def calculate_reward_nue_simple(self, n_input, n_output, year=None, start=None, end=None):
             nue = calculate_nue(n_input, n_output, year=year, start=start, end=end)
             end_yield = super().dump_cumulative_positive_reward
@@ -1073,6 +1097,20 @@ class Rewards:
             yield_t = process_pcse.compute_growth_storage_organ(pcse_output, self.timestep)
 
             return self.nue_condition(nue) * yield_t
+
+        @staticmethod
+        def nsurplus_score(nsurp, low=0.0, high=40.0, max_dev=40.0):
+            if low <= nsurp <= high:
+                return 1.0
+
+            # distance to nearest bound
+            if nsurp < low:
+                dist = low - nsurp
+            else:
+                dist = nsurp - high
+
+            score = 1.0 - dist / max_dev
+            return max(score, 0.0)
 
         def calculate_nue_term(self, n_fertilized, n_output, no3_depo=None, nh4_depo=None):
             nue = calculate_nue(n_fertilized, n_output, no3_depo=no3_depo, nh4_depo=nh4_depo)

@@ -26,6 +26,9 @@ if __name__ == "__main__":
     parser.add_argument("--epoch", type=int, default=5_000)
     parser.add_argument("--step_per_epoch", type=int, default=1_000)
 
+    # reward
+    parser.add_argument("--reward", type=str, default='PNR')
+
 
     parser.add_argument("--repeat_per_collect", type=int, default=2)
     # parser.add_argument("--batch-size", type=int, default=10_000)
@@ -57,6 +60,7 @@ if __name__ == "__main__":
     # feature space
     parser.add_argument("--concat_mask", action='store_true', dest='concat_mask')
     parser.add_argument("--pool", action='store_true', dest='pool')
+    parser.add_argument("--concise_obs", action='store_true', dest='concise_obs')
 
     # Use curriculum learning?
     parser.add_argument("--curriculum", action='store_true', dest='curriculum')
@@ -103,7 +107,8 @@ if __name__ == "__main__":
         pool=False,
         skew=False,
         special_action_space=False,
-        idle_penalty=False
+        idle_penalty=False,
+        concise_obs=False
     )
     hyperparams = parser.parse_args()
 

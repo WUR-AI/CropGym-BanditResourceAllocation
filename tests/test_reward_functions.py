@@ -515,6 +515,36 @@ class TestSingularRewardFunctionsMPN(unittest.TestCase):
 
         self.assertTrue(True)
 
+
+class TestMultiRewardFunctionNSU(unittest.TestCase):
+    def setUp(self):
+        self.env_full = MultiFieldEnv(
+            training=True,
+            reward='NSU',
+        )
+
+    def test_reward_multi_full(self):
+        self.env_full.reset(options={'year': 2020})
+
+        infos = {}
+        rewards = {}
+        for agent in self.env_full.unwrapped.possible_agents:
+            rewards[agent] = []
+        for agent in self.env_full.agent_iter():
+            obs, rew, term, trunc, info = self.env_full.last()
+            rewards[agent].append(rew)
+            if self.env_full.terminations[agent]:
+                infos[agent] = info
+                print(rew)
+                self.env_full.step(None)
+            else:
+                self.env_full.step(0)
+
+        for agent in self.env_full.unwrapped.possible_agents:
+            print(f"Agent {agent} has cumulative reward {np.sum(rewards[agent])}")
+            self.assertTrue(0 <= np.sum(rewards[agent]) <= 1)
+
+
 class TestMultiRewardFunctionPNR(unittest.TestCase):
     def setUp(self):
         self.env_full = MultiFieldEnv(

@@ -22,6 +22,18 @@ def get_wofost_default_crop_features():
         'NamountSO'
     ]
 
+def get_wofost_concise_crop_features():
+    # See get_titles() for description of variables
+    return [
+        "DVS",
+        "TAGP",
+        "LAI",
+        'NAVAIL',
+        "SM",
+        "WSO",
+        "NLOSSCUM",
+        'NamountSO'
+    ]
 
 def get_wofost_minimal_crop_features(pcse_env):
     # See get_titles() for description of variables
@@ -95,6 +107,16 @@ def get_default_misc_features():
         'CropPrice',
         'CropCode',
         "CO2",
+        'Nue',
+        'Nsurp',
+        'area'
+    ]
+
+def get_concise_misc_features():
+    return [
+        'FertilizerPrice',
+        'CropPrice',
+        'CropCode',
         'Nue',
         'Nsurp',
         'area'
