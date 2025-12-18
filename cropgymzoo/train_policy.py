@@ -352,6 +352,7 @@ def make_vec_env(
             agents=agents,
             update_obs_rms=train,
             shared=False,
+            reward_scale=1.0 if reward in ['NSU', 'NUE'] else 1e3
         )
     return env
 
