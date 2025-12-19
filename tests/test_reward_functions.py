@@ -544,6 +544,8 @@ class TestMultiRewardFunctionNSU(unittest.TestCase):
             print(f"Agent {agent} has cumulative reward {np.sum(rewards[agent])}")
             self.assertTrue(0 <= np.sum(rewards[agent]) <= 1)
 
+        print(self.env_full)
+
 
 class TestMultiRewardFunctionPNR(unittest.TestCase):
     def setUp(self):

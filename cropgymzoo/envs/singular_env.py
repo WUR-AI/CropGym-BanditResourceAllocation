@@ -707,11 +707,11 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             output_baseline=output_baseline,
             obj=self.reward_container,
             **prices
-            if self.reward_function in ['PNY', 'PNB', 'PNR', 'MPN']
+            if self.reward_function in ['PNY', 'PNB', 'PNR', 'MPN', "NSU"]
             else {},
             **yield_fn
             if self.crop in ['winterwheat', 'sugarbeet', 'potato']
-            and self.reward_function in ['PNY', 'PNB', 'PNR', 'MPN']
+            and self.reward_function in ['PNY', 'PNB', 'PNR', 'MPN', 'NSU']
             else {},
         )
         del prices
@@ -771,6 +771,15 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             return final_reward
 
         elif terminated and self.reward_function == 'NSU':
+            _ = self.reward_class.return_final_reward(
+                obj=self.reward_container,
+                n_fertilized=self.reward_container.get_total_fertilization,
+                n_output=process_pcse.get_n_storage_organ(output),
+                no3_depo=get_no3_deposition_pcse(output),
+                nh4_depo=get_nh4_deposition_pcse(output),
+                budget_left=self.budget_left,
+                crop_name=self.crop,
+            )
             return self.reward_container.calculate_reward_nsurp(
                 n_fertilized=self.reward_container.get_total_fertilization,
                 n_output=process_pcse.get_n_storage_organ(output),

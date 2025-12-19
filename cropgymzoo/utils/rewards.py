@@ -277,25 +277,6 @@ class Rewards:
 
             return reward, growth
 
-    class NSU(Rew):
-        """
-        Sparse reward based on calculated nitrogen surplus
-        """
-
-        def __init__(self, timestep, costs_nitrogen):
-            super().__init__(timestep, costs_nitrogen)
-            self.timestep = timestep
-            self.costs_nitrogen = costs_nitrogen
-
-        def return_reward(self, output, amount, output_baseline=None, multiplier=1, obj=None):
-            obj.calculate_amount(amount)
-            obj.calculate_cost_cumulative(amount)
-            obj.calculate_positive_reward_cumulative(output, output_baseline, multiplier)
-            reward = 0
-            growth = process_pcse.compute_growth_storage_organ(output, self.timestep, multiplier)
-
-            return reward, growth
-
     class PNB(Rew):
         """
         Profit, NUE, Budget left reward function
@@ -667,6 +648,8 @@ class Rewards:
 
             # budget_left_bonus = self.budget_beta * obj.budget_left_bonus(budget_left)
 
+            obj.calculate_final_nue_penalty_profit(nue_penalty, n_surplus_penalty)
+
             # End reward in three terms that describe profit
             reward = (
                     - abs(self.nsurp_beta * n_surplus_penalty)
@@ -680,6 +663,48 @@ class Rewards:
 
         def update_crop_price(self, crop_price):
             self.crop_price = crop_price
+
+    class NSU(PNR):
+        """
+        Sparse reward based on calculated nitrogen surplus
+        """
+
+        def __init__(self, timestep, costs_nitrogen):
+            super().__init__(timestep, costs_nitrogen)
+
+        def return_reward(self,
+                output,
+                amount,
+                output_baseline=None,
+                multiplier=1,
+                obj=None,
+                price_crop=None,
+                price_fertilizer=None,
+                budget_left=None,
+                fresh_yield_fn=None,):
+
+            self.update_crop_price(price_crop)
+            self.update_fertilizer_price(price_fertilizer)
+            obj.update_fertilizer_price(price_fertilizer)
+            obj.update_crop_price(price_crop)
+
+            obj.calculate_amount(amount)
+            obj.calculate_cost_cumulative(amount)
+            obj.calculate_positive_reward_cumulative(output, output_baseline, multiplier)
+            reward = 0
+            growth = process_pcse.compute_growth_storage_organ(output, self.timestep, multiplier)
+
+            if fresh_yield_fn is not None:
+                growth = fresh_yield_fn(growth)
+
+            _ = obj.calculate_profit_term(
+                action=amount,
+                growth=growth,
+                price_crop=price_crop,
+                price_fertilizer=price_fertilizer
+            )
+
+            return reward, growth
 
 
     class MPN(Rew):
@@ -1124,6 +1149,16 @@ class Rewards:
             profit = income - expense
             self.accumulate_profit(profit)
             return profit
+
+        def calculate_final_nue_penalty_profit(
+                self,
+                nue_penalty,
+                n_surplus_penalty,
+        ):
+            expense = - abs(nue_penalty) - abs(n_surplus_penalty)
+            income = 0
+            profit = income - expense
+            self.accumulate_profit(profit)
 
         def budget_left_bonus(self, budget_left):
             return budget_left * self.fertilizer_price
