@@ -351,6 +351,8 @@ def create_comet_experiment(
         comet_experiment.add_tag('idle_penalty')
     if args.lr:
         comet_experiment.add_tag(f'lr_{str(args.lr)}')
+    if args.reward:
+        comet_experiment.add_tag(f'{str(args.reward)}')
 
     if args.resume:
         comet_experiment.add_tag('resume')

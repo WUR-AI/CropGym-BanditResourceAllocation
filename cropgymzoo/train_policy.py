@@ -296,7 +296,8 @@ def initialize_policy(
         input_dim=obs_dim[0],
         hidden_sizes=[128],
         output_dim=64,
-    ).to(device)
+        device=device,
+    )
 
     icm = IntrinsicCuriosityModuleMARL(
         feature_net=feature_net,
@@ -319,7 +320,7 @@ def initialize_policy(
         forward_loss_weight=0.5,
         action_space=gym.spaces.Discrete(act_dim),
         observation_space=gym.spaces.Box(low=-np.inf, high=np.inf, shape=obs_dim),
-    )
+    ).to(device)
     return icm_policy
 
 def make_vec_env(
@@ -403,7 +404,7 @@ def grab_spaces(args):
 def create_logger(args):
     logdir = args.logdir
     # Logger
-    run_name = f"{str(args.alg).upper()}_{str(args.architecture).upper()}_{'parallel' if args.parallel else 'dummy'}_{datetime.datetime.now():%m%d_%H%M}"
+    run_name = f"{str(args.reward)}_{str(args.alg).upper()}_{str(args.architecture).upper()}_{datetime.datetime.now():%m%d_%H%M}"
     run_name = (run_name + "_resume") if args.resume else run_name
     writer = SummaryWriter(os.path.join(logdir, run_name))
     logger = TensorboardLogger(writer)
