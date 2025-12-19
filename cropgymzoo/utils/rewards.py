@@ -1099,7 +1099,7 @@ class Rewards:
             return self.nue_condition(nue) * yield_t
 
         @staticmethod
-        def nsurplus_score(nsurp, low=0.0, high=40.0, max_dev=40.0):
+        def nsurplus_score(nsurp, low=0.0, high=40.0, max_dev=100.0):
             if low <= nsurp <= high:
                 return 1.0
 
