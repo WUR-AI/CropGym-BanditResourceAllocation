@@ -353,6 +353,10 @@ def create_comet_experiment(
         comet_experiment.add_tag(f'lr_{str(args.lr)}')
     if args.reward:
         comet_experiment.add_tag(f'{str(args.reward)}')
+    if args.concise_obs:
+        comet_experiment.add_tag('concise_obs')
+    if args.use_icm:
+        comet_experiment.add_tag('icm')
 
     if args.resume:
         comet_experiment.add_tag('resume')
