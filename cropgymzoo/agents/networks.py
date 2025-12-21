@@ -12,6 +12,18 @@ from torch import nn
 
 
 class IntrinsicCuriosityModuleMARL(IntrinsicCuriosityModule):
+    def __init__(self, *args, device: str | torch.device = "cpu", **kwargs):
+        # Make sure the parent stores the correct device (IntrinsicCuriosityModule defaults to cpu)
+        super().__init__(*args, device=device, **kwargs)
+        self.device = device
+        # Ensure the feature extractor lives on the same device and its own `device` attribute matches
+        try:
+            self.feature_net.to(self.device)
+        except Exception:
+            pass
+        if hasattr(self.feature_net, "device"):
+            self.feature_net.device = self.device
+
     def forward(
             self,
             s1: np.ndarray | torch.Tensor | Batch,
@@ -26,11 +38,25 @@ class IntrinsicCuriosityModuleMARL(IntrinsicCuriosityModule):
             s2 = s2.obs
         if act.ndim > 1:
             act = act.squeeze(-1)
+        # Keep feature_net's internal `.device` consistent with its parameters
+        if hasattr(self.feature_net, "device") and self.feature_net.device != self.device:
+            self.feature_net.device = self.device
 
         r"""Mapping: s1, act, s2 -> mse_loss, act_hat."""
         s1 = to_torch(s1, dtype=torch.float32, device=self.device)
         s2 = to_torch(s2, dtype=torch.float32, device=self.device)
-        phi1, phi2 = self.feature_net(s1), self.feature_net(s2)
+        phi1 = self.feature_net(s1)
+        phi2 = self.feature_net(s2)
+        # Our ObsMLP/Recurrent nets follow Tianshou's (logits, state) convention.
+        # ICM needs only the feature tensor.
+        if isinstance(phi1, (tuple, list)):
+            phi1 = phi1[0]
+        if isinstance(phi2, (tuple, list)):
+            phi2 = phi2[0]
+        if phi1.ndim > 2:
+            phi1 = phi1.reshape(phi1.shape[0], -1)
+        if phi2.ndim > 2:
+            phi2 = phi2.reshape(phi2.shape[0], -1)
         act = to_torch(act, dtype=torch.long, device=self.device)
         phi2_hat = self.forward_model(
             torch.cat([phi1, F.one_hot(act, num_classes=self.action_dim)], dim=1),

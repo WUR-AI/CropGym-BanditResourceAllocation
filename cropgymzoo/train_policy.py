@@ -292,10 +292,14 @@ def initialize_policy(
         return ppo_policy
 
 
-    feature_net = MLP(
-        input_dim=obs_dim[0],
-        hidden_sizes=[128],
+    feature_net = ObsMLP(
+        input_dim=obs_dim[0] - (6 * len(get_default_weather_features())) if getattr(args, 'pool', False) else obs_dim[0],
+        action_dim=act_dim,
         output_dim=64,
+        hidden_sizes=hidden,
+        activation=torch.nn.Tanh,
+        concat_mask=args.concat_mask,
+        pool=getattr(args, 'pool', False),
         device=device,
     )
 
@@ -304,6 +308,7 @@ def initialize_policy(
         action_dim=act_dim,
         feature_dim=64,
         hidden_sizes=[128],
+        device=device,
     ).to(device)
 
     icm_optim = torch.optim.Adam(
