@@ -15,6 +15,17 @@ if __name__ == '__main__':
     parser.add_argument("--bandit_lr", type=float, default=3e-3)
     parser.add_argument("--bandit_epochs", type=int, default=50)
     parser.add_argument("--action_candidate_length", type=int, default=30_000)
+
+    # Elite candidate memory (persist good actions + neighbors)
+    parser.add_argument("--elite_enabled", action="store_true",
+                        help="Enable persistent elite candidates (best action + neighbors)")
+    parser.add_argument("--elite_neighbors", type=int, default=256,
+                        help="How many neighbors to keep around best action")
+    parser.add_argument("--elite_keep_max", type=int, default=512,
+                        help="Max elite candidates stored per scenario (full/reduced)")
+    parser.add_argument("--elite_top_k", type=int, default=5,
+                        help="Number of elite centers to keep per scenario")
+
     parser.add_argument("--model_name", type=str, default='bandit')
     parser.add_argument("--no_comet", action='store_false', dest='use_comet')
     parser.add_argument("--streaming", action='store_true', dest='streaming')
@@ -22,11 +33,27 @@ if __name__ == '__main__':
     parser.add_argument("--farm", type=int, default=None)
     parser.add_argument("--method", type=str, default='ucb')
     parser.add_argument("--kernel", type=str, default='matern')
+    parser.add_argument(
+        "--bandit_posterior",
+        type=str,
+        default="gp",
+        choices=["gp", "neural_linear"],
+        help="Posterior type for bandit. gp=exact NN-AGP GP posterior, neural_linear=Bayesian linear head on NN features."
+    )
+    parser.add_argument(
+        "--bandit_buffer",
+        type=int,
+        default=256,
+        help="Buffer size for representation training (neural_linear)."
+    )
+    parser.add_argument("--coreset_size", type=int, default=256)
+    parser.add_argument("--coreset_mode", type=str, default="fifo", choices=["fifo", "diverse"])
     parser.set_defaults(
         use_model=True,
         use_comet=True,
         streaming=False,
-        render=False
+        render=False,
+        elite_enabled=True
     )
     args = parser.parse_args()
 

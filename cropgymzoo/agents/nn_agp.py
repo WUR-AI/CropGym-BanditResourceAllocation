@@ -402,11 +402,31 @@ def ucb_components(mu: torch.Tensor, std: torch.Tensor, beta_t: float):
 
 
 class NNAGPBandit:
-    def __init__(self, d_theta: int, d_x: int, m: int = 8, Q: int = 1, lr: float = 1e-4, device: Optional[torch.device] = None):
+    def __init__(
+            self,
+            d_theta: int,
+            d_x: int,
+            m: int = 8,
+            Q: int = 1,
+            lr: float = 1e-4,
+            device: Optional[torch.device] = None,
+            posterior_type: Literal["gp", "neural_linear"] = "gp",
+            buffer_size: int = 256,
+            ridge_lambda: float = 1.0,
+            coreset_size=256,
+            coreset_mode="diverse",
+    ):
+        self.posterior_type = posterior_type
         self.model = NNAGP(d_theta, d_x, m=m, Q=Q, device=device or torch.device("cpu"))
-        self.theta_hist: deque[torch.Tensor] = deque(maxlen=300)
-        self.x_hist: deque[torch.Tensor] = deque(maxlen=300)
-        self.y_hist: deque[torch.Tensor] = deque(maxlen=300)
+
+        self.coreset_size = int(coreset_size)
+        self.coreset_mode = coreset_mode
+
+        self.theta_hist: deque[torch.Tensor] = deque(maxlen=self.coreset_size)
+        self.x_hist: deque[torch.Tensor] = deque(maxlen=self.coreset_size)
+        self.y_hist: deque[torch.Tensor] = deque(maxlen=self.coreset_size)
+        # store concatenated z=[x,theta] for coreset maintenance (exact GP path)
+        self._z_gp_hist: deque[torch.Tensor] = deque(maxlen=self.coreset_size)
         self.t = 1
 
         self.opt = torch.optim.AdamW(
@@ -415,8 +435,95 @@ class NNAGPBandit:
             weight_decay=1e-4,
         )
 
+        self.ridge_lambda = float(ridge_lambda)
+
+        # --- Neural-Linear posterior (optional) ---
+        # Features depend on BOTH (x, theta): phi = phi_net([x, theta])
+        self.phi_net = nn.Sequential(
+            nn.Linear(d_x + d_theta, 256),
+            nn.ReLU(),
+            nn.Linear(256, m),
+        ).to(self.model.device)
+
+        # Sufficient statistics for Bayesian linear regression: A = λI + Σ phi phi^T, b = Σ phi y
+        self._A = (self.ridge_lambda * torch.eye(m, device=self.model.device, dtype=torch.get_default_dtype()))
+        self._b = torch.zeros(m, device=self.model.device, dtype=torch.get_default_dtype())
+
+        # Optional: small buffer for training phi_net (stores concatenated z=[x,theta])
+        self._z_hist: deque[torch.Tensor] = deque(maxlen=buffer_size)
+        self._yl_hist: deque[torch.Tensor] = deque(maxlen=buffer_size)
+
+        self.opt_phi = torch.optim.AdamW(self.phi_net.parameters(), lr=lr, weight_decay=1e-4)
+
+    def _phi(self, x: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        """Compute neural-linear features phi([x,theta]) -> (m,) or (B,m)."""
+        if x.dim() == 2 and x.shape[0] == 1:
+            x = x.squeeze(0)
+        if theta.dim() == 2 and theta.shape[0] == 1:
+            theta = theta.squeeze(0)
+        z = torch.cat([x, theta], dim=-1)
+        return self.phi_net(z)
+
+    def _w_mean_and_Ainv(self):
+        """Return posterior mean weights and A^{-1}."""
+        # A is PSD; use solve for stability
+        Ainv = torch.linalg.inv(self._A)
+        w_mean = Ainv @ self._b
+        return w_mean, Ainv
+
+    def _linear_posterior(self, X_candidates: torch.Tensor, theta_t: torch.Tensor):
+        """Compute (mu, std) for each candidate under neural-linear posterior."""
+        device = self.model.device
+        X_candidates = X_candidates.to(device)
+        theta_t = theta_t.to(device)
+        theta_rep = theta_t.unsqueeze(0).expand(X_candidates.shape[0], -1)
+        Phi = self._phi(X_candidates, theta_rep)  # (M, m)
+
+        w_mean, Ainv = self._w_mean_and_Ainv()
+        mu = Phi @ w_mean  # (M,)
+
+        # predictive variance: sigma^2 * phi^T A^{-1} phi
+        sigma2 = float(self.model.noise.detach().cpu().item() ** 2)
+        quad = (Phi @ Ainv * Phi).sum(dim=1).clamp_min(0.0)
+        var = sigma2 * quad
+        std = var.sqrt()
+        return mu, std, Phi, Ainv
+
     # ---- training step: maximize log marginal likelihood (Eq. (5))
     def train_step(self, steps: int = 200, lr: float = 3e-3) -> float:
+        if self.posterior_type == "neural_linear":
+            if len(self._z_hist) == 0:
+                return 0.0
+
+            # Train phi_net via differentiable ridge regression on mini-batches
+            device = self.model.device
+            Z = torch.vstack(tuple(self._z_hist)).to(device)  # (N, d_x+d_theta)
+            y = torch.hstack(tuple(self._yl_hist)).to(device)  # (N,)
+
+            loss_val = 0.0
+            # simple batching
+            batch_size = min(128, Z.shape[0])
+            for _ in range(steps):
+                idx = torch.randint(0, Z.shape[0], (batch_size,), device=device)
+                Zb = Z[idx]
+                yb = y[idx]
+
+                Phi = self.phi_net(Zb)  # (B, m)
+                # ridge solution: w = (Phi^T Phi + λI)^{-1} Phi^T y
+                A = Phi.T @ Phi + self.ridge_lambda * torch.eye(Phi.shape[1], device=device, dtype=Phi.dtype)
+                b = Phi.T @ yb
+                w = torch.linalg.solve(A, b)
+                pred = Phi @ w
+                loss = F.mse_loss(pred, yb)
+
+                self.opt_phi.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.phi_net.parameters(), max_norm=5.0)
+                self.opt_phi.step()
+                loss_val = float(loss.detach().cpu())
+
+            return loss_val
+
         if len(self.y_hist) == 0:
             return 0.0
         x = torch.vstack(tuple(self.x_hist))
@@ -451,6 +558,14 @@ class NNAGPBandit:
             mu = torch.zeros(X_candidates.shape[0])
             std = torch.ones(X_candidates.shape[0])
             return X_candidates[idx], SelectionInfo(mu=mu, std=std, ucb=None, beta_t=None, rule="ucb")
+
+        if self.posterior_type == "neural_linear":
+            mu, std, _, _ = self._linear_posterior(X_candidates, theta_t)
+            beta_t = beta_finite_candidates(self.t, X_candidates.shape[0], delta) if not deterministic else 0
+            ucb = mu + (beta_t ** 0.5) * std
+            idx = int(torch.argmax(ucb).item())
+            return X_candidates[idx], SelectionInfo(mu=mu.detach().cpu(), std=std.detach().cpu(),
+                                                    ucb=ucb.detach().cpu(), beta_t=beta_t, rule="ucb")
 
         X = torch.vstack(tuple(self.x_hist))
         Theta = torch.vstack(tuple(self.theta_hist))
@@ -537,6 +652,29 @@ class NNAGPBandit:
             std = torch.ones(X_candidates.shape[0])
             return X_candidates[idx], SelectionInfo(mu=mu, std=std, rule="ts")
 
+        if self.posterior_type == "neural_linear":
+            mu, std, Phi, Ainv = self._linear_posterior(X_candidates, theta_t)
+            if deterministic:
+                sample = mu
+            else:
+                # sample weights: w ~ N(w_mean, sigma^2 A^{-1})
+                device = mu.device
+                w_mean, _ = self._w_mean_and_Ainv()
+                sigma = float(self.model.noise.detach().cpu().item())
+                L = torch.linalg.cholesky(add_jitter(Ainv, 1e-10))
+                if seed is not None:
+                    g = torch.Generator(device=device)
+                    g.manual_seed(seed)
+                    z = torch.randn(w_mean.shape[0], generator=g, device=device)
+                else:
+                    z = torch.randn(w_mean.shape[0], device=device)
+                w_samp = w_mean + sigma * (L @ z)
+                sample = Phi @ w_samp
+
+            idx = int(torch.argmax(sample).item())
+            return X_candidates[idx], SelectionInfo(mu=mu.detach().cpu(), std=std.detach().cpu(),
+                                                    sampled_vals=sample.detach().cpu(), rule="ts")
+
         # Stack history
         X = torch.vstack(tuple(self.x_hist))
         Theta = torch.vstack(tuple(self.theta_hist))
@@ -581,11 +719,104 @@ class NNAGPBandit:
         idx = int(torch.argmax(sample).item())
         return X_candidates[idx], SelectionInfo(mu=mu.cpu(), std=std.cpu(), sampled_vals=sample.cpu(), rule="ts")
 
+    def _coreset_maybe_replace_gp(self, z_new: torch.Tensor) -> int | None:
+        """For exact-GP mode: decide whether to replace an existing coreset point.
+
+        Returns the index to replace (0..K-1) or None to discard.
+        Strategy:
+          - fifo: always replace oldest (deque maxlen handles it)
+          - diverse: keep points diverse in (x,theta) space by replacing the nearest point
+                    only if the new point is sufficiently far from the set.
+        """
+        if self.coreset_mode == "fifo":
+            return None
+
+        # diverse mode
+        if len(self._z_gp_hist) == 0:
+            return None
+
+        Z = torch.vstack(tuple(self._z_gp_hist))  # (K, d_x+d_theta)
+        # compute distance to nearest existing point
+        d2 = ((Z - z_new) ** 2).sum(dim=1)
+        j = int(torch.argmin(d2).item())
+        min_dist = float(torch.sqrt(d2[j]).detach().cpu())
+
+        # adaptive threshold: median nearest-neighbor distance within current coreset
+        # (cheap approx using distances to the mean)
+        center = Z.mean(dim=0, keepdim=True)
+        spread = torch.sqrt(((Z - center) ** 2).sum(dim=1)).median()
+        thresh = float(spread.detach().cpu()) * 0.25  # keep if "meaningfully" far
+
+        if min_dist > thresh:
+            return j
+        return None
+
     # ---- log an observation and advance time
     def update(self, theta_t: torch.Tensor, x_t: torch.Tensor, y_t: float):
-        self.theta_hist.append(theta_t.detach().unsqueeze(0))
-        self.x_hist.append(x_t.detach().unsqueeze(0))
-        self.y_hist.append(torch.tensor([y_t], dtype=torch.get_default_dtype()))
+        device = self.model.device
+
+        theta_t = theta_t.detach().to(device)
+        x_t = x_t.detach().to(device)
+        y_val = torch.tensor(float(y_t), device=device, dtype=torch.get_default_dtype())
+
+        if self.posterior_type == "neural_linear":
+            # update sufficient stats
+            phi = self._phi(x_t, theta_t)  # (m,)
+            if phi.dim() == 1:
+                phi_col = phi.unsqueeze(1)  # (m,1)
+            else:
+                phi_col = phi.T
+
+            self._A = self._A + (phi_col @ phi_col.T)
+            self._b = self._b + phi * y_val
+
+            # optional training buffer for representation learning
+            z = torch.cat([x_t, theta_t], dim=-1)
+            self._z_hist.append(z.unsqueeze(0))
+            self._yl_hist.append(y_val.unsqueeze(0))
+
+            self.t += 1
+            return
+
+        # Default GP path
+        # Default GP path (exact GP on a bounded coreset)
+        z_new = torch.cat([x_t, theta_t], dim=-1)
+
+        if len(self.y_hist) < self.coreset_size:
+            # still filling
+            self.theta_hist.append(theta_t.unsqueeze(0))
+            self.x_hist.append(x_t.unsqueeze(0))
+            self.y_hist.append(torch.tensor([float(y_t)], dtype=torch.get_default_dtype(), device=device))
+            self._z_gp_hist.append(z_new.unsqueeze(0))
+        else:
+            # coreset is full
+            j = self._coreset_maybe_replace_gp(z_new)
+            if j is None:
+                # fifo mode: deque maxlen will drop oldest if we append
+                if self.coreset_mode == "fifo":
+                    self.theta_hist.append(theta_t.unsqueeze(0))
+                    self.x_hist.append(x_t.unsqueeze(0))
+                    self.y_hist.append(torch.tensor([float(y_t)], dtype=torch.get_default_dtype(), device=device))
+                    self._z_gp_hist.append(z_new.unsqueeze(0))
+                # diverse mode: discard
+            else:
+                # replace point j in-place (convert deques to list, replace, then rebuild deques)
+                th = list(self.theta_hist)
+                xx = list(self.x_hist)
+                yy = list(self.y_hist)
+                zz = list(self._z_gp_hist)
+
+                th[j] = theta_t.unsqueeze(0)
+                xx[j] = x_t.unsqueeze(0)
+                yy[j] = torch.tensor([float(y_t)], dtype=torch.get_default_dtype(), device=device)
+                zz[j] = z_new.unsqueeze(0)
+
+                self.theta_hist = deque(th, maxlen=self.coreset_size)
+                self.x_hist = deque(xx, maxlen=self.coreset_size)
+                self.y_hist = deque(yy, maxlen=self.coreset_size)
+                self._z_gp_hist = deque(zz, maxlen=self.coreset_size)
+        # coreset changed -> clear cached Cholesky/alpha
+        self.model._clear_cache()
         self.t += 1
 
     def export_posterior(self):
@@ -603,12 +834,23 @@ class NNAGPBandit:
                 "alpha": self.model._train_cache["alpha"].cpu(),
                 "G": self.model._train_cache["G"].cpu(),
             }
+
+        nl = None
+        if self.posterior_type == "neural_linear":
+            nl = {
+                "posterior_type": "neural_linear",
+                "phi_state": self.phi_net.state_dict(),
+                "A": self._A.detach().cpu(),
+                "b": self._b.detach().cpu(),
+                "ridge_lambda": self.ridge_lambda,
+            }
         return {
             "model_state": self.model.state_dict(),
             "X": X.cpu(),
             "Theta": Theta.cpu(),
             "y": y.cpu(),
             "cache": cache,
+            "neural_linear": nl,
         }
 
     def import_posterior(self, blob: dict, map_location="cpu"):
@@ -618,6 +860,14 @@ class NNAGPBandit:
         self.y_hist = [blob["y"].to(map_location)]
         # rebuild cache (optional)
         self.model._clear_cache()
+
+        nl = blob.get("neural_linear")
+        if nl and nl.get("posterior_type") == "neural_linear":
+            self.posterior_type = "neural_linear"
+            self.phi_net.load_state_dict(nl["phi_state"])
+            self._A = nl["A"].to(map_location)
+            self._b = nl["b"].to(map_location)
+            self.ridge_lambda = float(nl.get("ridge_lambda", 1.0))
 
         if blob.get("cache"):
             c = blob["cache"]

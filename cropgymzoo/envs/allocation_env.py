@@ -148,20 +148,84 @@ class AllocationBandit(gym.Env):
             "CropCode",
             "FertilizerPrice",
             "Area",
-            "HistoricalCropPrices",
-            "HistoricalFertilizerPrices",
-            "HistoricalProfit",
-            "HistoricalYield",
-            "HistoricalFertilizerUse",
+            # "HistoricalCropPrices",
+            # "HistoricalFertilizerPrices",
+            # "HistoricalProfit",
+            # "HistoricalYield",
+            # "HistoricalFertilizerUse",
             "HistoricalBudget",
             "HistoricalBudgetLeft",
-            "HistoricalNUE",
+            # "HistoricalNUE",
             "HistoricalNsurplus",
             "HistoricalPrecipitation",
             "HistoricalTemperatureMin",
-            "HistoricalTemperatureMax",
-            "HistoricalIrradiation",
+            # "HistoricalTemperature",
+            # "HistoricalTemperatureMax",
+            # "HistoricalIrradiation",
         ]
+
+    def _context_value(self, key: str):
+        """Compute a single context feature."""
+        if key == "InitialN":
+            return list(self.farm.get_initial_n().values())
+
+        if key == "CropPrice":
+            return list(self.farm.get_per_field_crop_price().values())
+
+        if key == "CropCode":
+            return list(self.farm.get_per_field_crop_code().values())
+
+        if key == "FertilizerPrice":
+            return list(self.farm.get_per_field_fertilizer_price().values())
+
+        if key == "Area":
+            return list(self.farm.get_per_field_area().values())
+
+        # --- historical end-season features ---
+        if key == "HistoricalCropPrices":
+            return self._get_historical_end_season_features("CropPrice")
+
+        if key == "HistoricalFertilizerPrices":
+            return self._get_historical_end_season_features("FertilizerPrice")
+
+        if key == "HistoricalProfit":
+            return self._get_historical_end_season_features("Profit")
+
+        if key == "HistoricalYield":
+            return self._get_historical_end_season_features("Yield")
+
+        if key == "HistoricalFertilizerUse":
+            return self._get_historical_end_season_features("Naction")
+
+        if key == "HistoricalBudget":
+            return self._get_historical_end_season_features("BudgetTotal")
+
+        if key == "HistoricalBudgetLeft":
+            return self._get_historical_end_season_features("BudgetLeft")
+
+        if key == "HistoricalNUE":
+            return self._get_historical_end_season_features("Nue")
+
+        if key == "HistoricalNsurplus":
+            return self._get_historical_end_season_features("Nsurp")
+
+        # --- weather ---
+        if key == "HistoricalPrecipitation":
+            return self._get_historical_weather_features("RAIN")
+
+        if key == "HistoricalTemperatureMin":
+            return self._get_historical_weather_features("TMIN")
+
+        if key == "HistoricalTemperature":
+            return self._get_historical_weather_features("TEMP")
+
+        if key == "HistoricalTemperatureMax":
+            return self._get_historical_weather_features("TMAX")
+
+        if key == "HistoricalIrradiation":
+            return self._get_historical_weather_features("IRRAD")
+
+        raise KeyError(f"Unknown context key: {key}")
 
     def _get_historical_context_keys(self):
         return self._get_context_keys()[5:]
@@ -247,25 +311,11 @@ class AllocationBandit(gym.Env):
         )
 
     def _get_context(self):
+        keys = self._get_context_keys()
+
         context = {
-            "InitialN": list(self.farm.get_initial_n().values()),
-            "CropPrice": list(self.farm.get_per_field_crop_price().values()),
-            "CropCode": list(self.farm.get_per_field_crop_code().values()),
-            "FertilizerPrice": list(self.farm.get_per_field_fertilizer_price().values()),  # sample from year
-            "Area": list(self.farm.get_per_field_area().values()),
-            "HistoricalCropPrices": self._get_historical_end_season_features('CropPrice'),
-            "HistoricalFertilizerPrices": self._get_historical_end_season_features('FertilizerPrice'),
-            "HistoricalProfit": self._get_historical_end_season_features('Profit'),
-            "HistoricalYield": self._get_historical_end_season_features('Yield'),
-            "HistoricalFertilizerUse": self._get_historical_end_season_features('Naction'),
-            "HistoricalBudget": self._get_historical_end_season_features('BudgetTotal'),
-            "HistoricalBudgetLeft": self._get_historical_end_season_features('BudgetLeft'),
-            "HistoricalNUE": self._get_historical_end_season_features('Nue'),
-            "HistoricalNsurplus": self._get_historical_end_season_features('Nsurp'),
-            "HistoricalPrecipitation": self._get_historical_weather_features('RAIN'),
-            "HistoricalTemperatureMin": self._get_historical_weather_features('TMIN'),
-            "HistoricalTemperatureMax": self._get_historical_weather_features('TMAX'),
-            "HistoricalIrradiation": self._get_historical_weather_features('IRRAD'),
+            key: self._context_value(key)
+            for key in keys
         }
 
         if not self.flat_context:

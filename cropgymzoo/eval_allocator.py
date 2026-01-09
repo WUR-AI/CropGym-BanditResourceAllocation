@@ -120,6 +120,7 @@ def run_eval_allocator(
         top_k: int = 5,
         hill_steps: int = 3,
         neighbors_per_step: int = 32,
+        elite_candidates_np: np.ndarray | None = None,
 ):
     # ensure rotation is correct
     env.get_rotation_year(year)
@@ -142,6 +143,17 @@ def run_eval_allocator(
             n_candidates=candidate_size,
             reduced=scenario == 'reduced',
         )
+
+    # Inject elite candidates into eval candidate set (if provided)
+    if elite_candidates_np is not None:
+        try:
+            allocation_actions = np.vstack([
+                elite_candidates_np.astype(np.float32),
+                allocation_actions.astype(np.float32),
+            ])
+        except Exception:
+            # If something mismatches, skip injection instead of crashing
+            pass
 
     if not streaming:
         if use_hill_climb:
@@ -204,4 +216,4 @@ def run_eval_allocator(
     _, reward_env, _, _, step_info = env.step(x_t)
     normalized_reward = min_max_normalize(float(reward_env))
 
-    return reward_env, normalized_reward, step_info['AgentInfos']
+    return reward_env, normalized_reward, step_info['AgentInfos'], x_t

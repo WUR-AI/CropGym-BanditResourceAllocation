@@ -131,7 +131,10 @@ def train_allocator_for_farm(args):
         m=m,  # vector len of multi output GP
         Q=args.q,  # number of shared GP outputs
         lr=args.bandit_lr,
-        device=torch.device("cpu")
+        device=torch.device("cpu"),
+        posterior_type=args.bandit_posterior,
+        coreset_size=args.coreset_size,
+        coreset_mode=args.coreset_mode,
     )
 
     training_loop(env, bandit, args, comet_experiment, log_folder_name, region=region, farm_id=farm_id)
@@ -156,6 +159,62 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
     test_step = 0
 
     method = args.method
+
+    # ---------------- Elite candidate memory ----------------
+    # Keep the best action seen so far (by *raw* env reward) and its neighbors,
+    # and always inject them into later candidate sets.
+    elite_enabled = getattr(args, "elite_enabled", False)
+    elite_neighbors = int(getattr(args, "elite_neighbors", 64))
+    elite_keep_max = int(getattr(args, "elite_keep_max", 512))
+
+    elite = {
+        "full": {"best_reward": -float("inf"), "cands": None},
+        "reduced": {"best_reward": -float("inf"), "cands": None},
+    }
+
+    def _unique_rows_torch(X: torch.Tensor) -> torch.Tensor:
+        # torch.unique(dim=0) exists in modern torch; keep it simple
+        if X is None or X.numel() == 0:
+            return X
+        return torch.unique(X, dim=0)
+
+    def _update_elite(env, scenario: str, x_t: torch.Tensor, reward_raw: float):
+        if not elite_enabled:
+            return
+        if reward_raw <= elite[scenario]["best_reward"]:
+            return
+
+        elite[scenario]["best_reward"] = float(reward_raw)
+
+        center = x_t.detach().cpu().numpy().reshape(1, -1)
+        neigh_np = env.sample_neighbors(
+            center=center.squeeze(0),
+            n_neighbors=elite_neighbors,
+            reduced=(scenario == "reduced"),
+        )
+
+        # include center explicitly + neighbors
+        cand_np = np.vstack([center, neigh_np]).astype(np.float32)
+        cand = torch.from_numpy(cand_np)
+
+        # unique + cap
+        cand = _unique_rows_torch(cand)
+        if cand.shape[0] > elite_keep_max:
+            cand = cand[:elite_keep_max]
+
+        elite[scenario]["cands"] = cand
+
+    def _inject_elite(scenario: str, Xc: torch.Tensor) -> torch.Tensor:
+        if not elite_enabled:
+            return Xc
+        elite_c = elite[scenario]["cands"]
+        if elite_c is None:
+            return Xc
+        elite_c = elite_c.to(dtype=Xc.dtype)
+        X = torch.vstack([elite_c, Xc])
+        return _unique_rows_torch(X)
+
+    # --------------------------------------------------------
 
     # put the training loop here
     for t in range(1, args.rounds + 1):
@@ -182,7 +241,10 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
             reduced=False,
             rng=rng,
         )
-        x_cand = torch.from_numpy(x_cand)
+        x_cand = torch.from_numpy(x_cand.astype(np.float32))
+
+        # Always inject persistent elite candidates for training scenario="full"
+        x_cand = _inject_elite("full", x_cand)
 
         # train the surrogate a bit on accumulated data
         loss_val = bandit.train_step(steps=args.bandit_epochs, lr=args.bandit_lr)
@@ -220,6 +282,10 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
         # run env and normalize reward
         _, reward_env, _, _, step_info = env.step(x_t)
         normalized_reward = min_max_normalize(float(reward_env))
+
+        # Update elite memory using *raw* reward signal
+        _update_elite(env, "full", x_t, float(reward_env))
+
         if comet_experiment:
             comet_experiment.log_metrics(
                 {
@@ -257,7 +323,7 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
             for scenario in scenarios:
                 info_dict = {}
                 for year in years:
-                    raw_reward, normalized_reward, infos = run_eval_allocator(
+                    raw_reward, normalized_reward, infos, x_eval = run_eval_allocator(
                         env=env,
                         bandit=bandit,
                         year=year,
@@ -267,7 +333,13 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
                         method=method,
                         candidate_size=100_000,
                         scenario=scenario,
+                        elite_candidates_np=(
+                            None if elite[scenario]["cands"] is None
+                            else elite[scenario]["cands"].detach().cpu().numpy()
+                        )
                     )
+                    # Update elite from eval too (per scenario)
+                    _update_elite(env, scenario, x_eval, float(raw_reward))
                     info_dict[year] = infos
                     print(f"test year: {year}, reward: {raw_reward}")
                     rewards.append(raw_reward)
