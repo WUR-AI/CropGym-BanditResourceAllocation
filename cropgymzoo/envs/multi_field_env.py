@@ -684,14 +684,14 @@ class MultiFieldEnv(AECEnv, EzPickle):
         ww_3 = min(30, n_init)
         handbook = {
             "sugarbeet": {
-                5: {"clay": sb, "sand": sb, "silt": sb, "peat": sb},
+                10: {"clay": sb, "sand": sb, "silt": sb, "peat": sb},
             },
             "potato": {
-                5: {"clay": min(200, pt_cl), "sand": min(170, pt_s), "silt": min(200, pt_cl), "peat": min(170, pt_s)},
+                10: {"clay": min(200, pt_cl), "sand": min(170, pt_s), "silt": min(200, pt_cl), "peat": min(170, pt_s)},
                 30: {"clay": pt_cl, "sand": pt_s, "silt": pt_cl, "peat": pt_s},
             },
             "winterwheat": {
-                5: {"clay": ww_1, "sand": ww_1, "silt": ww_1, "peat": ww_1},
+                10: {"clay": ww_1, "sand": ww_1, "silt": ww_1, "peat": ww_1},
                 120: {"clay": ww_2, "sand": ww_2, "silt": ww_2, "peat": ww_2},
                 # 70: {"clay": ww_3, "sand": ww_3, "silt": ww_3, "peat": ww_3},
             }
@@ -740,7 +740,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
                 fert = soil_map.get(soil, 0.0)  # default 0 if soil not found
                 break  # stop after first match
 
-        allowed_fert = min(max(0, budget_left), fert)
+        allowed_fert = max(min(max(0, budget_left), fert), 0)
 
         return allowed_fert / 10  # align with action space
 
