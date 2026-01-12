@@ -13,6 +13,7 @@ from cropgymzoo.utils.agent_helpers import _make_super_arms, _make_base_arms, _m
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 from cropgymzoo.utils.defaults import get_default_years
 from cropgymzoo.utils.scenario_utils import model_picker
+from cropgymzoo.utils.rewards import Rewards
 from cropgymzoo.train_policy import load_model, initialize_policy
 from cropgymzoo.eval_policy import MultiRLAgent, load_policy, RoTAgent, RandomAgent
 
@@ -116,26 +117,10 @@ class AllocationBandit(gym.Env):
 
 
     def _get_reward(self):
-        # convert budget left as profit
-        budget_lefts = np.array([self.infos['AgentInfos'][agent]['BudgetLeft'][-1] for agent in self.parcel_meta_infos.keys()])
-        fertilizer_prices = np.array([self.infos['AgentInfos'][agent]['FertilizerPrice'][-1] for agent in self.parcel_meta_infos.keys()])
-        areas = np.array([self.infos['AgentInfos'][agent]['area'][-1] for agent in self.parcel_meta_infos.keys()])
 
-        self.infos['BudgetLeft'] = budget_lefts
-        self.infos['FertilizerPrice'] = fertilizer_prices
-        # dot product below
-        budget_left_profit = budget_lefts @ fertilizer_prices
+        avg_nsurp = np.mean([self.infos['AgentInfos'][agent]['Nsurp'][-1] for agent in self.parcel_meta_infos.keys()])
 
-        # add with actual profit
-        profit = np.array([np.sum(self.infos['AgentInfos'][agent]['Profit']) for agent in self.parcel_meta_infos.keys()])
-
-        weighted_profit = profit @ areas
-
-        # log in infos, will be erased in next round
-        self.infos['Profit'] = weighted_profit
-
-        reward = np.sum(weighted_profit) + budget_left_profit
-        self.infos['Reward'] = reward
+        reward = Rewards.ContainerNUE.nsurplus_score(avg_nsurp)
 
         return reward
 
