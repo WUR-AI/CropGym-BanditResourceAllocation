@@ -152,19 +152,19 @@ class AllocationBandit(gym.Env):
     def _context_value(self, key: str):
         """Compute a single context feature."""
         if key == "InitialN":
-            return list(self.farm.get_initial_n().values())
+            return [self.farm.get_initial_n()[a] for a in self.agents_order]
 
         if key == "CropPrice":
-            return list(self.farm.get_per_field_crop_price().values())
+            return [self.farm.get_per_field_crop_price()[a] for a in self.agents_order]
 
         if key == "CropCode":
-            return list(self.farm.get_per_field_crop_code().values())
+            return [self.farm.get_per_field_crop_code()[a] for a in self.agents_order]
 
         if key == "FertilizerPrice":
-            return list(self.farm.get_per_field_fertilizer_price().values())
+            return [self.farm.get_per_field_fertilizer_price()[a] for a in self.agents_order]
 
         if key == "Area":
-            return list(self.farm.get_per_field_area().values())
+            return [self.farm.get_per_field_area()[a] for a in self.agents_order]
 
         # --- historical end-season features ---
         if key == "HistoricalCropPrices":
@@ -216,10 +216,7 @@ class AllocationBandit(gym.Env):
         return self._get_context_keys()[5:]
 
     def _get_max_budgets(self) -> list:
-        max_budgets = []
-        for agent in self.farm.possible_agents:
-            max_budgets.append(self.farm.get_per_parcel_max_budget(agent))
-        return max_budgets
+        return [self.farm.get_per_parcel_max_budget(a) for a in self.agents_order]
 
     def super_arms_limit(self, limit: float) -> np.ndarray:
         """
@@ -312,7 +309,7 @@ class AllocationBandit(gym.Env):
     def _get_historical_end_season_features(self, feature: str):
         """Return [mean_over_iters( last value of feature for this agent ), for each agent]."""
         out = []
-        for agent in self.parcel_meta_infos.keys():
+        for agent in self.agents_order:
             vals = []
             for iter_info in self.farm.warm_up_infos:  # iter_info: dict per iteration
                 agent_info = iter_info.get(agent)
@@ -324,7 +321,7 @@ class AllocationBandit(gym.Env):
     def _get_historical_weather_features(self, feature: str):
         """Return [mean_over_iters( mean of the feature sequence for this agent ), per agent]."""
         out = []
-        for agent in self.parcel_meta_infos.keys():
+        for agent in self.agents_order:
             vals = []
             for iter_info in self.farm.warm_up_infos:
                 agent_info = iter_info.get(agent)
@@ -358,7 +355,7 @@ class AllocationBandit(gym.Env):
         candidates = np.empty((n_candidates, n_fields), dtype=np.float32)
 
         # Assume base_arms is a dict: agent_id -> 1D np.array of allowed values
-        agents = list(self.farm.possible_agents)
+        agents = self.agents_order
 
         for k in range(n_candidates):
             vec = []
@@ -567,16 +564,23 @@ class AllocationBandit(gym.Env):
             )
 
     def _init_meta_info(self):
-        self.n_fields = len(self.farm.possible_agents)
+        # Canonical ordering of fields/agents — use this everywhere
+        self.agents_order = list(self.farm.possible_agents)
+
+        self.n_fields = len(self.agents_order)
         self.global_budget = self.farm.global_budget
+
         self.parcel_meta_infos = {
-            agent: {'max_budget': self.farm.fields[agent].unwrapped.max_budget_n,
-                    'crop': self.farm.fields[agent].unwrapped.crop,
-                    'crop_code': self.farm.fields[agent].unwrapped.CROP_CODE_MAP[
-                        self.farm.fields[agent].unwrapped.crop
-                    ],
-                    'soil_type': self.farm.fields[agent].unwrapped.soil_type,
-                    'area': self.farm.fields[agent].unwrapped.area, }
-            for agent in self.farm.possible_agents
+            agent: {
+                'max_budget': self.farm.fields[agent].unwrapped.max_budget_n,
+                'crop': self.farm.fields[agent].unwrapped.crop,
+                'crop_code': self.farm.fields[agent].unwrapped.CROP_CODE_MAP[
+                    self.farm.fields[agent].unwrapped.crop
+                ],
+                'soil_type': self.farm.fields[agent].unwrapped.soil_type,
+                'area': self.farm.fields[agent].unwrapped.area,
+            }
+            for agent in self.agents_order
         }
+
         self.max_budgets = self._get_max_budgets()
