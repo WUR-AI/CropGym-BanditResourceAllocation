@@ -56,10 +56,13 @@ def train_allocator(args):
     if args.use_comet:
         comet_experiment = _setup_bandit_comet(args)
 
+    years = list(range(2020 - args.years, 2020))
+
     # initialize env
     env = AllocationBandit(
         warm_up_eps=2,
         args=args,
+        years=years,
         seed=args.seed,
         flat_context=True,
     )
@@ -282,6 +285,7 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
         # run env and normalize reward
         _, reward_env, _, _, step_info = env.step(x_t)
         normalized_reward = min_max_normalize(float(reward_env))
+        print(f"reward: {reward_env}")
 
         # Update elite memory using *raw* reward signal
         _update_elite(env, "full", x_t, float(reward_env))
@@ -296,7 +300,7 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
             )
 
         # update rolling historical average
-        env.add_stats_to_context(step_info['AgentInfos'])
+        # env.add_stats_to_context(step_info['AgentInfos'])
 
         # observe noisy reward
         y_t = float(normalized_reward + 0.05 * torch.randn(()))
