@@ -118,11 +118,13 @@ class AllocationBandit(gym.Env):
 
 
     def _get_reward(self):
+        separate_nsurp = [self.infos['AgentInfos'][agent]['Nsurp'][-1] for agent in self.parcel_meta_infos.keys()]
+        separate_reward = [Rewards.ContainerNUE.nsurplus_score(n) for n in separate_nsurp]
 
-        avg_nsurp = np.mean([self.infos['AgentInfos'][agent]['Nsurp'][-1] for agent in self.parcel_meta_infos.keys()])
+        n_arms = len(separate_reward)
+        weighted_reward = [n / n_arms for n in separate_reward]
 
-        reward = Rewards.ContainerNUE.nsurplus_score(avg_nsurp)
-
+        reward = np.sum(weighted_reward)
         return reward
 
 
