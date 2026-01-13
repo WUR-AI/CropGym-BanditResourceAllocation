@@ -3,6 +3,8 @@ import argparse
 from copy import deepcopy
 import yaml
 import torch
+import pickle
+from collections import deque
 
 import numpy as np
 import gymnasium as gym
@@ -17,8 +19,7 @@ from cropgymzoo.utils.rewards import Rewards
 from cropgymzoo.train_policy import load_model, initialize_policy
 from cropgymzoo.eval_policy import MultiRLAgent, load_policy, RoTAgent, RandomAgent
 
-from cropgymzoo import _SCENARIO_PATH
-
+from cropgymzoo import _SCENARIO_PATH, _CONFIG_PATH
 
 # ---------------------------------------------------------------------
 # Gymnasium env that works for any n_fields
@@ -63,7 +64,7 @@ class AllocationBandit(gym.Env):
         self.original_saved_model = None
 
         # The MARL env
-        self._init_envs(args)
+        self._init_envs(args, warm_up_eps=warm_up_eps)
 
         # set up per parcel budgets
         self._init_meta_info()
@@ -328,7 +329,7 @@ class AllocationBandit(gym.Env):
         out = []
         for agent in self.agents_order:
             vals = []
-            for iter_info in self.farm.warm_up_infos:  # iter_info: dict per iteration
+            for iter_info in self.warm_up_infos:  # iter_info: dict per iteration
                 agent_info = iter_info.get(agent)
                 seq = agent_info.get(feature)
                 vals.append(seq[-1])
@@ -340,7 +341,7 @@ class AllocationBandit(gym.Env):
         out = []
         for agent in self.agents_order:
             vals = []
-            for iter_info in self.farm.warm_up_infos:
+            for iter_info in self.warm_up_infos:
                 agent_info = iter_info.get(agent)
                 seq = agent_info.get(feature)
                 vals.append(np.mean(seq) / 1e6 if feature == 'IRRAD' else np.mean(seq))
@@ -360,7 +361,7 @@ class AllocationBandit(gym.Env):
         return out
 
     def add_stats_to_context(self, info):
-        self.farm.warm_up_infos.append(info)
+        self.warm_up_infos.append(info)
 
     def sample_super_arms(
             self,
@@ -502,10 +503,42 @@ class AllocationBandit(gym.Env):
     Init helpers
     '''
 
-    def _init_envs(self, args):
+    def _warm_up(self, warm_up_year, budget_levels=4):
+        # assert all([y < 2020 for y in warm_up_years])
+        warm_up_infos: deque[dict] = deque(maxlen=50)
+        options = {}
+        budget_reductions = [np.zeros(1)]
+        if budget_levels > 1:
+            budget_reductions = [np.asarray([b * 2 for _ in range(len(self.farm.possible_agents))]) for b in range(0, budget_levels)]
+        print('Starting warm up...')
+        options['year'] = warm_up_year
+        for j in budget_reductions:
+            self.farm.reset(seed=self.seed, options=options)
+            self.farm.allocate_bandit_budgets(j)
+            iter_info = {}
+            for agent in self.farm.agent_iter():
+                _, _, _, _, infos = self.farm.last()
+                action = self.farm.rule_of_thumb(agent)
+                if self.farm.terminations[agent]:
+                    iter_info[agent] = infos
+                    self.farm.step(None)
+                else:
+                    self.farm.step(action)
+            warm_up_infos.append(iter_info)
+            print(self.farm)
+        print('Finished warm up...')
+        # print('Attempting to save pickle...')
+        # with open(os.path.join(_CONFIG_PATH, 'warm_up_infos.pkl'), 'wb') as f:
+        #     pickle.dump(warm_up_infos, file=f)
+        # print('Successfully saved!')
+        return warm_up_infos
+
+    def _init_envs(self, args, warm_up_eps=0):
+        # make farm
         dict_fields = None
         if args.farm is not None:
-            with open(os.path.join(_SCENARIO_PATH, f"{self.region}", "2020", f"farmer_{self.farm_id}.yaml"), 'rb') as f:
+            with open(os.path.join(_SCENARIO_PATH, f"{self.region}", "2020",
+                                   f"farmer_{self.farm_id}.yaml"), 'rb') as f:
                 dict_fields = yaml.safe_load(f)
 
         self.farm = MultiFieldEnv(
@@ -513,6 +546,16 @@ class AllocationBandit(gym.Env):
             years=self.years,
             farm_dict=dict_fields,
         )
+
+        # Do some warm up episodes
+        self.warm_up_infos = None
+        if warm_up_eps > 0:
+            years_warm_up = list(range(2020 - 1, 2020 - warm_up_eps - 1, -1))
+            print(years_warm_up)
+
+            for year in years_warm_up:
+                self.get_rotation_year(2020 + ((2019 - year) % 5))
+                self.warm_up_infos = self._warm_up(year)
 
         self.env_agent = None
         if args is not None and hasattr(args, 'use_model'):

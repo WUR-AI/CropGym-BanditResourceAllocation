@@ -1,8 +1,7 @@
 import os
 import yaml
-import pickle
 
-from collections import Counter, defaultdict, deque
+from collections import Counter
 
 import numpy as np
 
@@ -88,7 +87,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
     def __init__(
             self,
             seed: int = 107,
-            warm_up: int = 0,
+            warm_up: int = 0,   # deprecated
             reward: str = 'PNR',
             use_rl_warm_up_actions: bool = True,
             years: list = get_default_years(),
@@ -175,12 +174,6 @@ class MultiFieldEnv(AECEnv, EzPickle):
 
         self.total_area = np.sum([self.get_field_size(agent) for agent in self.possible_agents])
 
-        # Do some warm up episodes
-        self.warm_up_infos = None
-        if warm_up > 0:
-            _years_warm_up = list(range(2020 - 1, 2020 - warm_up - 1, -1))
-            print(_years_warm_up)
-            self.warm_up_infos = self._warm_up(_years_warm_up)
 
     def reset(self, seed=None, options=None):
         # Check curriculum; only to be called in callbacks.
@@ -643,38 +636,6 @@ class MultiFieldEnv(AECEnv, EzPickle):
     def _is_at_date(dap: int, day: int):
         return day - 3 <= dap <= day + 3
 
-    def _warm_up(self, warm_up_years, budget_levels=4):
-        # assert all([y < 2020 for y in warm_up_years])
-        warm_up_infos: deque[dict] = deque(maxlen=50)
-        options = {}
-        warm_up_counter = len(warm_up_years)
-        budget_reductions = [np.zeros(1)]
-        if budget_levels > 1:
-            budget_reductions = [np.asarray([b * 2 for _ in range(len(self.possible_agents))]) for b in range(0, budget_levels)]
-        print('Starting warm up...')
-        for i, _ in enumerate(range(warm_up_counter)):
-            print('Start warm up iteration {}'.format(i))
-            options['year'] = warm_up_years[i]
-            for j in budget_reductions:
-                self.reset(seed=self.seed, options=options)
-                self.allocate_bandit_budgets(j)
-                iter_info = {}
-                for agent in self.agent_iter():
-                    _, _, _, _, infos = self.last()
-                    action = self.rule_of_thumb(agent)
-                    if self.terminations[agent]:
-                        iter_info[agent] = infos
-                        self.step(None)
-                    else:
-                        self.step(action)
-                warm_up_infos.append(iter_info)
-                print(self)
-        print('Finished warm up...')
-        print('Attempting to save pickle...')
-        with open(os.path.join(_CONFIG_PATH, 'warm_up_infos.pkl'), 'wb') as f:
-            pickle.dump(warm_up_infos, file=f)
-        print('Successfully saved!')
-        return warm_up_infos
 
     def get_handbook_dict(self, agent):
         n_init = self.fields[agent].unwrapped.infos['NAVAIL'][0]
