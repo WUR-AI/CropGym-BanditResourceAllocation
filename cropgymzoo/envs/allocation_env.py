@@ -133,6 +133,10 @@ class AllocationBandit(gym.Env):
             "CropCode",
             "FertilizerPrice",
             "Area",
+            "EarlySeasonPrecipitation",
+            "EarlySeasonTemperatureMin",
+            # "EarlySeasonTemperatureMax",
+            "EarlySeasonIrradiation",
             # "HistoricalCropPrices",
             # "HistoricalFertilizerPrices",
             # "HistoricalProfit",
@@ -165,6 +169,19 @@ class AllocationBandit(gym.Env):
 
         if key == "Area":
             return [self.farm.get_per_field_area()[a] for a in self.agents_order]
+
+        # --- early season features ---
+        if key == "EarlySeasonPrecipitation":
+            return self._get_early_season_weather_features("RAIN")
+
+        if key == "EarlySeasonTemperatureMin":
+            return self._get_early_season_weather_features("TMIN")
+
+        if key == "EarlySeasonTemperatureMax":
+            return self._get_early_season_weather_features("TMAX")
+
+        if key == "EarlySeasonIrradiation":
+            return self._get_early_season_weather_features("IRRAD")
 
         # --- historical end-season features ---
         if key == "HistoricalCropPrices":
@@ -328,6 +345,18 @@ class AllocationBandit(gym.Env):
                 seq = agent_info.get(feature)
                 vals.append(np.mean(seq) / 1e6 if feature == 'IRRAD' else np.mean(seq))
             out.append(float(np.mean(vals)))
+        return out
+
+    def _get_early_season_weather_features(self, feature: str):
+        """Return [mean_over_iters( mean of the feature sequence for this agent ), per agent]."""
+        out = []
+        for agent in self.agents_order:
+            days = [day['day'] for day in self.farm.fields[agent].model.get_output()]
+            vals = []
+            for day in days:
+                val = getattr(self.farm.fields[agent].wdp(day), feature)
+                vals.append(val / 1e6 if feature == 'IRRAD' else val)
+            out.append(float(round(np.mean(vals), 3)))
         return out
 
     def add_stats_to_context(self, info):
