@@ -199,6 +199,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
 
         # reset infos and variables
         self._init_infos()
+        self._init_farm_variables()
 
         # get the options before reset
         # If training, ignore all options and override with only year.
@@ -406,6 +407,9 @@ class MultiFieldEnv(AECEnv, EzPickle):
     def get_per_parcel_budget_left(self, _agent):
         return self.fields[_agent].unwrapped.budget_left
 
+    def get_per_parcel_dvs(self, _agent):
+        return self.fields[_agent].unwrapped.infos['DVS']
+
     def set_per_parcel_budget(self, _agent, budget):
         self.fields[_agent].unwrapped.set_budget(budget)
 
@@ -531,6 +535,13 @@ class MultiFieldEnv(AECEnv, EzPickle):
     def _init_farm_variables(self):
         self._emergence_doy = {ag: None for ag in self.agents}
 
+        # --- DVS-based one-time triggers (per episode) ---
+        # previous DVS value (to detect threshold crossing)
+        self._dvs_prev = {ag: 0.0 for ag in self.agents}
+        # which DVS thresholds have already been triggered for this agent
+        self._dvs_triggered = {ag: set() for ag in self.agents}
+
+
     def _init_fields(self, seed: int = None, farm_dict: dict = None):
         """
         This is where we initialize the sub-environments where each agent will work.
@@ -643,11 +654,12 @@ class MultiFieldEnv(AECEnv, EzPickle):
         pt_cl = 285 - (1.1 * min(n_init, 60))
         pt_s = 300 - (1.8 * min(n_init, 30))
         ww_1 = min(100, 140 - n_init)
-        ww_2 = min(80, 200 - n_init)
-        ww_3 = min(30, n_init)
+        ww_2 = 80
+        ww_3 = 80
         handbook = {
             "sugarbeet": {
                 10: {"clay": sb, "sand": sb, "silt": sb, "peat": sb},
+                30: {"clay": 30, "sand": 30, "silt": 30, "peat": 30},
             },
             "potato": {
                 10: {"clay": min(200, pt_cl), "sand": min(170, pt_s), "silt": min(200, pt_cl), "peat": min(170, pt_s)},
@@ -656,7 +668,32 @@ class MultiFieldEnv(AECEnv, EzPickle):
             "winterwheat": {
                 10: {"clay": ww_1, "sand": ww_1, "silt": ww_1, "peat": ww_1},
                 120: {"clay": ww_2, "sand": ww_2, "silt": ww_2, "peat": ww_2},
-                # 70: {"clay": ww_3, "sand": ww_3, "silt": ww_3, "peat": ww_3},
+                140: {"clay": ww_3, "sand": ww_3, "silt": ww_3, "peat": ww_3},
+            }
+        }
+        return handbook
+
+    def get_handbook_dict_dvs(self, agent):
+        n_init = self.fields[agent].unwrapped.infos['NAVAIL'][0]
+        sb = 200 - (1.7 * min(n_init, 60))
+        pt_cl = 285 - (1.1 * min(n_init, 60))
+        pt_s = 300 - (1.8 * min(n_init, 30))
+        ww_1 = min(100, 140 - n_init)
+        ww_2 = 80
+        ww_3 = 80
+        handbook = {
+            "sugarbeet": {
+                -0.1: {"clay": sb, "sand": sb, "silt": sb, "peat": sb},
+                0.1: {"clay": 30, "sand": 30, "silt": 30, "peat": 30},
+            },
+            "potato": {
+                -0.1: {"clay": min(200, pt_cl), "sand": min(170, pt_s), "silt": min(200, pt_cl), "peat": min(170, pt_s)},
+                0.0: {"clay": pt_cl, "sand": pt_s, "silt": pt_cl, "peat": pt_s},
+            },
+            "winterwheat": {
+                -0.1: {"clay": ww_1, "sand": ww_1, "silt": ww_1, "peat": ww_1},
+                0.3: {"clay": ww_2, "sand": ww_2, "silt": ww_2, "peat": ww_2},
+                0.5: {"clay": ww_3, "sand": ww_3, "silt": ww_3, "peat": ww_3},
             }
         }
         return handbook
@@ -688,20 +725,33 @@ class MultiFieldEnv(AECEnv, EzPickle):
 
         return fert / 10
 
-    def rule_of_thumb(self, agent_name, scenario='max'):
+    def rule_of_thumb(self, agent_name, use_dvs=False):
         """Simple farmer rule-based fertilization schedule based on crop + soil."""
         crop = self.get_per_field_crop_name()[agent_name]
         soil = self.get_per_field_soil_type()[agent_name]
         budget_left  = self.get_per_parcel_budget_left(agent_name)
-
+        dvs = self.fields[agent_name].model.get_output()[-1]["DVS"]
+        # dvs = self.get_per_parcel_dvs(agent_name)[-1]
         dap_plant = self.get_dap(agent_name)  # assume infos contains this
         fert = 0.0
 
-        # check if today matches any scheduled DAP for this crop
-        for day, soil_map in self.get_handbook_dict(agent_name).get(crop, {}).items():
-            if self._is_at_date(dap_plant, day):
-                fert = soil_map.get(soil, 0.0)  # default 0 if soil not found
-                break  # stop after first match
+        if use_dvs:
+            prev_dvs = self._dvs_prev[agent_name]
+            for thr, soil_map in self.get_handbook_dict_dvs(agent_name).get(crop, []).items():
+                # only trigger once: detect crossing + track which thresholds already fired
+                crossed = (dvs >= thr) #and (prev_dvs < thr)
+                if crossed and (thr not in self._dvs_triggered[agent_name]):
+                    fert = float(soil_map.get(soil, 0.0))
+                    self._dvs_triggered[agent_name].add(thr)
+                    break
+        else:
+            # check if today matches any scheduled DAP for this crop
+            for day, soil_map in self.get_handbook_dict(agent_name).get(crop, {}).items():
+                if self._is_at_date(dap_plant, day):
+                    fert = soil_map.get(soil, 0.0)  # default 0 if soil not found
+                    break  # stop after first match
+
+        self._dvs_prev[agent_name] = dvs
 
         allowed_fert = max(min(max(0, budget_left), fert), 0)
 
