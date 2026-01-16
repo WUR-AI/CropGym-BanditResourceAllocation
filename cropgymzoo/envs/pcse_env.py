@@ -547,7 +547,7 @@ class PCSEEnv(gym.Env):
 
         # Let simulation run until crop start date
         if self._wait_for_crop:
-            skip_days = max(0, (self.agmt.get_start_date - self.agmt.get_campaign_date).days)
+            skip_days = max(0, (self.agmt.get_start_date - self.agmt.get_campaign_date).days) - (self._timestep -1)
             if skip_days:
                 model.run(days=skip_days, action=0)
 
