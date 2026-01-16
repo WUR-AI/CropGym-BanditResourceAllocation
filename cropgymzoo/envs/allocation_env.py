@@ -39,6 +39,7 @@ class AllocationBandit(gym.Env):
             seed: int = 107,
             action_type: str = 'continuous',
             args: argparse.Namespace = None,
+            field_reward: str = 'NSU',
             flat_context: bool = True,
             region: str = None,
             farm_id: int = None,
@@ -48,6 +49,7 @@ class AllocationBandit(gym.Env):
 
         self.flat_context = flat_context
         self.warm_up_eps = warm_up_eps
+        self.field_reward = field_reward
 
         assert action_type in ['discrete', 'multi_discrete', 'continuous']
         self.action_type = action_type
@@ -547,6 +549,7 @@ class AllocationBandit(gym.Env):
             warm_up=self.warm_up_eps,
             years=self.years,
             farm_dict=dict_fields,
+            reward=self.field_reward
         )
 
         # Do some warm up episodes
