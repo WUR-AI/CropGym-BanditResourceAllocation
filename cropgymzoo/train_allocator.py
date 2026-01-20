@@ -98,7 +98,9 @@ def train_allocator_for_farm(args):
     print(f"Training Farm {region}_{farm_id}!")
     print(f"Using {args.model_dir} policy!")
 
-    training_years = list(range(2000, 2020))
+    # training_years = list(range(2000, 2020))
+
+    years = list(range(2020 - args.years, 2020))
 
     log_folder_name = f"Bandit_{args.model_dir}_{region}_{farm_id}_{datetime.datetime.now():%m%d}"
     # initialize comet if using
@@ -110,11 +112,12 @@ def train_allocator_for_farm(args):
         comet_experiment.add_tag(f"{args.model_dir}")
 
     env = AllocationBandit(
-        warm_up_eps=2,
+        warm_up_eps=len(years),
         args=args,
         seed=args.seed,
         flat_context=True,
-        years=training_years,
+        field_reward='NSU',
+        years=years,
         region=region,
         farm_id=farm_id,
         render=render,
@@ -169,10 +172,13 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
     elite_enabled = getattr(args, "elite_enabled", False)
     elite_neighbors = int(getattr(args, "elite_neighbors", 64))
     elite_keep_max = int(getattr(args, "elite_keep_max", 512))
+    elite_top_k = int(getattr(args, "elite_top_k", 10))
 
+    # For each scenario, keep up to top-K elite centers.
+    # Each elite stores: reward, key, and its local candidate cloud (center + neighbors).
     elite = {
-        "full": {"best_reward": -float("inf"), "cands": None},
-        "reduced": {"best_reward": -float("inf"), "cands": None},
+        "full": {"items": [], "cands": None},
+        "reduced": {"items": [], "cands": None},
     }
 
     def _unique_rows_torch(X: torch.Tensor) -> torch.Tensor:
@@ -181,31 +187,86 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
             return X
         return torch.unique(X, dim=0)
 
+    def _center_key(x: torch.Tensor) -> tuple:
+        # Stable key for comparing centers across steps
+        # (round to avoid tiny float differences)
+        arr = x.detach().cpu().numpy().astype(np.float64)
+        return tuple(np.round(arr, 6).tolist())
+
+    def _rebuild_elite_cands(scenario: str):
+        """Rebuild the aggregated elite candidate tensor for fast injection."""
+        if not elite_enabled:
+            elite[scenario]["cands"] = None
+            return
+        items = elite[scenario]["items"]
+        if not items:
+            elite[scenario]["cands"] = None
+            return
+        all_c = torch.vstack([it["cands"] for it in items])
+        all_c = _unique_rows_torch(all_c)
+        if all_c.shape[0] > elite_keep_max:
+            all_c = all_c[:elite_keep_max]
+        elite[scenario]["cands"] = all_c
+
     def _update_elite(env, scenario: str, x_t: torch.Tensor, reward_raw: float):
+        """Maintain a top-K set of elite centers for the scenario."""
         if not elite_enabled:
             return
-        if reward_raw <= elite[scenario]["best_reward"]:
+
+        key = _center_key(x_t)
+        items = elite[scenario]["items"]
+
+        # If this exact center already exists, only update if reward improved
+        for it in items:
+            if it["key"] == key:
+                if reward_raw > it["reward"]:
+                    it["reward"] = float(reward_raw)
+
+                    # refresh its neighbor cloud
+                    center = x_t.detach().cpu().numpy().reshape(1, -1)
+                    neigh_np = env.sample_neighbors(
+                        center=center.squeeze(0),
+                        n_neighbors=elite_neighbors,
+                        reduced=(scenario == "reduced"),
+                    )
+                    cand_np = np.vstack([center, neigh_np]).astype(np.float32)
+                    it["cands"] = _unique_rows_torch(torch.from_numpy(cand_np))
+
+                    _rebuild_elite_cands(scenario)
+                return
+
+        # Decide whether to insert new elite center
+        if len(items) < elite_top_k:
+            should_insert = True
+        else:
+            worst = min(items, key=lambda z: z["reward"])
+            should_insert = reward_raw > worst["reward"]
+
+        if not should_insert:
             return
 
-        elite[scenario]["best_reward"] = float(reward_raw)
-
+        # Build candidate cloud for this new elite center
         center = x_t.detach().cpu().numpy().reshape(1, -1)
         neigh_np = env.sample_neighbors(
             center=center.squeeze(0),
             n_neighbors=elite_neighbors,
             reduced=(scenario == "reduced"),
         )
-
-        # include center explicitly + neighbors
         cand_np = np.vstack([center, neigh_np]).astype(np.float32)
-        cand = torch.from_numpy(cand_np)
+        cand = _unique_rows_torch(torch.from_numpy(cand_np))
 
-        # unique + cap
-        cand = _unique_rows_torch(cand)
-        if cand.shape[0] > elite_keep_max:
-            cand = cand[:elite_keep_max]
+        items.append({
+            "reward": float(reward_raw),
+            "key": key,
+            "cands": cand,
+        })
 
-        elite[scenario]["cands"] = cand
+        # Keep only top-K by reward
+        items.sort(key=lambda z: z["reward"], reverse=True)
+        del items[elite_top_k:]
+
+        # Rebuild aggregated candidates used for injection
+        _rebuild_elite_cands(scenario)
 
     def _inject_elite(scenario: str, Xc: torch.Tensor) -> torch.Tensor:
         if not elite_enabled:
@@ -233,8 +294,8 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
             comet_experiment.log_metric("episode/year", int(env_info['year']))
 
         # normalize
-        rms.update(theta_t)
-        theta_t = rms.norm(theta_t)
+        # rms.update(theta_t)
+        # theta_t = rms.norm(theta_t)
 
         # convert to numpy
         theta_t = torch.from_numpy(theta_t)
@@ -312,7 +373,7 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
             )
         bandit.update(theta_t, x_t, y_t)
 
-        test_per_round = 5
+        test_per_round = args.eval_steps
 
         # eval the allocator after rounds
         if t % test_per_round == 0:
@@ -391,7 +452,7 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
         farm_name = f"{region}_{farm_id}" if region is not None else None
 
         # save the model iteratively
-        if t % 5 == 0:
+        if t % test_per_round == 0:
             file_dir = bandit.save(
                 seed=args.seed,
                 t=t,
