@@ -119,9 +119,9 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
     # modified/lowered by 5kg/ha to match RL agent actions
     CROP_SOIL_MAX = {
-        "winterwheat": {'clay': 240, 'sand': 160, 'silt': 190, 'peat': 160},
-        "sugarbeet": {'clay': 150, 'sand': 140, 'silt': 110, 'peat': 140},
-        "potato": {'clay': 270, 'sand': 260, 'silt': 200, 'peat': 270},
+        "winterwheat": {'clay': 250, 'sand': 190, 'silt': 190, 'peat': 160},
+        "sugarbeet": {'clay': 150, 'sand': 150, 'silt': 150, 'peat': 140},
+        "potato": {'clay': 280, 'sand': 260, 'silt': 210, 'peat': 270},
         "barley": {'clay': 80, 'sand': 80, 'silt': 80, 'peat': 80},
         "seed_onion": {'clay': 170, 'sand': 120, 'silt': 120, 'peat': 120},
         'rapeseed': {'clay': 200, 'sand': 190, 'silt': 150, 'peat': 190},
@@ -504,6 +504,53 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
     def make_special_action_space(self):
         self.action_space = gym.spaces.Discrete(5)
         self.special_action_space = True
+
+    def reconfigure(
+            self,
+            *,
+            crop: str,
+            year: int,
+            location: tuple[float, float],
+            area: float,
+            soil_type: str,
+    ):
+        """
+        Keep ParcelEnv instance alive but rebuild the underlying PCSE Engine
+        for a new crop/year/location/soil config.
+        """
+
+        # Update metadata
+        self.crop = crop
+        self.year = int(year)
+        self.location = tuple(location)
+        self.area = float(area)
+        self.soil_type = soil_type
+
+        # Update max budget if it depends on crop/soil
+        self.max_budget_n = self.CROP_SOIL_MAX[self.crop][self.soil_type]
+        self.budget_n = min(self.budget_n, self.max_budget_n)
+        self.budget_left = min(self.budget_left, self.max_budget_n)
+
+        # Rebuild configs (these should NOT force reload yaml every time)
+        crop_parameters, site_parameters, soil_parameters = self._init_configs()
+
+        # Replace PCSE parameter objects
+        self._crop_params = crop_parameters
+        self._site_params = site_parameters
+        self._soil_params = soil_parameters
+
+        # Update agromanagement attributes
+        if getattr(self, "crop_info", None):
+            self._agro_management = self.agmt.update_attributes(**self.crop_info[self.crop])
+
+        self._model = None
+
+        # Rebuild model with options for year
+        self._model = self._init_pcse_model(options={"year": self.year})
+
+        # Reset your internal env bookkeeping (VERY IMPORTANT)
+        self._init_action_variables()
+        self._init_infos()
 
 
     '''
@@ -991,7 +1038,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.crop_price = self._get_crop_price()
 
 
-    def _generate_realistic_n(self, random: bool=True, len_soil: int | None = None) -> tuple[list, list]:
+    def _generate_realistic_n(self, random: bool=False, len_soil: int | None = None) -> tuple[list, list]:
         """ method to overwrite a random N initial condition for every call of reset()
             Implemented based on discussions with Herman Berghuijs, for NL conditions
         """
@@ -1348,7 +1395,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
     '''
 
     def _init_configs(self):
-        crop_parameters = YAMLCropDataProvider(fpath=_CROPS_PATH, force_reload=True)
+        crop_parameters = YAMLCropDataProvider(fpath=_CROPS_PATH, force_reload=False)
 
         with open(os.path.join(_SOILGRIDS_PATH, f'soil_{self.location[1]}_{self.location[0]}.yaml'), 'r') as f:
             soil_parameters = yaml.safe_load(f)
@@ -1365,7 +1412,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         )
 
         site_parameters = WOFOST81SiteDataProvider_SNOMIN(
-            WAV=30,
+            WAV=40,
             CO2=self.carbon_dioxide_level,
             # default init; need to change?
             NH4I=nh4i,

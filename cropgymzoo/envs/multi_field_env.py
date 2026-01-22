@@ -358,23 +358,39 @@ class MultiFieldEnv(AECEnv, EzPickle):
         print(f'Allocated budget reductions of {allocations}')
 
     def set_new_fields(self, farm_dict: dict, year: int = None):
+        # Avoid piling up ParcelEnv instances when rotations/scenarios are reloaded.
+        # Close and drop old env objects before allocating new ones.
+        # if getattr(self, "fields", None):
+        #     for _old_env in list(self.fields.values()):
+        #         _old_env.close()
+        #     self.fields = {}
+
         for key, field in farm_dict.items():
             soil_type = choose_soil_type(crop=field['crop'], location=(field['soil_lat'], field['soil_lon']))
-            self.fields[key] = ParcelEnv(
-                crop_features=get_wofost_default_crop_features(),
-                weather_features=get_default_weather_features(),
-                action_features=get_default_action_features(),
-                location=(field['soil_lat'], field['soil_lon']),
-                crop=field['crop'],
-                year=self.year if year is None else year,
-                name=key,
-                area=field['area'],
-                reward=self.reward_code,
-                original=True,
-                training=False,
-                flatten_obs=True,
-                type=soil_type,
-            )
+            if key in self.fields:
+                self.fields[key].unwrapped.reconfigure(
+                    crop=field["crop"],
+                    year=self.year if year is None else year,
+                    location=(field["soil_lat"], field["soil_lon"]),
+                    area=field["area"],
+                    soil_type=soil_type,
+                )
+            else:
+                self.fields[key] = ParcelEnv(
+                    crop_features=get_wofost_default_crop_features(),
+                    weather_features=get_default_weather_features(),
+                    action_features=get_default_action_features(),
+                    location=(field['soil_lat'], field['soil_lon']),
+                    crop=field['crop'],
+                    year=self.year if year is None else year,
+                    name=key,
+                    area=field['area'],
+                    reward=self.reward_code,
+                    original=True,
+                    training=False,
+                    flatten_obs=True,
+                    type=soil_type,
+                )
         print("Scenario fields initialized!")
 
     def set_curriculum_stage(self, stage: int):
@@ -466,8 +482,11 @@ class MultiFieldEnv(AECEnv, EzPickle):
     def get_initial_nh4(self):
         return {a: self.fields[a].unwrapped.infos['NH4'][0] for a in self.possible_agents}
 
-    def get_initial_n(self):
-        return {a: self.fields[a].unwrapped.infos['NAVAIL'][0] for a in self.possible_agents}
+    def get_initial_n(self, use_navail = False):
+        if use_navail:
+            return {a: self.fields[a].unwrapped.infos['NAVAIL'][0] for a in self.possible_agents}
+        else:
+            return {a: self.fields[a].unwrapped.infos['NO3'][0] + self.fields[a].unwrapped.infos['NH4'][0] for a in self.possible_agents}
 
     def get_cumulative_reward(self):
         return np.sum([np.cumsum(self.fields[a].unwrapped.infos['Reward'])[-1] for a in self.possible_agents])
@@ -725,7 +744,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
 
         return fert / 10
 
-    def rule_of_thumb(self, agent_name, use_dvs=False):
+    def rule_of_thumb(self, agent_name, use_dvs=True):
         """Simple farmer rule-based fertilization schedule based on crop + soil."""
         crop = self.get_per_field_crop_name()[agent_name]
         soil = self.get_per_field_soil_type()[agent_name]
