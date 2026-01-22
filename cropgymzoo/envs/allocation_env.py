@@ -10,7 +10,7 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 
-from cropgymzoo.utils.agent_helpers import _make_super_arms, _make_base_arms, _make_topk_super_arms
+from cropgymzoo.utils.agent_helpers import _make_base_arms, _make_topk_super_arms
 
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 from cropgymzoo.utils.defaults import get_default_years
@@ -32,7 +32,7 @@ class AllocationBandit(gym.Env):
 
     def __init__(
             self,
-            delta_kg: float = 20.0,
+            delta_kg: float = 5.0,
             warm_up_eps: int = 10,
             cap: float = 1.0,
             years: list = get_default_years(),
@@ -65,6 +65,9 @@ class AllocationBandit(gym.Env):
         self.saved_model = None
         self.original_saved_model = None
 
+        self._elite_center_action = None
+        self._last_action = None
+
         # The MARL env
         self._init_envs(args, warm_up_eps=warm_up_eps)
 
@@ -72,7 +75,7 @@ class AllocationBandit(gym.Env):
         self._init_meta_info()
 
         # init spaces
-        self.bins = float(delta_kg) if len(self.farm.possible_agents) < 8 else 60.0
+        self.bins = float(delta_kg)
         self._init_spaces()
 
         self._construct_info()
@@ -99,6 +102,11 @@ class AllocationBandit(gym.Env):
         if isinstance(action, torch.Tensor):
             action = action.detach().cpu().numpy()
 
+        try:
+            self._last_action = np.asarray(action, dtype=np.float32).reshape(-1)
+        except Exception:
+            self._last_action = None
+
         action = np.asarray(action, dtype=np.float32)
 
         # check if action is valid
@@ -121,7 +129,7 @@ class AllocationBandit(gym.Env):
 
     def _get_reward(self):
         separate_nsurp = [self.infos['AgentInfos'][agent]['Nsurp'][-1] for agent in self.parcel_meta_infos.keys()]
-        separate_reward = [Rewards.ContainerNUE.nsurplus_score(n) for n in separate_nsurp]
+        separate_reward = [Rewards.ContainerNUE.nsurplus_score(n, low=15.0, high=40.0, max_dev=40) for n in separate_nsurp]
 
         n_arms = len(separate_reward)
         weighted_reward = [n / n_arms for n in separate_reward]
@@ -138,6 +146,7 @@ class AllocationBandit(gym.Env):
             "CropCode",
             "FertilizerPrice",
             "Area",
+            "MaxBudget",
             "EarlySeasonPrecipitation",
             "EarlySeasonTemperatureMin",
             # "EarlySeasonTemperatureMax",
@@ -147,12 +156,12 @@ class AllocationBandit(gym.Env):
             # "HistoricalProfit",
             # "HistoricalYield",
             # "HistoricalFertilizerUse",
-            "HistoricalBudget",
-            "HistoricalBudgetLeft",
+            # "HistoricalBudget",
+            # "HistoricalBudgetLeft",
             # "HistoricalNUE",
-            "HistoricalNsurplus",
-            "HistoricalPrecipitation",
-            "HistoricalTemperatureMin",
+            # "HistoricalNsurplus",
+            # "HistoricalPrecipitation",
+            # "HistoricalTemperatureMin",
             # "HistoricalTemperature",
             # "HistoricalTemperatureMax",
             # "HistoricalIrradiation",
@@ -174,6 +183,9 @@ class AllocationBandit(gym.Env):
 
         if key == "Area":
             return [self.farm.get_per_field_area()[a] for a in self.agents_order]
+
+        if key == "MaxBudget":
+            return self._get_max_budgets()
 
         # --- early season features ---
         if key == "EarlySeasonPrecipitation":
@@ -273,6 +285,11 @@ class AllocationBandit(gym.Env):
 
     def get_rotation_year(self, year):
         assert year in [2020, 2021, 2022, 2023, 2024]
+
+        # Avoid rebuilding all ParcelEnv objects if we are already on this rotation year.
+        if getattr(self, "year", None) == year and getattr(self.farm, "year", None) == year and getattr(self.farm, "fields", None):
+            return
+
         with open(os.path.join(_SCENARIO_PATH, f"{self.region}", f"{year}", f"farmer_{self.farm_id}.yaml"), 'r') as f:
             dict_fields = yaml.safe_load(f)
 
@@ -364,6 +381,12 @@ class AllocationBandit(gym.Env):
             out.append(float(round(np.mean(vals), 3)))
         return out
 
+    def set_elite_center_action(self, action):
+        if action is None:
+            self._elite_center_action = None
+            return
+        self._elite_center_action = np.asarray(action, dtype=np.float32).reshape(-1)
+
     def add_stats_to_context(self, info):
         self.warm_up_infos.append(info)
 
@@ -404,6 +427,148 @@ class AllocationBandit(gym.Env):
             candidates = self._apply_reduced_constraint(candidates)
 
         return candidates
+
+    def sample_crop_grid_super_arms(
+        self,
+        n_candidates: int,
+        rng: np.random.RandomState | None = None,
+        reduced: bool = False,
+        n_steps: int = 5,
+        include_center: bool = True,
+        max_cartesian: int = 200_000,
+        unique: bool = True,
+    ) -> np.ndarray:
+        """Grid/permutation sampler around crop-typical centers.
+
+        For each field i, we build a small discrete set of values around a
+        crop-typical center using the env bins.
+
+        Example (bins=0.5):
+            center=0.0 -> {0.0, 0.5, 1.0, 1.5, 2.0, 2.5}
+
+        Then we form candidates by drawing from the cartesian product of these
+        per-field option sets. If the full cartesian is small, we can enumerate it.
+        Otherwise, we sample random permutations efficiently.
+
+        Parameters
+        ----------
+        n_candidates : int
+            How many super-arms to return.
+        n_steps : int
+            Number of +bin steps to include beyond the center.
+        max_cartesian : int
+            If total cartesian size <= max_cartesian, enumerate all combos and
+            then sample from them. Otherwise, sample randomly from the product.
+        unique : bool
+            If True, remove duplicates from the returned candidate matrix.
+        """
+        if rng is None:
+            rng = self.rng
+
+        n_fields = self.n_fields
+        agents = self.agents_order
+
+        # crop names per field (stable and cheap)
+        crop_names = [self.farm.get_per_field_crop_name()[a] for a in agents]
+
+        # Build per-field option sets around the *actual discrete center action*
+        options_per_field: list[np.ndarray] = []
+
+        for i, ag in enumerate(agents):
+            vals = np.asarray(self.base_arms[ag], dtype=np.float32)
+
+            # --- choose center from an actual action value ---
+            # priority: elite -> last_action -> random
+            if self._elite_center_action is not None and i < len(self._elite_center_action):
+                center = float(self._elite_center_action[i])
+            # elif self._last_action is not None and i < len(self._last_action):
+            #     center = float(self._last_action[i])
+            else:
+                center = self._typical_reduction(crop_names[i])
+
+            # center must be a valid discrete value; find its index
+            idx_center = int(np.argmin(np.abs(vals - center)))
+
+            # --- neighbors by stepping indices in the discrete base arms ---
+            idxs = []
+            if include_center:
+                idxs.append(idx_center)
+
+            for k in range(1, n_steps + 1):
+                idxs.append(idx_center + k)
+                idxs.append(idx_center - k)
+
+            idxs = np.asarray(idxs, dtype=np.int32)
+            idxs = np.clip(idxs, 0, len(vals) - 1)
+
+            snapped = vals[idxs]
+
+            # Deduplicate and sort
+            snapped = np.unique(snapped)
+            snapped.sort()
+
+            options_per_field.append(snapped)
+
+        # Determine cartesian size
+        sizes = [len(o) for o in options_per_field]
+        total_cart = int(np.prod(sizes)) if sizes else 0
+
+        # ---- Candidate generation ----
+        if total_cart > 0 and total_cart <= max_cartesian:
+            # enumerate all combos (safe because total_cart is small)
+            # build an index grid using np.meshgrid, then stack
+            grids = np.meshgrid(*[np.arange(s, dtype=np.int32) for s in sizes], indexing="ij")
+            idx_mat = np.stack([g.reshape(-1) for g in grids], axis=1)  # (total_cart, n_fields)
+
+            # map indices -> values
+            all_cands = np.empty((idx_mat.shape[0], n_fields), dtype=np.float32)
+            for i in range(n_fields):
+                all_cands[:, i] = options_per_field[i][idx_mat[:, i]]
+
+            # sample n_candidates from full set
+            if all_cands.shape[0] > n_candidates:
+                sel = rng.choice(all_cands.shape[0], size=n_candidates, replace=False)
+                candidates = all_cands[sel]
+            else:
+                candidates = all_cands
+        else:
+            # large product -> random permutations from per-field option sets
+            candidates = np.empty((n_candidates, n_fields), dtype=np.float32)
+            for k in range(n_candidates):
+                vec = np.empty((n_fields,), dtype=np.float32)
+                for i in range(n_fields):
+                    vec[i] = rng.choice(options_per_field[i])
+                candidates[k] = vec
+
+        # Optionally enforce reduced scenario
+        if reduced:
+            candidates = self._apply_reduced_constraint(candidates)
+
+        # Deduplicate candidates if requested
+        if unique and candidates.shape[0] > 0:
+            candidates = np.unique(candidates, axis=0)
+
+        return candidates
+
+    @staticmethod
+    def _typical_reduction(name: str) -> float:
+        """Return a typical REDUCTION fraction in [0,1] of max budget.
+
+        IMPORTANT: In this allocator env, an action is a *reduction* (kg N/ha) per field.
+        Smaller reduction => more allocated N.
+
+        Heuristic defaults (tune later if you want):
+          - potato:      low reduction (high N demand)
+          - winterwheat: medium reduction
+          - sugarbeet:   higher reduction (lower N demand)
+        """
+        name = str(name).lower()
+        if "potato" in name:
+            return 3.0
+        if "wheat" in name:
+            return 1.0
+        if "sugar" in name or "beet" in name:
+            return 0.0
 
     def _apply_reduced_constraint(self, arms: np.ndarray) -> np.ndarray:
         """
