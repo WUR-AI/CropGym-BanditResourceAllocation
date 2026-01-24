@@ -160,11 +160,11 @@ class AllocationBandit(gym.Env):
             # "HistoricalBudgetLeft",
             # "HistoricalNUE",
             # "HistoricalNsurplus",
-            # "HistoricalPrecipitation",
-            # "HistoricalTemperatureMin",
+            "HistoricalPrecipitation",
+            "HistoricalTemperatureMin",
             # "HistoricalTemperature",
             # "HistoricalTemperatureMax",
-            # "HistoricalIrradiation",
+            "HistoricalIrradiation",
         ]
 
     def _context_value(self, key: str):
@@ -668,13 +668,23 @@ class AllocationBandit(gym.Env):
 
         return neighbors
 
+    def filter_historical_info(self, agent_info):
+        agents = getattr(self, "agents_order", list(agent_info.keys()))
+        for agent in agents:
+            agent_info[agent] = {
+                k: v
+                for k, v in agent_info[agent].items()
+                if k in ["RAIN", "TMIN", "IRRAD"]
+            }
+        return agent_info
+
     '''
     Init helpers
     '''
 
     def _warm_up(self, warm_up_year, budget_levels=4):
         # assert all([y < 2020 for y in warm_up_years])
-        warm_up_infos: deque[dict] = deque(maxlen=50)
+        warm_up_infos: deque[dict] = deque(maxlen=100)
         options = {}
         budget_reductions = [np.zeros(1)]
         if budget_levels > 1:
@@ -693,6 +703,7 @@ class AllocationBandit(gym.Env):
                     self.farm.step(None)
                 else:
                     self.farm.step(action)
+            iter_info = self.filter_historical_info(iter_info)
             warm_up_infos.append(iter_info)
             print(self.farm)
         print('Finished warm up...')
