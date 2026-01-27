@@ -528,8 +528,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         # Update max budget if it depends on crop/soil
         self.max_budget_n = self.CROP_SOIL_MAX[self.crop][self.soil_type]
-        self.budget_n = min(self.budget_n, self.max_budget_n)
-        self.budget_left = min(self.budget_left, self.max_budget_n)
+        self.budget_n = self.max_budget_n
+        self.budget_left = self.max_budget_n
 
         # Rebuild configs (these should NOT force reload yaml every time)
         crop_parameters, site_parameters, soil_parameters = self._init_configs()
