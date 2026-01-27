@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Dict, Tuple, List, Hashable
 
 from cropgymzoo.utils.scenario_utils import model_picker
+from cropgymzoo.fit_nue_response import solve_lp_for_env
 
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -49,6 +50,40 @@ def _get_scenario_code(scenario):
         return "max"
 
 
+def farm_region_mapper(region: str, farmer_id: int) -> int:
+    """
+    Maps (region, farmer_id) back to global farm index (0–52).
+
+    Regions:
+        Gelderland: farmer_id 0–11  -> global 0–11
+        Groningen:  farmer_id 0–12  -> global 12–24
+        Zeeland:    farmer_id 0–26  -> global 25–51
+
+    Returns:
+        global_farm_index: int
+    """
+
+    region = region.lower()
+
+    if region == "gelderland":
+        if not (0 <= farmer_id < 12):
+            raise ValueError("Gelderland farmer_id must be in range 0–11")
+        return farmer_id
+
+    elif region == "groningen":
+        if not (0 <= farmer_id < 13):
+            raise ValueError("Groningen farmer_id must be in range 0–12")
+        return 12 + farmer_id
+
+    elif region == "zeeland":
+        if not (0 <= farmer_id < 27):
+            raise ValueError("Zeeland farmer_id must be in range 0–26")
+        return 12 + 13 + farmer_id
+
+    else:
+        raise ValueError(f"Unknown region: {region}")
+
+
 def run_region_year(
         region: str,
         year: int,
@@ -59,6 +94,8 @@ def run_region_year(
         render: bool = False,
 ):
     result_dict = {}
+
+    env = None
 
     _REGION_PATH = os.path.join(_SCENARIO_PATH, region)
 
@@ -92,12 +129,16 @@ def run_region_year(
         with open(_FARMER_PATH, 'r') as f:
             dict_fields = yaml.load(f, Loader=yaml.SafeLoader)
 
-        env = MultiFieldEnv(
-            years=[year],
-            training=False,
-            render=render,
-            farm_dict=dict_fields,
-        )
+        if env is None:
+            env = MultiFieldEnv(
+                years=[year],
+                training=False,
+                render=render,
+                farm_dict=dict_fields,
+                reward='NSU'
+            )
+        else:
+            env.reconfigure_farm(dict_fields, year=year)
 
         if "reduced" in scenario and allocator is None:
             env.allocate_bandit_budgets([10 for _ in env.possible_agents])
@@ -116,26 +157,18 @@ def run_region_year(
             # Pick the correct LP file (normal vs reduced)
             lp_suffix = "reduced_" if allocator == "LP_low" else ""
             lp_name = f"lp_results_{lp_suffix}{agent}.pkl"
+            global_farm_id = f"farm{farm_region_mapper(region, i)}"
 
-            with open(os.path.join(_DEFAULT_RESULTSDIR, "LP", lp_name), "rb") as f:
+            with open(os.path.join(_DEFAULT_RESULTSDIR, "LP", "nue_response", f"nue_response_{global_farm_id}.pkl"), "rb") as f:
                 lp = pickle.load(f)
 
-            alloc_info = lp["lp_allocations"][f"{region}_farmer_{i}"][lp_year]
+            reductions_vec, info = solve_lp_for_env(
+                env,
+                responses=lp['responses'],  # loaded from pickle
+                farm_id=global_farm_id,
+            )
 
-            # LP allocations are stored as kg/ha
-            alloc_vec = alloc_info.get("N_opt_ha", alloc_info.get("N_per_ha"))
-            alloc_fields = alloc_info["field_ids"]
-
-            assert len(alloc_vec) == len(env.possible_agents) == len(alloc_fields)
-
-            alloc_reductions = np.asarray([(env.get_per_parcel_max_budget(ag) - alloc_vec[i])/10 for i, ag in enumerate(env.possible_agents)])
-
-            env.allocate_bandit_budgets(alloc_reductions)
-
-            # for alloc, field_name in zip(alloc_vec, alloc_fields):
-            #     alloc = float(alloc)
-            #     env.set_per_parcel_budget(field_name, alloc)
-            #     assert env.get_per_parcel_budget_left(field_name) <= alloc
+            env.allocate_bandit_budgets(reductions_vec)
 
 
         if "MLP" in agent:
@@ -171,12 +204,17 @@ def run_region_year(
             print(f"No results for farmer_{i} at {region} in year {year}")
 
         del runner
-        del env
 
         with open(out_path, "wb") as f:
             pickle.dump(info, f)
 
         # result_dict[f"farmer_{i}"] = info
+        # cleanup persistent env for this (region, year) worker
+        try:
+            if env is not None:
+                env.close()
+        except Exception:
+            pass
 
     return result_dict
 
