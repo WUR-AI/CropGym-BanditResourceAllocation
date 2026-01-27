@@ -16,9 +16,98 @@ from cropgymzoo.agents.nn_agp import NNAGPBandit
 from cropgymzoo.utils.agent_helpers import min_max_normalize
 from cropgymzoo.utils.callbacks import _setup_bandit_comet, log_selection_info, log_model_histograms, fig_to_chw_uint8
 from cropgymzoo.envs.allocation_env import AllocationBandit
-from cropgymzoo import _DEFAULT_LOGDIR
-from tianshou.utils.statistics import RunningMeanStd
+from cropgymzoo import _DEFAULT_LOGDIR, _DEFAULT_RESULTSDIR
 from cropgymzoo.utils.plotters import plot_results
+
+
+class BanditNormalizer:
+    def __init__(
+        self,
+        env,
+        rng,
+        seed: int | None = None,
+        clip: float = 5.0,
+        n_calib: int = 100,
+        cache_dir: str = "theta_norm_cache",
+        cache_tag: str | None = None,
+        use_cache: bool = True,
+    ):
+        self.theta_clip = float(clip)
+
+        years_len = int(len(env.years))
+        d_theta = int(env.observation_space.shape[0])
+
+        # cache file name
+        tag = "" if cache_tag is None else f"_{cache_tag}"
+        os.makedirs(os.path.join(_DEFAULT_RESULTSDIR, cache_dir), exist_ok=True)
+        cache_path = os.path.join(
+            _DEFAULT_RESULTSDIR,
+            cache_dir,
+            f"theta_norm_n_years_{years_len}{tag}.pkl"
+        )
+
+        # -------- Try loading cache --------
+        if use_cache and os.path.exists(cache_path):
+            try:
+                with open(cache_path, "rb") as f:
+                    blob = pickle.load(f)
+
+                ok = True
+                ok &= int(blob.get("years_len", -1)) == years_len
+                ok &= ("theta_mean" in blob) and ("theta_std" in blob)
+
+                if ok:
+                    self.theta_mean = np.asarray(blob["theta_mean"], dtype=np.float32)
+                    self.theta_std = np.asarray(blob["theta_std"], dtype=np.float32)
+                    if "theta_clip" in blob:
+                        self.theta_clip = float(blob["theta_clip"])
+                    assert len(self.theta_mean) == d_theta, "Theta is not the same length as saved run; rerunning the Normalizer!"
+                    print(f"[BanditNormalizer] Loaded cache: {cache_path}")
+                    return
+                else:
+                    print(f"[BanditNormalizer] Cache incompatible -> recomputing: {cache_path}")
+
+            except Exception as e:
+                print(f"[BanditNormalizer] Failed to load cache -> recomputing. Reason: {e}")
+
+        # -------- Compute fresh stats --------
+        print("[BanditNormalizer] Computing fixed theta normalization stats...")
+
+        theta_buf = []
+        n_calib = int(n_calib)
+
+        for i in range(n_calib):
+            # keep this cheap + representative
+            print(f"reset number {i+1}")
+            env.get_rotation_year(rng.choice([2020, 2021, 2022, 2023, 2024]))
+            theta_np, _ = env.reset(
+                options={"year": rng.choice(env.years)},
+                seed=seed or 0,
+            )
+            theta_buf.append(theta_np.astype(np.float32))
+
+        theta_stack = np.stack(theta_buf, axis=0)
+        self.theta_mean = theta_stack.mean(axis=0).astype(np.float32)
+        theta_std = theta_stack.std(axis=0).astype(np.float32)
+        self.theta_std = np.maximum(theta_std, 1e-6).astype(np.float32)
+
+        print("[BanditNormalizer] Done computing stats.")
+
+        # -------- Save cache --------
+        if use_cache:
+            blob = {
+                "years_len": years_len,
+                "theta_mean": self.theta_mean,
+                "theta_std": self.theta_std,
+                "theta_clip": self.theta_clip,
+            }
+            with open(cache_path, "wb") as f:
+                pickle.dump(blob, f)
+            print(f"[BanditNormalizer] Saved cache: {cache_path}")
+
+    def norm_theta(self, theta_np: np.ndarray) -> np.ndarray:
+        z = (theta_np.astype(np.float32) - self.theta_mean) / self.theta_std
+        return np.clip(z, -self.theta_clip, self.theta_clip)
 
 
 def farm_int_mapper(x: int):
@@ -159,17 +248,27 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
     # action candidates for each round
     num_candidates = args.action_candidate_length
 
-    # initialize running mean
-    rms = RunningMeanStd()
+    rms = BanditNormalizer(env, rng)
 
     test_step = 0
 
     method = args.method
 
+    # ---------------- Model-informed candidate sampler ----------------
+    model_informed = True
+    model_informed_ratio = 0.8  # fraction of candidates coming from learned sampler
+    model_informed_topk = 16512  # use top-k UCB candidates to update sampler
+    model_informed_alpha = 0.3  # EMA update speed
+    model_informed_eps = 0.20  # exploration mixing with uniform
+
+    # init env sampler once
+    if model_informed and hasattr(env, "init_model_sampler"):
+        env.init_model_sampler(eps=model_informed_eps, alpha=model_informed_alpha)
+
     # ---------------- Elite candidate memory ----------------
     # Keep the best action seen so far (by *raw* env reward) and its neighbors,
     # and always inject them into later candidate sets.
-    elite_enabled = getattr(args, "elite_enabled", False)
+    elite_enabled = getattr(args, "elite_enabled", True)
     elite_neighbors = int(getattr(args, "elite_neighbors", 64))
     elite_keep_max = int(getattr(args, "elite_keep_max", 512))
     elite_top_k = int(getattr(args, "elite_top_k", 10))
@@ -182,10 +281,43 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
     }
 
     def _unique_rows_torch(X: torch.Tensor) -> torch.Tensor:
-        # torch.unique(dim=0) exists in modern torch; keep it simple
+        """Deduplicate rows (small tensors only).
+
+        NOTE: This is intentionally kept for SMALL tensors (like an elite cloud),
+        but should NOT be used on the full candidate set each round.
+        """
         if X is None or X.numel() == 0:
             return X
         return torch.unique(X, dim=0)
+
+    def _filter_new_elite_rows(elite_X: torch.Tensor, Xc: torch.Tensor, decimals: int = 6) -> torch.Tensor:
+        """Return rows from elite_X that are NOT already present in Xc.
+
+        We avoid `torch.unique` on the full stacked matrix because it's expensive.
+        This function only builds a key-set from Xc once and filters elite rows.
+        """
+        if elite_X is None or elite_X.numel() == 0:
+            return elite_X
+        if Xc is None or Xc.numel() == 0:
+            return elite_X
+
+        # Build key-set for current candidates (Xc)
+        # Xc is typically ~30k rows; this is fast enough in Python.
+        Xc_np = np.round(Xc.detach().cpu().numpy().astype(np.float64), decimals)
+        Xc_keys = set(map(tuple, Xc_np.tolist()))
+
+        elite_np = np.round(elite_X.detach().cpu().numpy().astype(np.float64), decimals)
+        keep_rows = []
+        for row in elite_np:
+            key = tuple(row.tolist())
+            if key not in Xc_keys:
+                keep_rows.append(row)
+
+        if not keep_rows:
+            return elite_X[:0]
+
+        out = torch.from_numpy(np.asarray(keep_rows, dtype=np.float32))
+        return out
 
     def _center_key(x: torch.Tensor) -> tuple:
         # Stable key for comparing centers across steps
@@ -258,6 +390,7 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
         items.append({
             "reward": float(reward_raw),
             "key": key,
+            "center": x_t.detach().clone(),
             "cands": cand,
         })
 
@@ -269,14 +402,32 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
         _rebuild_elite_cands(scenario)
 
     def _inject_elite(scenario: str, Xc: torch.Tensor) -> torch.Tensor:
+        """Prepend elite candidates to the sampled set without expensive global dedup.
+
+        We only filter out elite rows that already exist in the current Xc.
+        This keeps elite injection effective while avoiding `torch.unique` over ~30k+ rows.
+        """
         if not elite_enabled:
             return Xc
+
         elite_c = elite[scenario]["cands"]
-        if elite_c is None:
+        if elite_c is None or elite_c.numel() == 0:
             return Xc
+
         elite_c = elite_c.to(dtype=Xc.dtype)
-        X = torch.vstack([elite_c, Xc])
-        return _unique_rows_torch(X)
+
+        # Filter only NEW elite rows (not already in Xc)
+        elite_new = _filter_new_elite_rows(elite_c, Xc, decimals=6)
+        if elite_new is None or elite_new.numel() == 0:
+            return Xc
+
+        # Cap how many elite rows we inject each time to avoid ballooning candidate sets
+        # (keep the most recent/top ones, which are already sorted in _rebuild_elite_cands)
+        max_inject = int(getattr(args, "elite_inject_max", 2000))
+        if elite_new.shape[0] > max_inject:
+            elite_new = elite_new[:max_inject]
+
+        return torch.vstack([elite_new.to(Xc.device), Xc])
 
     # --------------------------------------------------------
 
@@ -296,35 +447,92 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
         # normalize
         # rms.update(theta_t)
         # theta_t = rms.norm(theta_t)
+        theta_t = rms.norm_theta(theta_t)
 
-        # convert to numpy
+        # ---- candidate sampling uses numpy theta_t ----
+        # (keep theta_t as numpy here)
+
+        # ---- candidate sampling ----
+        # Crop-aware candidates: bias each field's reduction values toward crop-typical regimes.
+        # This helps the bandit learn much faster when crop identity strongly drives good actions.
+        use_crop_aware = bool(getattr(args, "crop_aware_candidates", True))
+
+        if use_crop_aware:
+            if model_informed and hasattr(env, "sample_model_informed_super_arms"):
+                n_model = int(round(model_informed_ratio * num_candidates))
+                n_crop = num_candidates - n_model
+
+                x_model = env.sample_model_informed_super_arms(
+                    n_candidates=n_model,
+                    rng=rng,
+                    reduced=False,
+                    eps=model_informed_eps,
+                )
+
+                x_crop = env.sample_crop_grid_super_arms(
+                    n_candidates=n_crop,
+                    rng=rng,
+                    reduced=False,
+                    n_steps=int(getattr(args, "crop_grid_steps", 10)),
+                    include_center=True,
+                    max_cartesian=int(getattr(args, "crop_grid_max_cartesian", 200_000)),
+                    unique=True,
+                )
+
+                # small random fallback (keeps exploration alive)
+                x_rand = env.sample_super_arms(
+                    n_candidates=256,
+                    reduced=False,
+                    rng=rng,
+                )
+
+                x_cand = np.vstack([x_model, x_crop, x_rand]).astype(np.float32)
+                x_cand = np.unique(x_cand, axis=0)  # okay at ~30k
+            else:
+                x_cand = env.sample_crop_grid_super_arms(
+                    n_candidates=num_candidates,
+                    rng=rng,
+                    reduced=False,
+                    n_steps=int(getattr(args, "crop_grid_steps", 10)),
+                    include_center=True,
+                    max_cartesian=int(getattr(args, "crop_grid_max_cartesian", 200_000)),
+                    unique=True,
+                )
+        else:
+            x_cand = env.sample_super_arms(
+                n_candidates=num_candidates,
+                reduced=False,
+                rng=rng,
+            )
+
+        # convert to torch
         theta_t = torch.from_numpy(theta_t)
-
-        x_cand = env.sample_super_arms(
-            n_candidates=num_candidates,
-            reduced=False,
-            rng=rng,
-        )
         x_cand = torch.from_numpy(x_cand.astype(np.float32))
 
         # Always inject persistent elite candidates for training scenario="full"
         x_cand = _inject_elite("full", x_cand)
 
-        # train the surrogate a bit on accumulated data
-        loss_val = bandit.train_step(steps=args.bandit_epochs, lr=args.bandit_lr)
-        n = len(bandit.y_hist)
-        loss_per_sample = loss_val / max(n, 1)
-        print(f"round {t}, loss: {loss_per_sample}")
-        if comet_experiment:
-            comet_experiment.log_metric("loss", loss_per_sample, step=t)
+        train_every = int(getattr(args, "train_every", 1))
+        if t % train_every == 0:
+            # ---- train surrogate (EXPENSIVE for exact GP because of O(n^3) Cholesky)
+            # Use fewer inner steps early and ramp up slowly.
+            base_steps = int(getattr(args, "bandit_epochs", 100))
 
-            log_model_histograms(
-                comet_experiment,
-                bandit.model,
-                step=t,
-                prefix="nn-agp/",
-                log_grads=True,
-            )
+            loss_val = bandit.train_step(steps=base_steps, lr=args.bandit_lr)
+            n = len(bandit.y_hist)
+            loss_per_sample = loss_val / max(n, 1)
+            print(f"round {t}, loss: {loss_per_sample}  (train_steps={base_steps})")
+
+            if comet_experiment:
+                comet_experiment.log_metric("loss", loss_per_sample, step=t)
+
+                log_model_histograms(
+                    comet_experiment,
+                    bandit.model,
+                    step=t,
+                    prefix="nn-agp/",
+                    log_grads=True,
+                )
 
         if not args.streaming:
             # pick by UCB (or switch to bandit.select_ts(...))
@@ -343,31 +551,45 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
             if comet_experiment:
                 comet_experiment.log_metrics(best, step=t) if best is not None else None
 
+        # ---- model-informed sampler update (Option A) ----
+        if model_informed and method == "ucb" and hasattr(env, "update_model_sampler_probs"):
+            if selection_info.ucb is not None:
+                env.update_model_sampler_probs(
+                    X_candidates=x_cand.detach().cpu().numpy(),
+                    scores=selection_info.ucb.detach().cpu().numpy(),
+                    top_k=model_informed_topk,
+                    alpha=model_informed_alpha,
+                )
+
         # run env and normalize reward
         _, reward_env, _, _, step_info = env.step(x_t)
-        normalized_reward = min_max_normalize(float(reward_env))
+        # normalized_reward = min_max_normalize(float(reward_env))
         print(f"reward: {reward_env}")
 
         # Update elite memory using *raw* reward signal
         _update_elite(env, "full", x_t, float(reward_env))
 
+        if elite_enabled and elite["full"]["items"]:
+            best_center = elite["full"]["items"][0]["center"]  # we will store this
+            env.set_elite_center_action(best_center.detach().cpu().numpy())
+
         if comet_experiment:
             comet_experiment.log_metrics(
                 {
-                    "reward/train/normalized": float(normalized_reward),
+                    # "reward/train/normalized": float(normalized_reward),
                     "reward/train/reward": float(reward_env),
                 },
                 step=t
             )
 
         # update rolling historical average
-        # env.add_stats_to_context(step_info['AgentInfos'])
+        env.add_stats_to_context(env.filter_historical_info(step_info['AgentInfos']))
 
         # observe noisy reward
-        y_t = float(normalized_reward + 0.05 * torch.randn(()))
+        y_t = float(float(reward_env) + 0.05 * torch.randn(()))
         if comet_experiment:
             comet_experiment.log_metric(
-                "reward/noisy",
+                "reward/raw",
                 float(y_t),
                 step=t
             )
@@ -384,7 +606,10 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
 
             rewards = []
 
-            scenarios = ['full', 'reduced']
+            scenarios = [
+                'full',
+                # 'reduced'
+            ]
             for scenario in scenarios:
                 info_dict = {}
                 for year in years:
@@ -401,8 +626,11 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
                         elite_candidates_np=(
                             None if elite[scenario]["cands"] is None
                             else elite[scenario]["cands"].detach().cpu().numpy()
-                        )
+                        ),
+                        crop_aware_candidates=use_crop_aware,
+                        model_informed_candidates=model_informed
                     )
+
                     # Update elite from eval too (per scenario)
                     _update_elite(env, scenario, x_eval, float(raw_reward))
                     info_dict[year] = infos
