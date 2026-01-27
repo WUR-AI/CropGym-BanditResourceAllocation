@@ -357,6 +357,81 @@ class MultiFieldEnv(AECEnv, EzPickle):
 
         print(f'Allocated budget reductions of {allocations}')
 
+    def reconfigure_farm(self, farm_dict: dict, *, year: int | None = None):
+        """
+        Reconfigure this MultiFieldEnv to represent a new farm.
+
+        This reuses ParcelEnv instances when possible (via ParcelEnv.reconfigure)
+        and closes/drops envs for fields that no longer exist.
+
+        Parameters
+        ----------
+        farm_dict:
+            Dict of field configs (same structure as in the YAML files).
+        year:
+            Optional year override for the underlying ParcelEnv instances.
+        """
+
+        # If YAML path is passed accidentally, load it
+        if isinstance(farm_dict, str):
+            import yaml
+            with open(farm_dict) as f:
+                farm_dict = yaml.load(f, Loader=yaml.SafeLoader)
+
+        # 1) Drop fields that are no longer present
+        new_keys = set(farm_dict.keys())
+        old_keys = set(getattr(self, "fields", {}).keys()) if getattr(self, "fields", None) else set()
+        to_remove = list(old_keys - new_keys)
+
+        for k in to_remove:
+            try:
+                self.fields[k].close()
+            except Exception:
+                pass
+            try:
+                del self.fields[k]
+            except Exception:
+                pass
+
+        # 2) Reconfigure/create ParcelEnv objects for new farm
+        # (this calls ParcelEnv.reconfigure() when keys already exist)
+        self.set_new_fields(farm_dict=farm_dict, year=year)
+
+        # 3) Rebuild agent bookkeeping based on the NEW field set
+        self.n_agents = len(farm_dict)
+        self.agents = list(farm_dict.keys())
+        self.possible_agents = self.agents[:]
+
+        # selector must be rebuilt because agent list changed
+        self._agent_selector = AgentSelector(self.possible_agents)
+        self.dead_step = {ag: False for ag in self.possible_agents}
+        self.agent_to_keep = None
+
+        self.current_step = {agent: 0 for agent in self.possible_agents}
+        self.current_obs = {agent: {} for agent in self.possible_agents}
+
+        # 4) Rebuild spaces (obs/action may depend on budgets/action-space)
+        self._init_spaces()
+
+        # 5) Reset episode-level tracking
+        self._init_infos()
+        self._init_farm_variables()
+
+        # 6) Recompute global budgets for the new farm
+        self.global_budget = (
+            self._get_global_max_budget()
+            if not self.random_budget
+            else self._get_global_random_budget()
+        )
+        self.global_budget_left = self.global_budget
+        self.global_allocated_budget = self.global_budget
+
+        self.total_area = np.sum([self.get_field_size(agent) for agent in self.possible_agents])
+
+        # Make selector point to a valid first agent
+        self._agent_selector.reinit(self.agents)
+        self.agent_selection = self._agent_selector.next()
+
     def set_new_fields(self, farm_dict: dict, year: int = None):
         # Avoid piling up ParcelEnv instances when rotations/scenarios are reloaded.
         # Close and drop old env objects before allocating new ones.
@@ -373,7 +448,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
                     year=self.year if year is None else year,
                     location=(field["soil_lat"], field["soil_lon"]),
                     area=field["area"],
-                    soil_type=soil_type,
+                    soil_type=field["type"],
                 )
             else:
                 self.fields[key] = ParcelEnv(
@@ -389,7 +464,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
                     original=True,
                     training=False,
                     flatten_obs=True,
-                    type=soil_type,
+                    type=field["type"],
                 )
         print("Scenario fields initialized!")
 
@@ -598,7 +673,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
                     original=True,
                     training=False,
                     flatten_obs=True,
-                    type=soil_type,
+                    type=field["type"],
                     special_action_space=self.special_action_space,
                     concise_obs=self.concise_obs,
                 )
