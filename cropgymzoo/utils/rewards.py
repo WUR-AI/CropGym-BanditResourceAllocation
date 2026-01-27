@@ -1109,7 +1109,7 @@ class Rewards:
         def calculate_reward_nsurp(self, n_fertilized, n_output, no3_depo=None, nh4_depo=None, crop_name=None):
             n_surplus = get_surplus_n(n_fertilized, n_output, no3_depo=no3_depo, nh4_depo=nh4_depo, crop_name=crop_name)
 
-            return self.nsurplus_score(n_surplus)
+            return self.nsurplus_score(n_surplus, low=15, max_dev=40)
 
         def calculate_reward_nue_simple(self, n_input, n_output, year=None, start=None, end=None):
             nue = calculate_nue(n_input, n_output, year=year, start=start, end=end)
