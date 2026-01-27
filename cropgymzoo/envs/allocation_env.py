@@ -4,6 +4,7 @@ from copy import deepcopy
 import yaml
 import torch
 import pickle
+import itertools
 from collections import deque
 
 import numpy as np
@@ -387,6 +388,134 @@ class AllocationBandit(gym.Env):
             return
         self._elite_center_action = np.asarray(action, dtype=np.float32).reshape(-1)
 
+    def init_model_sampler(
+            self,
+            eps: float = 0.10,
+            alpha: float = 0.20,
+            min_prob: float = 1e-6,
+    ):
+        """
+        Initialize adaptive per-field categorical sampling distributions.
+
+        eps:   exploration mixing with uniform distribution
+        alpha: EMA update rate toward elite-induced distribution
+        """
+        self._model_sampler_eps = float(eps)
+        self._model_sampler_alpha = float(alpha)
+        self._model_sampler_min_prob = float(min_prob)
+
+        # One categorical distribution per field/agent, aligned with base_arms[agent]
+        self._sampler_probs: dict[str, np.ndarray] = {}
+        for ag in self.agents_order:
+            vals = np.asarray(self.base_arms[ag], dtype=np.float32)
+            p = np.ones(len(vals), dtype=np.float32)
+            p = p / p.sum()
+            self._sampler_probs[ag] = p
+
+    def _ensure_model_sampler(self):
+        """Make sure sampler is initialized (safe to call each round)."""
+        if not hasattr(self, "_sampler_probs") or self._sampler_probs is None:
+            self.init_model_sampler()
+
+    def sample_model_informed_super_arms(
+            self,
+            n_candidates: int,
+            reduced: bool = False,
+            rng: np.random.RandomState | None = None,
+            eps = None,
+    ) -> np.ndarray:
+        """
+        Sample combinatorial arms using learned per-field categorical probabilities.
+
+        Samples each field independently from a categorical distribution over
+        that field's discrete base arms, optionally mixed with uniform exploration.
+        """
+        self._ensure_model_sampler()
+
+        if rng is None:
+            rng = self.rng
+
+        n_fields = self.n_fields
+        candidates = np.empty((n_candidates, n_fields), dtype=np.float32)
+        agents = self.agents_order
+
+        eps_use = self._model_sampler_eps if eps is None else float(eps)
+
+        for k in range(n_candidates):
+            for i, ag in enumerate(agents):
+                vals = np.asarray(self.base_arms[ag], dtype=np.float32)
+                p = np.asarray(self._sampler_probs[ag], dtype=np.float32)
+
+                # mix with uniform to prevent collapse
+                if eps_use > 0.0:
+                    u = np.ones_like(p, dtype=np.float32) / float(len(p))
+                    p_mix = (1.0 - eps_use) * p + eps_use * u
+                else:
+                    p_mix = p
+
+                p_mix = np.maximum(p_mix, self._model_sampler_min_prob)
+                p_mix = p_mix / p_mix.sum()
+
+                idx = rng.choice(len(vals), p=p_mix)
+                candidates[k, i] = float(vals[idx])
+
+        if reduced:
+            candidates = self._apply_reduced_constraint(candidates)
+
+        return candidates
+
+    def update_model_sampler_probs(
+            self,
+            X_candidates: np.ndarray,
+            scores: np.ndarray,
+            top_k: int = 256,
+            alpha: float = None,
+    ):
+        """
+        Update per-field categorical distributions using top-scoring candidates.
+
+        X_candidates: (M, n_fields)
+        scores:       (M,)  acquisition scores (e.g., UCB)
+        """
+        self._ensure_model_sampler()
+
+        Xc = np.asarray(X_candidates, dtype=np.float32)
+        s = np.asarray(scores, dtype=np.float32).reshape(-1)
+
+        if Xc.size == 0 or s.size == 0:
+            return
+
+        M = int(Xc.shape[0])
+        top_k = int(min(max(top_k, 1), M))
+        elite_idx = np.argsort(s)[-top_k:]
+        elite = Xc[elite_idx]  # (top_k, n_fields)
+
+        alpha_use = self._model_sampler_alpha if alpha is None else float(alpha)
+        agents = self.agents_order
+
+        for i, ag in enumerate(agents):
+            vals = np.asarray(self.base_arms[ag], dtype=np.float32)
+            counts = np.zeros(len(vals), dtype=np.float32)
+
+            # count elite occurrences (snap to closest discrete value)
+            col = elite[:, i]
+            for v in col:
+                j = int(np.argmin(np.abs(vals - float(v))))
+                counts[j] += 1.0
+
+            if counts.sum() <= 0:
+                continue
+
+            target = counts / counts.sum()
+
+            p_old = np.asarray(self._sampler_probs[ag], dtype=np.float32)
+            p_new = (1.0 - alpha_use) * p_old + alpha_use * target
+
+            p_new = np.maximum(p_new, self._model_sampler_min_prob)
+            p_new = p_new / p_new.sum()
+
+            self._sampler_probs[ag] = p_new
+
     def add_stats_to_context(self, info):
         self.warm_up_infos.append(info)
 
@@ -540,6 +669,18 @@ class AllocationBandit(gym.Env):
                     vec[i] = rng.choice(options_per_field[i])
                 candidates[k] = vec
 
+        # add several default actions to the candidates
+        vals = [0.0, 0.5]
+        default_cands = np.asarray(
+            [
+                list(x)
+                for x in itertools.product(vals, repeat=n_fields)
+                if sum(x) <= 0.5
+            ]
+        )
+
+        candidates = np.vstack([candidates, default_cands])
+
         # Optionally enforce reduced scenario
         if reduced:
             candidates = self._apply_reduced_constraint(candidates)
@@ -569,6 +710,7 @@ class AllocationBandit(gym.Env):
             return 1.0
         if "sugar" in name or "beet" in name:
             return 0.0
+        return 0.0
 
     def _apply_reduced_constraint(self, arms: np.ndarray) -> np.ndarray:
         """
