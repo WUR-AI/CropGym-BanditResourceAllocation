@@ -61,16 +61,35 @@ def reward_R2(x: torch.Tensor, theta: torch.Tensor, dim = -1, elementwise = True
         out = -torch.sqrt(inside + eps)
         return out.squeeze(dim)  # drop the feature dimension
 
+def reward_R1_paper(x: torch.Tensor, theta: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+    x = torch.as_tensor(x)
+    theta = torch.as_tensor(theta)
 
+    nx = torch.linalg.norm(x, dim=-1)        # ||x||
+    nt = torch.linalg.norm(theta, dim=-1)    # ||theta||
+
+    inner = torch.sin(nx) * (nt ** 3) * torch.exp(torch.cos(nx + nt))
+    return -torch.sqrt(torch.abs(inner) + eps)
+
+
+def reward_R2_paper(x: torch.Tensor, theta: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+    x = torch.as_tensor(x)
+    theta = torch.as_tensor(theta)
+
+    nx = torch.linalg.norm(x, dim=-1)        # ||x||
+    nt = torch.linalg.norm(theta, dim=-1)    # ||theta||
+
+    inner = torch.sin(nx) * (nx ** 3) * torch.exp(nx + torch.cos(nt))
+    return -torch.sqrt(torch.abs(inner) + eps)
 
 
 # toy environment
 def reward_fn(x, theta, r: int = 2):
     # unknown to the bandit; just for simulation
     if r == 1:
-        return reward_R1(x, theta)  # already returns a scalar tensor
+        return reward_R1_paper(x, theta)  # already returns a scalar tensor
     elif r == 2:
-        return reward_R2(x, theta)
+        return reward_R2_paper(x, theta)
     else:
         raise ValueError(f"Unknown reward function r={r}")
 
@@ -103,10 +122,11 @@ def sample_unit_ball(d, n=1):
     r = torch.rand(n, 1).pow(1/d)                       # radius ~ U[0,1]^(1/d)
     return r * x                                        # uniform in ball
 
-def run_one(d_theta, d_x, seed, T=300, noise_std=0.1, r=2):
+def run_one(d_theta, d_x, seed, T=300, noise_std=0.1, r=2, m=5):
     from cropgymzoo.agents.nn_agp import NNAGPBandit
     torch.manual_seed(seed); np.random.seed(seed)
-    bandit = NNAGPBandit(d_theta, d_x, m=5, Q=1, lr=1e-4, device=torch.device("cpu"))
+    device = torch.device("cpu")
+    bandit = NNAGPBandit(d_theta, d_x, m=m, Q=1, lr=1e-4, device=device, posterior_type="gp", coreset_size=400, coreset_mode="diverse")
 
     inst_regs = []
     avg_regs = []
@@ -114,7 +134,7 @@ def run_one(d_theta, d_x, seed, T=300, noise_std=0.1, r=2):
 
     for t in range(1, T+1):
         theta_t = torch.clamp(torch.randn(d_theta), -1, 1)
-        Xcand = torch.clamp(torch.randn(1024, d_x), -1, 1)
+        Xcand = torch.clamp(torch.randn(2000, d_x), -1, 1)
 
         # small surrogate update
         loss = bandit.train_step(steps=100)
@@ -152,10 +172,11 @@ def moving_average_full(x, window_size=10):
 
 if __name__ == "__main__":
 
-    S, T = 3, 600
+    S, T = 3, 500
     all_avg = []
     r = 2  # Reward function to test
-    if r==1:
+    m = 3
+    if r==2:
         d_theta, d_x = 3, 2
     elif r==2:
         d_theta, d_x = 15, 5
@@ -163,7 +184,7 @@ if __name__ == "__main__":
         raise ValueError(f"Unknown reward function r={r}")
     for s in range(S):
         seed = 1236 + s
-        inst, avg = run_one(d_theta, d_x, seed=seed, T=T, noise_std=0.1, r=r)
+        inst, avg = run_one(d_theta, d_x, seed=seed, T=T, noise_std=0.1, r=r, m=m)
         print(f"seed: {seed}")
         inst = moving_average_full(inst, window_size=20)
         all_avg.append(inst)
@@ -174,7 +195,7 @@ if __name__ == "__main__":
     q90 = np.quantile(all_avg, 0.95, axis=0)
 
     plt.figure()
-    plt.plot(range(1, T + 1), mean, label="NN-AGP-UCB (m=5)")
+    plt.plot(range(1, T + 1), mean, label=f"NN-AGP-UCB (m={m})")
     plt.fill_between(range(1, T + 1), q10, q90, alpha=0.2)
     plt.xlabel("Rounds")
     plt.ylabel("Average regret")
