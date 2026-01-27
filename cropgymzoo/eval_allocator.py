@@ -116,11 +116,16 @@ def run_eval_allocator(
         method='ucb',
         candidate_size=24000,
         scenario='full',
-        use_hill_climb: bool = True,
+        use_hill_climb: bool = False,
         top_k: int = 5,
         hill_steps: int = 3,
         neighbors_per_step: int = 32,
         elite_candidates_np: np.ndarray | None = None,
+        crop_aware_candidates: bool = True,
+        model_informed_candidates: bool = False,
+        model_informed_ratio: float = 0.6,
+        model_informed_eps: float = 0.10,
+        model_informed_rand: int = 256,
 ):
     # ensure rotation is correct
     env.get_rotation_year(year)
@@ -134,14 +139,62 @@ def run_eval_allocator(
     )
 
     # normalize
-    theta_t = rms.norm(theta_t)
+    theta_t = rms.norm_theta(theta_t)
 
     # convert to numpy
     theta_t = torch.from_numpy(theta_t)
 
-    allocation_actions = env.sample_super_arms(
+    reduced_flag = (scenario == 'reduced')
+
+    if crop_aware_candidates:
+        # Mixture sampler during evaluation:
+        #  - model-informed sampler (learned categorical probs from training) if available
+        #  - crop-grid sampler as a robust backstop
+        #  - small random set for exploration safety
+        if model_informed_candidates and hasattr(env, "sample_model_informed_super_arms"):
+            n_model = int(round(float(model_informed_ratio) * int(candidate_size)))
+            n_model = max(0, min(int(candidate_size), n_model))
+            n_crop = int(candidate_size) - n_model
+
+            allocation_model = env.sample_model_informed_super_arms(
+                n_candidates=n_model,
+                reduced=reduced_flag,
+                rng=np.random.RandomState(seed),
+                eps=float(model_informed_eps),
+            )
+
+            allocation_crop = env.sample_crop_grid_super_arms(
+                n_candidates=n_crop,
+                reduced=reduced_flag,
+                include_center=True,
+                unique=True,
+            )
+
+            # allocation_rand = env.sample_super_arms(
+            #     n_candidates=min(int(model_informed_rand), int(candidate_size)),
+            #     reduced=reduced_flag,
+            #     rng=np.random.RandomState(seed + 123),
+            # )
+
+            allocation_actions = np.vstack([
+                allocation_model.astype(np.float32),
+                allocation_crop.astype(np.float32),
+                # allocation_rand.astype(np.float32),
+            ])
+
+            # Deduplicate (small enough for eval)
+            allocation_actions = np.unique(allocation_actions, axis=0)
+        else:
+            allocation_actions = env.sample_crop_grid_super_arms(
+                n_candidates=candidate_size,
+                reduced=reduced_flag,
+                include_center=True,
+                unique=True,
+            )
+    else:
+        allocation_actions = env.sample_super_arms(
             n_candidates=candidate_size,
-            reduced=scenario == 'reduced',
+            reduced=reduced_flag,
         )
 
     # Inject elite candidates into eval candidate set (if provided)
