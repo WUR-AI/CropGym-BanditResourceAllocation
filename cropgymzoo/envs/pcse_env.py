@@ -447,11 +447,11 @@ class PCSEEnv(gym.Env):
         self._model_config = model_config
 
         # Get the weather data source
-        self._weather_data_provider = get_openmeteo_provider(
-            self._location,
-            seed=self.seed,
-            training=self.training,
-        )
+        # self._weather_data_provider = get_openmeteo_provider(
+        #     self._location,
+        #     seed=self.seed,
+        #     training=self.training,
+        # )
 
         # Create a PCSE engine / crop growth model
         self._model = self._init_pcse_model()
