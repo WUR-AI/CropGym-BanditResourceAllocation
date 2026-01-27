@@ -3,13 +3,13 @@ field-1:
   soil_lat: 51.577
   crop: sugarbeet
   area: 13.501472894987726
-  type: silt
+  type: clay
 field-2:
   soil_lon: 4.0814
   soil_lat: 51.5776
   crop: sugarbeet
   area: 1.5077293284220148
-  type: silt
+  type: clay
 field-3:
   soil_lon: 4.0856
   soil_lat: 51.5785
@@ -27,4 +27,4 @@ field-5:
   soil_lat: 51.5741
   crop: sugarbeet
   area: 3.932252436733954
-  type: silt
+  type: sand

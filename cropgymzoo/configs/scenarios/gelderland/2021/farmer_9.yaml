@@ -9,10 +9,10 @@ field-2:
   soil_lat: 51.8412
   crop: potato
   area: 3.194425642730716
-  type: sand
+  type: silt
 field-3:
   soil_lon: 6.0082
   soil_lat: 51.8423
   crop: potato
   area: 1.2657666473172122
-  type: sand
+  type: silt

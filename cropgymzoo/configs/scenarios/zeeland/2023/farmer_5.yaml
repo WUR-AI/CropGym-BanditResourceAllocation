@@ -15,7 +15,7 @@ field-3:
   soil_lat: 51.4662
   crop: winterwheat
   area: 0.9146605623917264
-  type: silt
+  type: clay
 field-4:
   soil_lon: 3.529
   soil_lat: 51.4805
@@ -39,31 +39,31 @@ field-7:
   soil_lat: 51.4686
   crop: winterwheat
   area: 0.8943715836850868
-  type: silt
+  type: clay
 field-8:
   soil_lon: 3.5248
   soil_lat: 51.4826
   crop: winterwheat
   area: 5.105340626487082
-  type: silt
+  type: sand
 field-9:
   soil_lon: 3.5557
   soil_lat: 51.4689
   crop: winterwheat
   area: 2.9723288226381332
-  type: silt
+  type: sand
 field-10:
   soil_lon: 3.5493
   soil_lat: 51.4682
   crop: sugarbeet
   area: 7.148980299514751
-  type: silt
+  type: sand
 field-11:
   soil_lon: 3.5411
   soil_lat: 51.4785
   crop: winterwheat
   area: 5.388311309628231
-  type: silt
+  type: clay
 field-12:
   soil_lon: 3.5394
   soil_lat: 51.4874
@@ -81,7 +81,7 @@ field-14:
   soil_lat: 51.4758
   crop: potato
   area: 2.9017191009130334
-  type: silt
+  type: sand
 field-15:
   soil_lon: 3.5523
   soil_lat: 51.4678
@@ -99,25 +99,25 @@ field-17:
   soil_lat: 51.4814
   crop: sugarbeet
   area: 5.218492753447013
-  type: silt
+  type: clay
 field-18:
   soil_lon: 3.5436
   soil_lat: 51.4772
   crop: winterwheat
   area: 2.703203081081036
-  type: silt
+  type: sand
 field-19:
   soil_lon: 3.5483
   soil_lat: 51.4704
   crop: winterwheat
   area: 3.015111655594849
-  type: silt
+  type: clay
 field-20:
   soil_lon: 3.5423
   soil_lat: 51.4836
   crop: potato
   area: 3.427925765020673
-  type: silt
+  type: clay
 field-21:
   soil_lon: 3.5517
   soil_lat: 51.4697
@@ -135,4 +135,4 @@ field-23:
   soil_lat: 51.4861
   crop: winterwheat
   area: 3.213222646420292
-  type: silt
+  type: clay

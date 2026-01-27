@@ -3,7 +3,7 @@ field-1:
   soil_lat: 51.5129
   crop: winterwheat
   area: 0.8458063313385173
-  type: silt
+  type: clay
 field-2:
   soil_lon: 3.502
   soil_lat: 51.5127
@@ -15,7 +15,7 @@ field-3:
   soil_lat: 51.5127
   crop: winterwheat
   area: 3.2638816517920457
-  type: silt
+  type: sand
 field-4:
   soil_lon: 3.489
   soil_lat: 51.5102

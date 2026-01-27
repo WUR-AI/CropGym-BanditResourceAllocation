@@ -15,13 +15,13 @@ field-3:
   soil_lat: 51.4662
   crop: winterwheat
   area: 0.9146605623917264
-  type: silt
+  type: clay
 field-4:
   soil_lon: 3.529
   soil_lat: 51.4805
   crop: winterwheat
   area: 9.783791332815596
-  type: silt
+  type: sand
 field-5:
   soil_lon: 3.5377
   soil_lat: 51.4636
@@ -39,19 +39,19 @@ field-7:
   soil_lat: 51.4686
   crop: winterwheat
   area: 0.8943715836850868
-  type: silt
+  type: clay
 field-8:
   soil_lon: 3.5248
   soil_lat: 51.4826
   crop: winterwheat
   area: 5.105340626487082
-  type: silt
+  type: sand
 field-9:
   soil_lon: 3.5557
   soil_lat: 51.4689
   crop: winterwheat
   area: 2.9723288226381332
-  type: silt
+  type: sand
 field-10:
   soil_lon: 3.5493
   soil_lat: 51.4682
@@ -63,7 +63,7 @@ field-11:
   soil_lat: 51.4785
   crop: winterwheat
   area: 5.388311309628231
-  type: silt
+  type: clay
 field-12:
   soil_lon: 3.5394
   soil_lat: 51.4874
@@ -75,7 +75,7 @@ field-13:
   soil_lat: 51.4623
   crop: potato
   area: 3.387971567628929
-  type: silt
+  type: clay
 field-14:
   soil_lon: 3.5471
   soil_lat: 51.4758
@@ -87,7 +87,7 @@ field-15:
   soil_lat: 51.4678
   crop: potato
   area: 0.9373990121557229
-  type: silt
+  type: clay
 field-16:
   soil_lon: 3.5437
   soil_lat: 51.4701
@@ -99,19 +99,19 @@ field-17:
   soil_lat: 51.4814
   crop: potato
   area: 5.218492753447013
-  type: silt
+  type: clay
 field-18:
   soil_lon: 3.5436
   soil_lat: 51.4772
   crop: winterwheat
   area: 2.703203081081036
-  type: silt
+  type: sand
 field-19:
   soil_lon: 3.5483
   soil_lat: 51.4704
   crop: winterwheat
   area: 3.015111655594849
-  type: silt
+  type: clay
 field-20:
   soil_lon: 3.5423
   soil_lat: 51.4836
@@ -123,16 +123,16 @@ field-21:
   soil_lat: 51.4697
   crop: sugarbeet
   area: 2.221076221887793
-  type: silt
+  type: clay
 field-22:
   soil_lon: 3.5439
   soil_lat: 51.4783
   crop: potato
   area: 0.7838552124456137
-  type: silt
+  type: sand
 field-23:
   soil_lon: 3.5348
   soil_lat: 51.4861
   crop: winterwheat
   area: 3.213222646420292
-  type: silt
+  type: clay

@@ -9,7 +9,7 @@ field-2:
   soil_lat: 51.5236
   crop: potato
   area: 41.12847879340574
-  type: silt
+  type: sand
 field-3:
   soil_lon: 3.8392
   soil_lat: 51.5331
@@ -21,13 +21,13 @@ field-4:
   soil_lat: 51.5286
   crop: potato
   area: 8.049083008674037
-  type: silt
+  type: clay
 field-5:
   soil_lon: 3.838
   soil_lat: 51.5229
   crop: potato
   area: 5.00890745869351
-  type: silt
+  type: sand
 field-6:
   soil_lon: 3.8313
   soil_lat: 51.5299
@@ -39,4 +39,4 @@ field-7:
   soil_lat: 51.5266
   crop: winterwheat
   area: 1.6900600835127724
-  type: silt
+  type: clay

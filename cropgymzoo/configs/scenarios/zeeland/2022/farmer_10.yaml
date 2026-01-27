@@ -27,7 +27,7 @@ field-5:
   soil_lat: 51.5229
   crop: sugarbeet
   area: 5.00890745869351
-  type: silt
+  type: sand
 field-6:
   soil_lon: 3.8313
   soil_lat: 51.5299
@@ -39,4 +39,4 @@ field-7:
   soil_lat: 51.5266
   crop: winterwheat
   area: 1.6900600835127724
-  type: silt
+  type: clay
