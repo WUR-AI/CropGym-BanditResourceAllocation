@@ -87,19 +87,34 @@ class Matern32(nn.Module):
 
 class FeatureNet(nn.Module):
 
-    def __init__(self, d_theta: int, m: int, hidden: int = 256, depth: int = 2):
+    def __init__(
+        self,
+        d_theta: int,
+        m: int,
+        hidden: int = 64,
+        depth: int = 1,
+        normalize: bool = True,
+    ):
         super().__init__()
         layers: List[nn.Module] = []
         in_dim = d_theta
-        for d in range(depth):
+        for _ in range(depth):
             layers += [nn.Linear(in_dim, hidden), nn.ReLU()]
             in_dim = hidden
         layers += [nn.Linear(in_dim, m)]
         self.net = nn.Sequential(*layers)
 
+        # Normalizing g(θ) is a very effective stabilizer for NN-AGP.
+        # It prevents the collaborative kernel magnitude from blowing up.
+        self.normalize = normalize
+        self.g_scale = nn.Parameter(torch.tensor(1.0))
+
     def forward(self, Theta: torch.Tensor) -> torch.Tensor:
         # (n,d_theta) -> (n,m)
-        return self.net(Theta)
+        G = self.net(Theta)
+        if self.normalize:
+            G = F.normalize(G, p=2, dim=-1)
+        return self.g_scale * G
 
 class LSTMFeatureNet(nn.Module):
 
@@ -127,6 +142,8 @@ class LSTMFeatureNet(nn.Module):
         )
         out_dim = hidden * self.num_directions
         self.proj = nn.Linear(out_dim, m)
+        self.normalize = True
+        self.g_scale = nn.Parameter(torch.tensor(1.0))
 
     def forward(self, Theta: torch.Tensor) -> torch.Tensor:
         """
@@ -141,7 +158,10 @@ class LSTMFeatureNet(nn.Module):
         layers = self.num_layers * self.num_directions
         hn = hn.view(layers, Theta.size(0), self.hidden)
         last = hn[-1]  # (N, hidden) -> top layer, forward (if bidir, torch uses concat internally in hn)
-        return self.proj(last)
+        G = self.proj(last)
+        if self.normalize:
+            G = F.normalize(G, p=2, dim=-1)
+        return self.g_scale * G
 
 # --------------------------- Collaborative multi-output GP K(x,x') ---------------------------
 # p(x) = [p_1(x),...,p_m(x)]^T with covariance:
@@ -242,7 +262,7 @@ class NNAGP(nn.Module):
     """
     def __init__(self, d_theta: int, d_x: int, m: int, Q: int = 1, kernel='matern', device: Optional[torch.device] = None):
         super().__init__()
-        self.g_net = FeatureNet(d_theta, m)
+        self.g_net = FeatureNet(d_theta, m, hidden=64, depth=1, normalize=True)
         self.mogp = CollaborativeMOGP(d_x, m, Q=Q, shared_kernel=kernel, indep_kernel=kernel)
         self.raw_noise = nn.Parameter(torch.tensor(-2.0))  # σ_ε ≈ 0.12
         self.jitter = 1e-3
@@ -282,7 +302,7 @@ class NNAGP(nn.Module):
 
     # ---- training objective: negative log-marginal likelihood (Eq. (5))
     def nll(self, act: torch.Tensor, context_in: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        act, context_in, y = act.to(self.device), context_in.to(self.device), y.to(self.device)
+        # act, context_in, y = act.to(self.device), context_in.to(self.device), y.to(self.device)
         G = self.g_net(context_in)                        # (n,m)
         Kt = self.mogp.K_tilde(act, context_in, act, context_in, G, G)  # (n,n)
 
@@ -296,7 +316,14 @@ class NNAGP(nn.Module):
         nll = quad + 0.5 * log_det + const
 
         # cache for prediction if inputs match
-        self._train_cache = {"Theta": context_in, "X": act, "y": y, "L": L.detach(), "alpha": alpha.detach(), "G": G.detach()}
+        self._train_cache = {
+            "Theta": context_in.detach(),
+            "X": act.detach(),
+            "y": y.detach(),
+            "L": L.detach(),
+            "alpha": alpha.detach(),
+            "G": G.detach(),
+        }
         return nll
 
     # ---- exact posterior μ, σ at batch of (X*,Θ*) (Eq. (2))
@@ -428,6 +455,11 @@ class NNAGPBandit:
         # store concatenated z=[x,theta] for coreset maintenance (exact GP path)
         self._z_gp_hist: deque[torch.Tensor] = deque(maxlen=self.coreset_size)
         self.t = 1
+        # Cache stacked (X, Theta, y) tensors so that selection does NOT recreate
+        # new tensors each call. This allows NNAGP.predict() to reuse its cached
+        # Cholesky (data_ptr stays identical across calls).
+        self._stack_cache_dirty = True
+        self._stack_cache = {}
 
         self.opt = torch.optim.AdamW(
             self.model.parameters(),
@@ -526,9 +558,8 @@ class NNAGPBandit:
 
         if len(self.y_hist) == 0:
             return 0.0
-        x = torch.vstack(tuple(self.x_hist))
-        theta = torch.vstack(tuple(self.theta_hist))
-        y = torch.hstack(tuple(self.y_hist))
+        device = self.model.device
+        x, theta, y = self._get_stacked_history(device=device)
         self.model._clear_cache()
 
         loss_val = 0.0
@@ -567,9 +598,7 @@ class NNAGPBandit:
             return X_candidates[idx], SelectionInfo(mu=mu.detach().cpu(), std=std.detach().cpu(),
                                                     ucb=ucb.detach().cpu(), beta_t=beta_t, rule="ucb")
 
-        X = torch.vstack(tuple(self.x_hist))
-        Theta = torch.vstack(tuple(self.theta_hist))
-        y = torch.hstack(tuple(self.y_hist))
+        X, Theta, y = self._get_stacked_history(device=self.model.device)
         mu, std, _ = self.model.posterior_on_candidates(
             X_candidates,
             theta_t.unsqueeze(0),
@@ -607,9 +636,7 @@ class NNAGPBandit:
             idx = torch.randint(0, all_actions.shape[0], (1,)).item()
             return all_actions[idx], None
 
-        X = torch.vstack(tuple(self.x_hist))
-        Theta = torch.vstack(tuple(self.theta_hist))
-        y = torch.hstack(tuple(self.y_hist))
+        X, Theta, y = self._get_stacked_history(device=self.model.device)
         beta_t = beta_finite_candidates(
             self.t,
             chunk, # use chunk size conservatively
@@ -675,10 +702,8 @@ class NNAGPBandit:
             return X_candidates[idx], SelectionInfo(mu=mu.detach().cpu(), std=std.detach().cpu(),
                                                     sampled_vals=sample.detach().cpu(), rule="ts")
 
-        # Stack history
-        X = torch.vstack(tuple(self.x_hist))
-        Theta = torch.vstack(tuple(self.theta_hist))
-        y = torch.hstack(tuple(self.y_hist))
+        # Stack history (cached)
+        X, Theta, y = self._get_stacked_history(device=self.model.device)
 
         # Get posterior over candidates, including the covariance
         mu, std, cov = self.model.posterior_on_candidates(
@@ -818,6 +843,7 @@ class NNAGPBandit:
         # coreset changed -> clear cached Cholesky/alpha
         self.model._clear_cache()
         self.t += 1
+        self._stack_cache_dirty = True
 
     def export_posterior(self):
         """Return everything needed for posterior predictions."""
@@ -921,4 +947,37 @@ class NNAGPBandit:
         )
         self.import_posterior(state)
         return state
+
+    def _get_stacked_history(self, device: torch.device | None = None):
+        """Return stacked (X, Theta, y) cached until history changes.
+
+        Important: this keeps tensor storage stable across calls so NNAGP.predict()
+        can reuse its cached Cholesky instead of refitting every selection.
+        """
+        device = device or self.model.device
+
+        if (not self._stack_cache_dirty) and self._stack_cache:
+            X = self._stack_cache["X"]
+            Theta = self._stack_cache["Theta"]
+            y = self._stack_cache["y"]
+
+            # Ensure correct device
+            if X.device != device:
+                X = X.to(device)
+                Theta = Theta.to(device)
+                y = y.to(device)
+                self._stack_cache["X"] = X
+                self._stack_cache["Theta"] = Theta
+                self._stack_cache["y"] = y
+
+            return X, Theta, y
+
+        # Rebuild stacked history
+        X = torch.vstack(tuple(self.x_hist)).to(device)
+        Theta = torch.vstack(tuple(self.theta_hist)).to(device)
+        y = torch.hstack(tuple(self.y_hist)).to(device)
+
+        self._stack_cache = {"X": X, "Theta": Theta, "y": y}
+        self._stack_cache_dirty = False
+        return X, Theta, y
 
