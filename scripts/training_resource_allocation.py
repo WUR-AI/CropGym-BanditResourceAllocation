@@ -10,27 +10,32 @@ if __name__ == '__main__':
 
     # Meta stuff
     parser.add_argument("--use_model", action='store_true')
-    parser.add_argument("--model_dir", type=str, default='GRU_PPO')
+    parser.add_argument("--model_dir", type=str, default='ROT')
     parser.add_argument("--rounds", type=int, default=300)
     parser.add_argument("--bandit_lr", type=float, default=3e-3)
-    parser.add_argument("--bandit_epochs", type=int, default=50)
+    parser.add_argument("--bandit_epochs", type=int, default=100)
     parser.add_argument("--action_candidate_length", type=int, default=30_000)
 
     # Elite candidate memory (persist good actions + neighbors)
     parser.add_argument("--elite_enabled", action="store_true",
                         help="Enable persistent elite candidates (best action + neighbors)")
-    parser.add_argument("--elite_neighbors", type=int, default=256,
+    parser.add_argument("--elite_neighbors", type=int, default=50,
                         help="How many neighbors to keep around best action")
-    parser.add_argument("--elite_keep_max", type=int, default=512,
+    parser.add_argument("--elite_keep_max", type=int, default=5000,
                         help="Max elite candidates stored per scenario (full/reduced)")
-    parser.add_argument("--elite_top_k", type=int, default=5,
+    parser.add_argument("--elite_top_k", type=int, default=10,
                         help="Number of elite centers to keep per scenario")
+    parser.add_argument("--elite_inject_max", type=int, default=2000,
+                        help="Max elite rows to inject into the candidate set each round")
 
     parser.add_argument("--model_name", type=str, default='bandit')
     parser.add_argument("--no_comet", action='store_false', dest='use_comet')
     parser.add_argument("--streaming", action='store_true', dest='streaming')
     parser.add_argument("--q", type=int, default=1)
     parser.add_argument("--farm", type=int, default=None)
+    parser.add_argument("--years", type=int, default=2)
+    parser.add_argument("--eval_steps", type=int, default=10)
+    parser.add_argument("--train_every", type=int, default=1)
     parser.add_argument("--method", type=str, default='ucb')
     parser.add_argument("--kernel", type=str, default='matern')
     parser.add_argument(
@@ -46,8 +51,8 @@ if __name__ == '__main__':
         default=256,
         help="Buffer size for representation training (neural_linear)."
     )
-    parser.add_argument("--coreset_size", type=int, default=256)
-    parser.add_argument("--coreset_mode", type=str, default="fifo", choices=["fifo", "diverse"])
+    parser.add_argument("--coreset_size", type=int, default=300)
+    parser.add_argument("--coreset_mode", type=str, default="diverse", choices=["fifo", "diverse"])
     parser.set_defaults(
         use_model=True,
         use_comet=True,
