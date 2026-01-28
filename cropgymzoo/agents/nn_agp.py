@@ -9,6 +9,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import numpy as np
+
 from cropgymzoo import _DEFAULT_MODEL_DIR, _DEFAULT_LOGDIR
 
 
@@ -260,9 +262,18 @@ class NNAGP(nn.Module):
       - collaborative MOGP for K(x,x')
       - exact GP posterior over f(x;theta) using K̃
     """
-    def __init__(self, d_theta: int, d_x: int, m: int, Q: int = 1, kernel='matern', device: Optional[torch.device] = None):
+    def __init__(
+            self,
+            d_theta: int,
+            d_x: int,
+            m: int,
+            Q: int = 1,
+            kernel='matern',
+            device: Optional[torch.device] = None,
+            g_net: Optional[nn.Module] = None,
+    ):
         super().__init__()
-        self.g_net = FeatureNet(d_theta, m, hidden=64, depth=1, normalize=True)
+        self.g_net = g_net if g_net is not None else FeatureNet(d_theta, m, hidden=64, depth=1, normalize=True)
         self.mogp = CollaborativeMOGP(d_x, m, Q=Q, shared_kernel=kernel, indep_kernel=kernel)
         self.raw_noise = nn.Parameter(torch.tensor(-2.0))  # σ_ε ≈ 0.12
         self.jitter = 1e-3
@@ -442,7 +453,78 @@ class NNAGPBandit:
             ridge_lambda: float = 1.0,
             coreset_size=256,
             coreset_mode="diverse",
+            action_mode: Literal["joint", "factored"] = "joint",
+            n_fields: Optional[int] = None,
+            d_theta_per_field: Optional[int] = None,
+            m_sub: int = 5,
+            share_g_net: bool = False,
     ):
+        self.action_mode = action_mode
+        self.n_fields = n_fields
+
+        # ---- FACTORED MODE: orchestrator only ----
+        if self.action_mode == "factored":
+            if n_fields is None or n_fields <= 0:
+                raise ValueError("factored mode requires n_fields > 0")
+            if d_theta_per_field is None or d_theta_per_field <= 0:
+                raise ValueError("factored mode requires d_theta_per_field > 0")
+
+            self.share_g_net = bool(share_g_net)
+
+            self.shared_g_net = None
+            self.opt_g = None
+            dev = device or torch.device("cpu")
+
+            if self.share_g_net:
+                self.shared_g_net = FeatureNet(
+                    int(d_theta_per_field),
+                    int(m_sub),
+                    hidden=64,
+                    depth=2,
+                    normalize=True
+                ).to(dev)
+                self.opt_g = torch.optim.AdamW(self.shared_g_net.parameters(), lr=lr, weight_decay=1e-4)
+
+            # Create sub-bandits normally first
+            self.sub_bandits = [
+                NNAGPBandit(
+                    d_theta=int(d_theta_per_field),
+                    d_x=1,
+                    m=int(m_sub),
+                    Q=Q,
+                    lr=lr,
+                    device=device,
+                    posterior_type=posterior_type,
+                    buffer_size=buffer_size,
+                    ridge_lambda=ridge_lambda,
+                    coreset_size=coreset_size,
+                    coreset_mode=coreset_mode,
+                    action_mode="joint",
+                    share_g_net=False,  # prevent recursion
+                )
+                for _ in range(int(n_fields))
+            ]
+
+            # If sharing: inject shared g-net and rebuild sub optimizers excluding g params
+            if self.share_g_net:
+                for sb in self.sub_bandits:
+                    sb.model = NNAGP(
+                        d_theta=int(d_theta_per_field),
+                        d_x=1,
+                        m=int(m_sub),
+                        Q=Q,
+                        kernel="matern",
+                        device=dev,
+                        g_net=self.shared_g_net,
+                    )
+
+                    # optimizer should NOT update shared g-net
+                    non_g_params = [p for n, p in sb.model.named_parameters() if not n.startswith("g_net.")]
+                    sb.opt = torch.optim.AdamW(non_g_params, lr=lr, weight_decay=1e-4)
+
+            self.t = 1
+            self.model = None
+            return
         self.posterior_type = posterior_type
         self.model = NNAGP(d_theta, d_x, m=m, Q=Q, device=device or torch.device("cpu"))
 
@@ -523,6 +605,59 @@ class NNAGPBandit:
 
     # ---- training step: maximize log marginal likelihood (Eq. (5))
     def train_step(self, steps: int = 200, lr: float = 3e-3) -> float:
+        if getattr(self, "action_mode", "joint") == "factored":
+            # If sharing g(θ), do one backward pass over mean sub-loss, then step:
+            # - each sub-bandit optimizer (non-g params)
+            # - shared g optimizer
+            if getattr(self, "share_g_net", False) and getattr(self, "opt_g", None) is not None:
+                # If neural-linear, g_net isn't used -> fallback
+                if self.sub_bandits and getattr(self.sub_bandits[0], "posterior_type", "gp") == "neural_linear":
+                    losses = [b.train_step(steps=steps, lr=lr) for b in self.sub_bandits]
+                    losses = [float(x) for x in losses if x is not None]
+                    return float(sum(losses) / max(len(losses), 1))
+
+                # one joint update per outer step
+                loss_val = 0.0
+                for _ in range(steps):
+                    self.opt_g.zero_grad()
+                    for sb in self.sub_bandits:
+                        sb.opt.zero_grad()
+
+                    used = 0
+                    total = None
+                    for sb in self.sub_bandits:
+                        if len(getattr(sb, "y_hist", [])) == 0:
+                            continue
+                        x, theta, y = sb._get_stacked_history(device=sb.model.device)
+                        sb.model._clear_cache()
+                        li = sb.model.nll(x, theta, y)
+                        total = li if total is None else (total + li)
+                        used += 1
+
+                    if used == 0 or total is None:
+                        return 0.0
+
+                    loss = total / float(used)
+                    loss.backward()
+
+                    torch.nn.utils.clip_grad_norm_(self.shared_g_net.parameters(), max_norm=5.0)
+                    for sb in self.sub_bandits:
+                        torch.nn.utils.clip_grad_norm_(sb.opt.param_groups[0]["params"], max_norm=5.0)
+
+                    self.opt_g.step()
+                    for sb in self.sub_bandits:
+                        sb.opt.step()
+
+                    loss_val = float(loss.detach().cpu())
+
+                return loss_val
+
+            # Default: independent sub-bandits
+            losses = [b.train_step(steps=steps, lr=lr) for b in self.sub_bandits]
+            losses = [float(x) for x in losses if x is not None]
+            return float(sum(losses) / max(len(losses), 1))
+
+
         if self.posterior_type == "neural_linear":
             if len(self._z_hist) == 0:
                 return 0.0
@@ -744,6 +879,86 @@ class NNAGPBandit:
         idx = int(torch.argmax(sample).item())
         return X_candidates[idx], SelectionInfo(mu=mu.cpu(), std=std.cpu(), sampled_vals=sample.cpu(), rule="ts")
 
+    @torch.no_grad()
+    def select_ucb_factored(
+            self,
+            theta_fields: torch.Tensor,  # (n_fields, d_theta_per_field)
+            X_candidates_list: list[torch.Tensor],  # each (M_i, 1)
+            delta: float = 0.1,
+            deterministic: bool = False,
+    ) -> Tuple[torch.Tensor, list[SelectionInfo]]:
+        if self.action_mode != "factored":
+            raise ValueError("select_ucb_factored called but action_mode != 'factored'")
+
+        if theta_fields.shape[0] != len(self.sub_bandits):
+            raise ValueError("theta_fields first dimension must equal n_fields")
+
+        xs = []
+        infos = []
+        for i, b in enumerate(self.sub_bandits):
+            x_i, info_i = b.select_ucb(
+                theta_fields[i],
+                X_candidates_list[i],
+                delta=delta,
+                deterministic=deterministic,
+            )
+            # x_i could be shape (1,) or (1,1); reduce to scalar
+            xs.append(float(torch.as_tensor(x_i).view(-1)[0].item()))
+            infos.append(info_i)
+
+        x_vec = torch.tensor(xs, dtype=torch.get_default_dtype())
+        self.t += 1
+        return x_vec, infos
+
+    @torch.no_grad()
+    def select_ts_factored(
+            self,
+            theta_fields: torch.Tensor,
+            X_candidates_list: list[torch.Tensor],
+            deterministic: bool = False,
+            seed: Optional[int] = None,
+    ) -> Tuple[torch.Tensor, list[SelectionInfo]]:
+        if self.action_mode != "factored":
+            raise ValueError("select_ts_factored called but action_mode != 'factored'")
+
+        xs = []
+        infos = []
+        for i, b in enumerate(self.sub_bandits):
+            x_i, info_i = b.select_ts(
+                theta_fields[i],
+                X_candidates_list[i],
+                deterministic=deterministic,
+                seed=None if seed is None else (seed + i),
+            )
+            xs.append(float(torch.as_tensor(x_i).view(-1)[0].item()))
+            infos.append(info_i)
+
+        x_vec = torch.tensor(xs, dtype=torch.get_default_dtype())
+        self.t += 1
+        return x_vec, infos
+
+    def update_factored(
+            self,
+            theta_fields: torch.Tensor,  # (n_fields, d_theta_per_field)
+            x_vec: torch.Tensor,  # (n_fields,)
+            y_fields: np.ndarray | torch.Tensor  # (n_fields,)
+    ):
+        if self.action_mode != "factored":
+            raise ValueError("update_factored called but action_mode != 'factored'")
+
+        if isinstance(y_fields, np.ndarray):
+            y_fields = torch.from_numpy(y_fields.astype(np.float32))
+        y_fields = y_fields.view(-1)
+
+        if len(self.sub_bandits) != theta_fields.shape[0] or len(self.sub_bandits) != y_fields.shape[0]:
+            raise ValueError("Mismatch: n_fields between sub_bandits / theta_fields / y_fields")
+
+        for i, b in enumerate(self.sub_bandits):
+            device = b.model.device
+            th_i = theta_fields[i].to(device)
+            x_i = torch.tensor([float(x_vec[i].item())], device=device, dtype=torch.get_default_dtype())
+            b.update(th_i, x_i, float(y_fields[i].item()))
+
     def _coreset_maybe_replace_gp(self, z_new: torch.Tensor) -> int | None:
         """For exact-GP mode: decide whether to replace an existing coreset point.
 
@@ -846,6 +1061,13 @@ class NNAGPBandit:
         self._stack_cache_dirty = True
 
     def export_posterior(self):
+        if getattr(self, "action_mode", "joint") == "factored":
+            return {
+                "action_mode": "factored",
+                "n_fields": int(self.n_fields or len(self.sub_bandits)),
+                "sub": [b.export_posterior() for b in self.sub_bandits],
+                "t": int(getattr(self, "t", 1)),
+            }
         """Return everything needed for posterior predictions."""
         X = torch.vstack(tuple(self.x_hist)) if self.x_hist else torch.empty(0, self.model.mogp.k_shared[
             0].raw_lengthscale.numel())
@@ -880,6 +1102,39 @@ class NNAGPBandit:
         }
 
     def import_posterior(self, blob: dict, map_location="cpu"):
+        if blob.get("action_mode") == "factored":
+            subs = blob["sub"]
+            n_fields = int(blob.get("n_fields", len(subs)))
+            if len(subs) == 0:
+                raise ValueError("Cannot import factored posterior: empty sub list")
+
+            # infer d_theta_per_field from sub[0]["Theta"] if possible
+            first = subs[0]
+            Theta0 = first.get("Theta", None)
+            if Theta0 is None or (hasattr(Theta0, "numel") and Theta0.numel() == 0):
+                raise ValueError(
+                    "Cannot infer d_theta_per_field from saved posterior because Theta is empty. "
+                    "Store d_theta_per_field explicitly in the blob if you expect empty history."
+                )
+            d_theta_per_field = int(Theta0.shape[1])
+
+            self.action_mode = "factored"
+            self.n_fields = n_fields
+            self.sub_bandits = [
+                NNAGPBandit(
+                    d_theta=d_theta_per_field,
+                    d_x=1,
+                    m=8,
+                    Q=1,
+                    device=torch.device(map_location),
+                    action_mode="joint",
+                )
+                for _ in range(n_fields)
+            ]
+            for b, sb in zip(self.sub_bandits, subs):
+                b.import_posterior(sb, map_location=map_location)
+            self.t = int(blob.get("t", 1))
+            return
         self.model.load_state_dict(blob["model_state"])
         self.x_hist = [blob["X"].to(map_location)]
         self.theta_hist = [blob["Theta"].to(map_location)]
