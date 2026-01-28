@@ -138,6 +138,38 @@ class AllocationBandit(gym.Env):
         reward = np.sum(weighted_reward)
         return reward
 
+    def unflatten_context_per_field(self, theta_flat: np.ndarray) -> np.ndarray:
+        """
+        Convert flat theta (keys-major) into per-field theta matrix.
+
+        Assumes each context key contributes exactly 1 scalar per field and that
+        `_flatten_context` concatenates keys in `_get_context_keys()` order.
+
+        Returns: (n_fields, n_keys)
+        """
+        keys = self._get_context_keys()
+        n_fields = int(self.n_fields)
+        theta_flat = np.asarray(theta_flat, dtype=np.float32).reshape(-1)
+
+        n_keys = len(keys)
+        expected = n_fields * n_keys
+        if theta_flat.shape[0] != expected:
+            raise ValueError(
+                f"Cannot unflatten theta: expected length {expected} (= n_fields {n_fields} * n_keys {n_keys}), "
+                f"got {theta_flat.shape[0]}. This likely means one or more context keys are vector-valued per field; "
+                "in that case we need a context layout map."
+            )
+
+        # theta is [key1(field1..fieldN), key2(field1..fieldN), ...]
+        blocks = [theta_flat[i * n_fields:(i + 1) * n_fields] for i in range(n_keys)]
+        return np.stack(blocks, axis=1)  # (n_fields, n_keys)
+
+    @staticmethod
+    def compute_per_field_rewards_from_nsurp(n_surps: dict) -> np.ndarray:
+        """Return per-field reward components consistent with `_get_reward`."""
+        r = [Rewards.ContainerNUE.nsurplus_score(n, low=15.0, high=40.0, max_dev=40) for n in n_surps]
+        return np.asarray(r, dtype=np.float32)
+
 
     @staticmethod
     def _get_context_keys():
@@ -979,3 +1011,171 @@ class AllocationBandit(gym.Env):
         }
 
         self.max_budgets = self._get_max_budgets()
+
+# ---------------------------------------------------------------------
+# Single-field version of AllocationBandit
+# ---------------------------------------------------------------------
+class ParcelAllocationBandit(AllocationBandit):
+    """AllocationBandit but for a SINGLE field (one bandit per field).
+
+    - Reuses AllocationBandit logic by subclassing (so all samplers & context logic remain identical).
+    - Only overrides:
+        * _init_envs: load a farm_dict filtered to one field
+        * get_rotation_year: reload rotation yaml but keep only that field
+
+    Constraints honored:
+    - No changes to MultiFieldEnv or ParcelEnv.
+    """
+
+    def __init__(
+        self,
+        *,
+        field_key: str,
+        delta_kg: float = 5.0,
+        warm_up_eps: int = 10,
+        cap: float = 1.0,
+        years: list = get_default_years(),
+        seed: int = 107,
+        action_type: str = "continuous",
+        args: argparse.Namespace = None,
+        field_reward: str = "NSU",
+        flat_context: bool = True,
+        region: str | None = None,
+        farm_id: int | None = None,
+        render: bool = False,
+    ):
+        if not isinstance(field_key, str) or not field_key:
+            raise ValueError("ParcelAllocationBandit requires a non-empty `field_key` (e.g. 'field-1').")
+        self.field_key = field_key
+
+        super().__init__(
+            delta_kg=delta_kg,
+            warm_up_eps=warm_up_eps,
+            cap=cap,
+            years=years,
+            seed=seed,
+            action_type=action_type,
+            args=args,
+            field_reward=field_reward,
+            flat_context=flat_context,
+            region=region,
+            farm_id=farm_id,
+            render=render,
+        )
+
+        # Sanity: enforce single field
+        if getattr(self, "n_fields", None) != 1:
+            raise RuntimeError(
+                f"ParcelAllocationBandit expected n_fields==1 after init, got {getattr(self, 'n_fields', None)}. "
+                "This means scenario YAML filtering did not apply."
+            )
+
+    # -------------------------
+    # Overrides: env init + rotation year
+    # -------------------------
+
+    def _init_envs(self, args, warm_up_eps=0):
+        """Same as AllocationBandit._init_envs but loads ONLY `self.field_key`."""
+        dict_fields = None
+
+        if args is not None and getattr(args, "farm", None) is not None:
+            farm_path = os.path.join(
+                _SCENARIO_PATH, f"{self.region}", "2020", f"farmer_{self.farm_id}.yaml"
+            )
+            with open(farm_path, "rb") as f:
+                dict_all = yaml.safe_load(f)
+
+            if self.field_key not in dict_all:
+                raise KeyError(
+                    f"field_key='{self.field_key}' not found in {farm_path}. "
+                    f"Available: {list(dict_all.keys())}"
+                )
+
+            dict_fields = {self.field_key: dict_all[self.field_key]}
+
+        # Build MultiFieldEnv with ONLY one field
+        self.farm = MultiFieldEnv(
+            warm_up=self.warm_up_eps,
+            years=self.years,
+            farm_dict=dict_fields,
+            reward=self.field_reward,
+        )
+
+        # Warm up episodes (same logic, but now it's one field)
+        self.warm_up_infos = None
+        if warm_up_eps > 0:
+            years_warm_up = list(range(2020 - 1, 2020 - warm_up_eps - 1, -1))
+            print(years_warm_up)
+
+            for year in years_warm_up:
+                self.get_rotation_year(2020 + ((2019 - year) % 5))
+                self.warm_up_infos = self._warm_up(year)
+
+        # Policy selection (same as AllocationBandit, but pass filtered dict_fields to model_picker)
+        self.env_agent = None
+        if args is not None and hasattr(args, "use_model"):
+            if args.model_dir == "ROT":
+                self.env_agent = RoTAgent(env=self.farm, render=args.render)
+            elif args.model_dir == "random":
+                self.env_agent = RandomAgent(env=self.farm, render=args.render)
+            else:
+                saved_model = load_model(args)
+                self.original_saved_model = deepcopy(saved_model)
+
+                if dict_fields is not None:
+                    saved_model = model_picker(self.original_saved_model, dict_fields)
+
+                self.env_agent = MultiRLAgent(
+                    env=self.farm,
+                    saved_model=saved_model,
+                    render=args.render,
+                )
+
+            # keep AllocationBandit invariant
+            self.farm = self.env_agent.env
+
+    def get_rotation_year(self, year: int):
+        """Reload scenario YAML for `year`, but keep ONLY `self.field_key`."""
+        assert year in [2020, 2021, 2022, 2023, 2024], f"Unexpected rotation year: {year}"
+
+        farm_path = os.path.join(
+            _SCENARIO_PATH, f"{self.region}", f"{year}", f"farmer_{self.farm_id}.yaml"
+        )
+        with open(farm_path, "rb") as f:
+            dict_all = yaml.safe_load(f)
+
+        if self.field_key not in dict_all:
+            raise KeyError(
+                f"field_key='{self.field_key}' not found in {farm_path}. "
+                f"Available: {list(dict_all.keys())}"
+            )
+
+        dict_fields = {self.field_key: dict_all[self.field_key]}
+
+        # IMPORTANT: keep compatibility with your existing AllocationBandit approach
+        self.farm.set_new_fields(dict_fields, year=year)
+
+        # Recompute meta/spaces (these depend on possible_agents + budgets)
+        self._init_meta_info()
+        self._init_spaces()
+
+        # If using learned policy, reload the correct policy for this field
+        if getattr(self, "original_saved_model", None) is not None:
+            try:
+                saved_model = model_picker(self.original_saved_model, dict_fields)
+                self.env_agent = MultiRLAgent(
+                    env=self.farm,
+                    saved_model=saved_model,
+                    render=getattr(getattr(self, "env_agent", None), "render", False),
+                )
+                self.farm = self.env_agent.env
+            except Exception:
+                # If policy reload fails, keep the current policy; env still runs.
+                pass
+
+        return dict_fields
+
+    @property
+    def agent_name(self) -> str:
+        """Convenience: the single field agent name."""
+        return self.field_key
