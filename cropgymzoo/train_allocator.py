@@ -219,20 +219,47 @@ def train_allocator_for_farm(args):
     m = d_theta // 10 + d_x // 3 + 3
     print(f"d_theta: {d_theta}, d_x: {d_x}. So, m: {m}")
 
-    # put the bandit algorithm here
-    bandit = NNAGPBandit(
-        d_theta=d_theta,
-        d_x=d_x,
-        m=m,  # vector len of multi output GP
-        Q=args.q,  # number of shared GP outputs
-        lr=args.bandit_lr,
-        device=torch.device("cpu"),
-        posterior_type=args.bandit_posterior,
-        coreset_size=args.coreset_size,
-        coreset_mode=args.coreset_mode,
-    )
+    bandit_action_mode = getattr(args, "bandit_action_mode", "factored")  # 'joint' or 'factored'
 
-    training_loop(env, bandit, args, comet_experiment, log_folder_name, region=region, farm_id=farm_id)
+    if bandit_action_mode == "factored":
+        d_theta_per_field = len(env._get_context_keys())
+        m_field = d_theta_per_field // 10 + 1 // 3 + 3
+
+        bandit = NNAGPBandit(
+            d_theta=d_theta,
+            d_x=d_x,
+            m=m,  # kept for compatibility; sub-bandits use m_field
+            Q=args.q,
+            lr=args.bandit_lr,
+            device=torch.device("cpu"),
+            posterior_type=args.bandit_posterior,
+            coreset_size=args.coreset_size,
+            coreset_mode=args.coreset_mode,
+            action_mode="factored",
+            n_fields=int(env.n_fields),
+            d_theta_per_field=int(d_theta_per_field),
+            m_sub=int(m_field),
+        )
+
+        training_loop_factored(
+            env, bandit, args, comet_experiment, log_folder_name, region=region, farm_id=farm_id
+        )
+
+    else:
+        bandit = NNAGPBandit(
+            d_theta=d_theta,
+            d_x=d_x,
+            m=m,
+            Q=args.q,
+            lr=args.bandit_lr,
+            device=torch.device("cpu"),
+            posterior_type=args.bandit_posterior,
+            coreset_size=args.coreset_size,
+            coreset_mode=args.coreset_mode,
+            action_mode="joint",
+        )
+
+        training_loop(env, bandit, args, comet_experiment, log_folder_name, region=region, farm_id=farm_id)
 
     print(f"Training for Farm {region}_{farm_id} Complete!")
 
@@ -690,6 +717,188 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
                 farm_id=farm_name,
             )
 
+            if comet_experiment:
+                comet_experiment.log_asset(
+                    file_dir,
+                    file_name=f"s{args.seed}_{args.method}_bandit_{t}",
+                    step=t,
+                )
+
+def training_loop_factored(
+    env,
+    bandit,
+    args,
+    comet_experiment=None,
+    log_folder_name: str | None = None,
+    region: str | None = None,
+    farm_id: int | None = None,
+):
+    """
+    Clean factored loop:
+      - Each field i has a small 1D candidate set (e.g., 0..27 step 0.5 => 55 candidates).
+      - We score ALL candidates per field each round (no candidate sampling tricks).
+    """
+    if getattr(bandit, "action_mode", "joint") != "factored":
+        raise ValueError("training_loop_factored_clean requires bandit.action_mode == 'factored'")
+
+    rng = np.random.RandomState(args.seed)
+    torch.set_default_dtype(torch.float32)
+
+    rms = BanditNormalizer(env, rng)
+    method = args.method
+    test_step = 0
+
+    def set_subbandits_train_mode(train: bool):
+        # Your factored NNAGPBandit stores sub-bandits in bandit.sub_bandits
+        for sb in getattr(bandit, "sub_bandits", []):
+            sb.model.train(train)
+
+    def hist_size_total() -> int:
+        return int(sum(len(sb.y_hist) for sb in getattr(bandit, "sub_bandits", [])))
+
+    def build_full_candidates_per_field():
+        """Return list of tensors, each (M_i, 1) for select_*_factored API."""
+        X_list = []
+        for ag in env.agents_order:
+            vals = np.asarray(env.base_arms[ag], dtype=np.float32)
+            X_list.append(torch.from_numpy(vals.reshape(-1, 1)))
+        return X_list
+
+    for t in range(1, args.rounds + 1):
+        # Keep your existing rotation-year behavior if you want it
+        if region is not None or farm_id is not None:
+            env.get_rotation_year(rng.choice([2020, 2021, 2022, 2023, 2024]))
+
+        theta_np, env_info = env.reset(
+            options={"year": rng.choice(env.years)},
+            seed=args.seed,
+        )
+        if comet_experiment:
+            comet_experiment.log_metric("episode/year", int(env_info["year"]))
+
+        # Normalize (flat) context
+        theta_np = rms.norm_theta(theta_np)
+
+        # Unflatten to per-field theta matrix
+        theta_fields_np = env.unflatten_context_per_field(theta_np)
+        theta_fields = torch.from_numpy(theta_fields_np.astype(np.float32))
+
+        # FULL candidate set per field (tiny)
+        X_list = build_full_candidates_per_field()
+
+        # Train surrogate occasionally
+        train_every = int(getattr(args, "train_every", 1))
+        if t % train_every == 0:
+            steps = int(getattr(args, "bandit_epochs", 100))
+            loss_val = float(bandit.train_step(steps=steps, lr=args.bandit_lr))
+            n_hist = hist_size_total()
+            loss_per_sample = loss_val / max(n_hist, 1)
+            print(f"round {t}, loss: {loss_per_sample} (train_steps={steps})")
+            if comet_experiment:
+                comet_experiment.log_metric("loss", loss_per_sample, step=t)
+
+        # Select action vector
+        if method == "ucb":
+            x_t, _ = bandit.select_ucb_factored(theta_fields, X_list, delta=0.1)
+        else:
+            x_t, _ = bandit.select_ts_factored(theta_fields, X_list)
+
+        # Step env (x_t is vector length n_fields)
+        _, reward_env, _, _, step_info = env.step(x_t)
+        n_surp_infos = [step_info['AgentInfos'][a]["Nsurp"][-1] for a in env.unwrapped.agents_order]
+        print(f"reward: {reward_env}")
+        if comet_experiment:
+            comet_experiment.log_metrics({"reward/train/reward": float(reward_env)}, step=t)
+
+        # Update your rolling historical context
+        env.add_stats_to_context(env.filter_historical_info(step_info["AgentInfos"]))
+
+        # Per-field reward components (consistent with env._get_reward())
+        y_fields = env.compute_per_field_rewards_from_nsurp(n_surp_infos)
+
+        # Optional observation noise (match your previous habit if desired)
+        noise = float(getattr(args, "reward_noise", 0.005))
+        if noise > 0:
+            y_fields = y_fields + noise * rng.randn(len(y_fields)).astype(np.float32)
+
+        # Update factored bandit
+        bandit.update_factored(theta_fields, x_t, y_fields)
+
+        # Periodic eval (simple, no scenarios/candidate samplers)
+        test_per_round = int(args.eval_steps)
+        if t % test_per_round == 0:
+            set_subbandits_train_mode(False)
+
+            years = [2020, 2021, 2022, 2023, 2024]
+            rewards = []
+            info_dict = {}
+
+            for year in years:
+                env.get_rotation_year(year)
+                th_np, info = env.reset(options={"year": year}, seed=args.seed)
+                th_np = rms.norm_theta(th_np)
+                th_fields_np = env.unflatten_context_per_field(th_np)
+                th_fields = torch.from_numpy(th_fields_np.astype(np.float32))
+
+                X_list = build_full_candidates_per_field()
+                if method == "ucb":
+                    x_eval, _ = bandit.select_ucb_factored(th_fields, X_list, delta=0.1, deterministic=True)
+                else:
+                    x_eval, _ = bandit.select_ts_factored(th_fields, X_list, deterministic=True)
+
+                _, raw_reward, _, _, infos = env.step(x_eval)
+                info_dict[year] = infos
+                rewards.append(float(raw_reward))
+                print(f"test year: {year}, reward: {raw_reward}")
+
+                if comet_experiment:
+                    comet_experiment.log_metrics(
+                        {f"reward/full/test_year:{year}/raw": float(raw_reward)},
+                        step=test_step,
+                    )
+                    fig = plot_results(
+                        infos["AgentInfos"],
+                        variable_list=["DVS", "Profit", "Reward", "Action", "Yield", "BudgetLeft"],
+                        show=False,
+                    )
+                    comet_experiment.log_figure(
+                        figure_name=f"image/full/plot_year:{year}",
+                        figure=fig,
+                        step=test_step,
+                    )
+                    plt.close(fig)
+
+            # Save eval infos
+            pickle_path = os.path.join(
+                _DEFAULT_LOGDIR,
+                f"Bandit_{args.model_dir}_full",
+                f"bandit_{region}_{farm_id}_info_{test_step}.pkl",
+            )
+            os.makedirs(os.path.dirname(pickle_path), exist_ok=True)
+            with open(pickle_path, "wb") as f:
+                pickle.dump(info_dict, f)
+
+            if comet_experiment:
+                comet_experiment.log_metrics({"reward/mean/raw": float(np.sum(rewards))}, step=test_step)
+                comet_experiment.log_asset(
+                    file_data=pickle_path,
+                    file_name=f"bandit_{region}_{farm_id}_full_info.pkl",
+                    step=test_step,
+                )
+
+            test_step += test_per_round
+            set_subbandits_train_mode(True)
+
+            # Save model
+            farm_name = f"{region}_{farm_id}" if region is not None else None
+            file_dir = bandit.save(
+                seed=args.seed,
+                t=t,
+                name=log_folder_name,
+                args=args,
+                rms=rms,
+                farm_id=farm_name,
+            )
             if comet_experiment:
                 comet_experiment.log_asset(
                     file_dir,
