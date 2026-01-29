@@ -129,8 +129,19 @@ class AllocationBandit(gym.Env):
 
 
     def _get_reward(self):
-        separate_nsurp = [self.infos['AgentInfos'][agent]['Nsurp'][-1] for agent in self.parcel_meta_infos.keys()]
-        separate_reward = [Rewards.ContainerNUE.nsurplus_score(n, low=15.0, high=40.0, max_dev=40) for n in separate_nsurp]
+        agents = list(self.parcel_meta_infos.keys())
+
+        separate_nsurp = [self.infos['AgentInfos'][ag]['Nsurp'][-1] for ag in agents]
+
+        # NUE key is usually 'Nue' in this codebase, but keep a safe fallback.
+        separate_nue = [self.infos['AgentInfos'][ag]['Nue'][-1] for ag in agents]
+
+        separate_reward = []
+        for nsurp, nue in zip(separate_nsurp, separate_nue):
+            r_nsurp = Rewards.ContainerNUE.nsurplus_score(nsurp, low=10.0, high=60.0, max_dev=40)
+            # Soft constraint: 1 until nue<=0.9, then linearly decays to 0 over `width`.
+            r_nue = Rewards.ContainerNUE.nue_score(nue)
+            separate_reward.append(r_nsurp * r_nue)
 
         n_arms = len(separate_reward)
         weighted_reward = [n / n_arms for n in separate_reward]
@@ -165,9 +176,11 @@ class AllocationBandit(gym.Env):
         return np.stack(blocks, axis=1)  # (n_fields, n_keys)
 
     @staticmethod
-    def compute_per_field_rewards_from_nsurp(n_surps: dict) -> np.ndarray:
+    def compute_per_field_rewards(n_surps: dict, nues: dict) -> np.ndarray:
         """Return per-field reward components consistent with `_get_reward`."""
-        r = [Rewards.ContainerNUE.nsurplus_score(n, low=15.0, high=40.0, max_dev=40) for n in n_surps]
+        r_nsurp = [Rewards.ContainerNUE.nsurplus_score(n, low=10.0, high=60.0, max_dev=40) for n in n_surps]
+        r_nue = [Rewards.ContainerNUE.nue_score(n) for n in nues]
+        r = [r_ns * r_n for r_ns, r_n in zip(r_nsurp, r_nue)]
         return np.asarray(r, dtype=np.float32)
 
 

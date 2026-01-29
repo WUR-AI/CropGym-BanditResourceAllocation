@@ -806,6 +806,7 @@ def training_loop_factored(
         # Step env (x_t is vector length n_fields)
         _, reward_env, _, _, step_info = env.step(x_t)
         n_surp_infos = [step_info['AgentInfos'][a]["Nsurp"][-1] for a in env.unwrapped.agents_order]
+        nue_infos = [step_info['AgentInfos'][a]["Nue"][-1] for a in env.unwrapped.agents_order]
         print(f"reward: {reward_env}")
         if comet_experiment:
             comet_experiment.log_metrics({"reward/train/reward": float(reward_env)}, step=t)
@@ -814,7 +815,7 @@ def training_loop_factored(
         env.add_stats_to_context(env.filter_historical_info(step_info["AgentInfos"]))
 
         # Per-field reward components (consistent with env._get_reward())
-        y_fields = env.compute_per_field_rewards_from_nsurp(n_surp_infos)
+        y_fields = env.compute_per_field_rewards(n_surp_infos, nue_infos)
 
         # Optional observation noise (match your previous habit if desired)
         noise = float(getattr(args, "reward_noise", 0.005))

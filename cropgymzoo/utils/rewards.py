@@ -1108,8 +1108,9 @@ class Rewards:
 
         def calculate_reward_nsurp(self, n_fertilized, n_output, no3_depo=None, nh4_depo=None, crop_name=None):
             n_surplus = get_surplus_n(n_fertilized, n_output, no3_depo=no3_depo, nh4_depo=nh4_depo, crop_name=crop_name)
+            nue = calculate_nue(n_fertilized, n_output, no3_depo=no3_depo, nh4_depo=nh4_depo, crop_name=crop_name)
 
-            return self.nsurplus_score(n_surplus, low=15, max_dev=40)
+            return self.nsurplus_score(n_surplus, low=10, high=60, max_dev=40) * self.nue_score(nue)
 
         def calculate_reward_nue_simple(self, n_input, n_output, year=None, start=None, end=None):
             nue = calculate_nue(n_input, n_output, year=year, start=start, end=end)
@@ -1133,6 +1134,20 @@ class Rewards:
                 dist = low - nsurp
             else:
                 dist = nsurp - high
+
+            score = 1.0 - dist / max_dev
+            return max(score, 0.0)
+
+        @staticmethod
+        def nue_score(nue, low=0.5, high=0.9, max_dev=0.2):
+            if low <= nue <= high:
+                return 1.0
+
+            # distance to nearest bound
+            if nue < low:
+                dist = low - nue
+            else:
+                dist = nue - high
 
             score = 1.0 - dist / max_dev
             return max(score, 0.0)
