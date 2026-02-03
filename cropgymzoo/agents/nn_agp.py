@@ -458,9 +458,16 @@ class NNAGPBandit:
             d_theta_per_field: Optional[int] = None,
             m_sub: int = 5,
             share_g_net: bool = False,
+            use_farm_budget: bool = False,
+            budget_tick: float = 5.0,
+            budget_slack: float = 1e-6,
     ):
         self.action_mode = action_mode
         self.n_fields = n_fields
+
+        self.use_farm_budget = bool(use_farm_budget)
+        self.budget_tick = float(budget_tick)
+        self.budget_slack = float(budget_slack)
 
         # ---- FACTORED MODE: orchestrator only ----
         if self.action_mode == "factored":
@@ -850,6 +857,9 @@ class NNAGPBandit:
             calculate_covariance=True,
         )
 
+        mu = torch.nan_to_num(mu, nan=0.0, posinf=0.0, neginf=0.0)
+        std = torch.nan_to_num(std, nan=0.0, posinf=0.0, neginf=0.0)
+
         # Deterministic = greedy on posterior mean; otherwise Thompson sampling
         if deterministic:
             sample = mu
@@ -860,7 +870,8 @@ class NNAGPBandit:
                 g = torch.Generator(device=mu.device)
                 g.manual_seed(seed)
                 if cov is not None:
-                    Lc = torch.linalg.cholesky(cov)
+                    # Lc = torch.linalg.cholesky(cov)
+                    Lc = self.model._robust_cholesky(cov, base_jitter=1e-10)
                     z = torch.randn(mu.shape[0], generator=g, device=mu.device)
                     sample = mu + Lc @ z
                 else:
@@ -868,7 +879,8 @@ class NNAGPBandit:
                     sample = mu + std * z
             else:
                 if cov is not None:
-                    Lc = torch.linalg.cholesky(cov)
+                    # Lc = torch.linalg.cholesky(cov)
+                    Lc = self.model._robust_cholesky(cov, base_jitter=1e-10)
                     z = torch.randn(mu.shape[0], device=mu.device)
                     sample = mu + Lc @ z
                 else:
@@ -883,30 +895,193 @@ class NNAGPBandit:
     def select_ucb_factored(
             self,
             theta_fields: torch.Tensor,  # (n_fields, d_theta_per_field)
-            X_candidates_list: list[torch.Tensor],  # each (M_i, 1)
+            X_candidates_list: list[torch.Tensor],  # each (M_i, 1) or (M_i,)
             delta: float = 0.1,
+            global_budget: float | None = None,
+            max_budgets: torch.Tensor | None = None,
             deterministic: bool = False,
-    ) -> Tuple[torch.Tensor, list[SelectionInfo]]:
+    ) -> tuple[torch.Tensor, list["SelectionInfo"] | dict]:
+        """Factored UCB selection.
+
+        Two modes:
+          1) Independent per-field argmax (default): picks the best candidate per field.
+          2) Budget-coupled (if self.use_farm_budget=True): solves a multi-choice knapsack
+             to pick one candidate per field maximizing sum(UCB_i) subject to
+             sum(applied_i) <= global_budget, where applied_i = max_budget_i - reduction_i.
+
+        Notes
+        -----
+        - Each X_candidates_list[i] should contain the per-field reduction candidates (kg/ha).
+        - This method computes posterior mean/std for ALL candidates per field (small grids).
+        """
         if self.action_mode != "factored":
             raise ValueError("select_ucb_factored called but action_mode != 'factored'")
 
         if theta_fields.shape[0] != len(self.sub_bandits):
             raise ValueError("theta_fields first dimension must equal n_fields")
 
-        xs = []
-        infos = []
-        for i, b in enumerate(self.sub_bandits):
-            x_i, info_i = b.select_ucb(
-                theta_fields[i],
-                X_candidates_list[i],
-                delta=delta,
-                deterministic=deterministic,
-            )
-            # x_i could be shape (1,) or (1,1); reduce to scalar
-            xs.append(float(torch.as_tensor(x_i).view(-1)[0].item()))
-            infos.append(info_i)
+        n_fields = len(self.sub_bandits)
+        device = theta_fields.device
 
-        x_vec = torch.tensor(xs, dtype=torch.get_default_dtype())
+        # --- helpers (defined inline to avoid extra dependencies) ---
+        def _applied_costs_from_reductions(
+                X_list: list[torch.Tensor],
+                max_budgets_: torch.Tensor,
+        ) -> list[torch.Tensor]:
+            costs = []
+            for i, Xi in enumerate(X_list):
+                x = Xi.view(-1).to(dtype=torch.float32, device=device)
+                max_i = max_budgets_[i].to(dtype=torch.float32, device=device)
+                costs.append(max_i - x * 10)
+            return costs
+
+        def _solve_multi_choice_knapsack_dp(
+                scores_list: list[torch.Tensor],
+                costs_list: list[torch.Tensor],
+                B: float,
+                tick: float,
+        ) -> tuple[list[int], float]:
+            """DP multi-choice knapsack: pick 1 per group maximizing sum(scores) s.t. sum(cost)<=B."""
+            if len(scores_list) == 0:
+                return [], 0.0
+            # discretize budget
+            Bn = int(round(float(B) / float(tick)))
+            NEG = -1e18
+            dp = torch.full((Bn + 1,), NEG, dtype=torch.float64)
+            dp[0] = 0.0
+
+            choice = [[-1] * (Bn + 1) for _ in range(len(scores_list))]
+            prev_b = [[-1] * (Bn + 1) for _ in range(len(scores_list))]
+
+            for i in range(len(scores_list)):
+                s = scores_list[i].detach().to(dtype=torch.float64).cpu()
+                c = costs_list[i].detach().to(dtype=torch.float64).cpu()
+                c_int = torch.round(c / float(tick)).to(dtype=torch.int64)
+
+                new_dp = torch.full((Bn + 1,), NEG, dtype=torch.float64)
+                for b in range(Bn + 1):
+                    base = float(dp[b])
+                    if base <= NEG / 2:
+                        continue
+                    for k in range(s.numel()):
+                        nb = b + int(c_int[k])
+                        if 0 <= nb <= Bn:
+                            val = base + float(s[k])
+                            if val > float(new_dp[nb]):
+                                new_dp[nb] = val
+                                choice[i][nb] = int(k)
+                                prev_b[i][nb] = int(b)
+                dp = new_dp
+
+            best_b = int(torch.argmax(dp).item())
+
+            picks = [0] * len(scores_list)
+            b = best_b
+            for i in range(len(scores_list) - 1, -1, -1):
+                k = choice[i][b]
+                if k < 0:
+                    # infeasible DP path -> greedy fallback
+                    picks = [int(torch.argmax(scores_list[j]).item()) for j in range(len(scores_list))]
+                    total_cost = float(torch.stack([costs_list[j][picks[j]] for j in range(len(scores_list))]).sum().item())
+                    return picks, total_cost
+                picks[i] = k
+                b = prev_b[i][b]
+
+            total_cost = float(torch.stack([costs_list[i][picks[i]] for i in range(len(scores_list))]).sum().item())
+            return picks, total_cost
+
+        # --- compute per-field posterior and UCB scores ---
+        infos: list["SelectionInfo"] = []
+        scores_list: list[torch.Tensor] = []
+
+        # Important: sub-bandits maintain their own histories and devices
+        for i, b in enumerate(self.sub_bandits):
+            Xi = X_candidates_list[i]
+            Xi = Xi.to(dtype=torch.float32, device=b.model.device)
+            th_i = theta_fields[i].to(dtype=torch.float32, device=b.model.device).view(1, -1)
+
+            if len(b.y_hist) == 0:
+                # cold-start for this field: pretend mu=0, std=1
+                mu_i = torch.zeros(Xi.shape[0], device=b.model.device, dtype=torch.float32)
+                std_i = torch.ones(Xi.shape[0], device=b.model.device, dtype=torch.float32)
+                beta_t = 0.0 if deterministic else beta_finite_candidates(self.t, Xi.shape[0], delta)
+                ucb_i = mu_i + (beta_t ** 0.5) * std_i
+                infos.append(SelectionInfo(mu=mu_i.detach().cpu(), std=std_i.detach().cpu(), ucb=ucb_i.detach().cpu(), beta_t=beta_t, rule="ucb"))
+                scores_list.append(ucb_i.to(device))
+                continue
+
+            if getattr(b, "posterior_type", None) == "neural_linear":
+                mu_i, std_i, _, _ = b._linear_posterior(Xi, th_i.squeeze(0))
+                beta_t = 0.0 if deterministic else beta_finite_candidates(self.t, Xi.shape[0], delta)
+                ucb_i = mu_i + (beta_t ** 0.5) * std_i
+                infos.append(SelectionInfo(mu=mu_i.detach().cpu(), std=std_i.detach().cpu(), ucb=ucb_i.detach().cpu(), beta_t=beta_t, rule="ucb"))
+                scores_list.append(ucb_i.to(device))
+            else:
+                X_hist, Theta_hist, y_hist = b._get_stacked_history(device=b.model.device)
+                mu_i, std_i, _ = b.model.posterior_on_candidates(
+                    Xi,
+                    th_i,
+                    X_hist,
+                    Theta_hist,
+                    y_hist,
+                    calculate_covariance=False,
+                )
+                beta_t = 0.0 if deterministic else beta_finite_candidates(self.t, Xi.shape[0], delta)
+                ucb_i = mu_i + (beta_t ** 0.5) * std_i
+                infos.append(SelectionInfo(mu=mu_i.detach().cpu(), std=std_i.detach().cpu(), ucb=ucb_i.detach().cpu(), beta_t=beta_t, rule="ucb"))
+                scores_list.append(ucb_i.to(device))
+
+        # --- choose one candidate per field ---
+        if getattr(self, "use_farm_budget", False):
+            if global_budget is None or max_budgets is None:
+                raise ValueError("use_farm_budget=True requires global_budget and max_budgets")
+
+            tick = float(getattr(self, "budget_tick", 0.5))
+            slack = float(getattr(self, "budget_slack", 1e-6))
+
+            max_budgets = max_budgets.to(dtype=torch.float32, device=device).view(-1)
+            # Fast-path: unconstrained budget => skip DP.
+            # applied_i = max_budget_i - reduction_i, so max feasible applied is sum(max_budgets).
+            B_max = float(max_budgets.sum().item())
+            slack = float(getattr(self, "budget_slack", 1e-6))  # ensure slack exists here
+
+            if float(global_budget) >= (B_max - slack):
+                xs = []
+                picks = []
+                for i, ucb_i in enumerate(scores_list):
+                    idx = int(torch.argmax(ucb_i).item())
+                    picks.append(idx)
+                    xs.append(float(torch.as_tensor(X_candidates_list[i]).view(-1)[idx].item()))
+
+                x_vec = torch.tensor(xs, dtype=torch.get_default_dtype(), device=device)
+                self.t += 1
+                return x_vec, {
+                    "rule": "ucb_factored_unconstrained",
+                    "picks": picks,
+                    "total_applied": B_max,
+                    "infos": infos,
+                }
+            costs_list = _applied_costs_from_reductions(X_candidates_list, max_budgets)
+
+            picks, total_applied = _solve_multi_choice_knapsack_dp(
+                scores_list=scores_list,
+                costs_list=costs_list,
+                B=float(global_budget) + slack,
+                tick=tick,
+            )
+
+            xs = [float(torch.as_tensor(X_candidates_list[i]).view(-1)[picks[i]].item()) for i in range(n_fields)]
+            x_vec = torch.tensor(xs, dtype=torch.get_default_dtype(), device=device)
+            self.t += 1
+            return x_vec, {"rule": "ucb_factored_budget", "picks": picks, "total_applied": float(total_applied), "infos": infos}
+
+        # Independent per-field
+        xs = []
+        for i, ucb_i in enumerate(scores_list):
+            idx = int(torch.argmax(ucb_i).item())
+            xs.append(float(torch.as_tensor(X_candidates_list[i]).view(-1)[idx].item()))
+
+        x_vec = torch.tensor(xs, dtype=torch.get_default_dtype(), device=device)
         self.t += 1
         return x_vec, infos
 
@@ -915,25 +1090,185 @@ class NNAGPBandit:
             self,
             theta_fields: torch.Tensor,
             X_candidates_list: list[torch.Tensor],
+            global_budget: float | None = None,
+            max_budgets: torch.Tensor | None = None,
             deterministic: bool = False,
-            seed: Optional[int] = None,
-    ) -> Tuple[torch.Tensor, list[SelectionInfo]]:
+            seed: "Optional[int]" = None,
+    ) -> tuple[torch.Tensor, list["SelectionInfo"] | dict]:
+        """Factored Thompson sampling.
+
+        Two modes:
+          1) Independent per-field argmax of sampled values (default).
+          2) Budget-coupled (if self.use_farm_budget=True): multi-choice knapsack with
+             sampled scores and applied-cost constraint.
+        """
         if self.action_mode != "factored":
             raise ValueError("select_ts_factored called but action_mode != 'factored'")
 
-        xs = []
-        infos = []
-        for i, b in enumerate(self.sub_bandits):
-            x_i, info_i = b.select_ts(
-                theta_fields[i],
-                X_candidates_list[i],
-                deterministic=deterministic,
-                seed=None if seed is None else (seed + i),
-            )
-            xs.append(float(torch.as_tensor(x_i).view(-1)[0].item()))
-            infos.append(info_i)
+        if theta_fields.shape[0] != len(self.sub_bandits):
+            raise ValueError("theta_fields first dimension must equal n_fields")
 
-        x_vec = torch.tensor(xs, dtype=torch.get_default_dtype())
+        n_fields = len(self.sub_bandits)
+        device = theta_fields.device
+
+        # --- helpers ---
+        def _applied_costs_from_reductions(
+                X_list: list[torch.Tensor],
+                max_budgets_: torch.Tensor,
+        ) -> list[torch.Tensor]:
+            costs = []
+            for i, Xi in enumerate(X_list):
+                x = Xi.view(-1).to(dtype=torch.float32, device=device)
+                max_i = max_budgets_[i].to(dtype=torch.float32, device=device)
+                costs.append(max_i - x * 10)
+            return costs
+
+        def _solve_multi_choice_knapsack_dp(
+                scores_list: list[torch.Tensor],
+                costs_list: list[torch.Tensor],
+                B: float,
+                tick: float,
+        ) -> tuple[list[int], float]:
+            if len(scores_list) == 0:
+                return [], 0.0
+            Bn = int(round(float(B) / float(tick)))
+            NEG = -1e18
+            dp = torch.full((Bn + 1,), NEG, dtype=torch.float64)
+            dp[0] = 0.0
+
+            choice = [[-1] * (Bn + 1) for _ in range(len(scores_list))]
+            prev_b = [[-1] * (Bn + 1) for _ in range(len(scores_list))]
+
+            for i in range(len(scores_list)):
+                s = scores_list[i].detach().to(dtype=torch.float64).cpu()
+                c = costs_list[i].detach().to(dtype=torch.float64).cpu()
+                c_int = torch.round(c / float(tick)).to(dtype=torch.int64)
+
+                new_dp = torch.full((Bn + 1,), NEG, dtype=torch.float64)
+                for b in range(Bn + 1):
+                    base = float(dp[b])
+                    if base <= NEG / 2:
+                        continue
+                    for k in range(s.numel()):
+                        nb = b + int(c_int[k])
+                        if 0 <= nb <= Bn:
+                            val = base + float(s[k])
+                            if val > float(new_dp[nb]):
+                                new_dp[nb] = val
+                                choice[i][nb] = int(k)
+                                prev_b[i][nb] = int(b)
+                dp = new_dp
+
+            best_b = int(torch.argmax(dp).item())
+
+            picks = [0] * len(scores_list)
+            b = best_b
+            for i in range(len(scores_list) - 1, -1, -1):
+                k = choice[i][b]
+                if k < 0:
+                    picks = [int(torch.argmax(scores_list[j]).item()) for j in range(len(scores_list))]
+                    total_cost = float(torch.stack([costs_list[j][picks[j]] for j in range(len(scores_list))]).sum().item())
+                    return picks, total_cost
+                picks[i] = k
+                b = prev_b[i][b]
+
+            total_cost = float(torch.stack([costs_list[i][picks[i]] for i in range(len(scores_list))]).sum().item())
+            return picks, total_cost
+
+        infos: list["SelectionInfo"] = []
+        sampled_scores: list[torch.Tensor] = []
+
+        # RNG for TS
+        gen = None
+        if seed is not None:
+            gen = torch.Generator(device=device)
+            gen.manual_seed(int(seed))
+
+        for i, b in enumerate(self.sub_bandits):
+            Xi = X_candidates_list[i]
+            Xi = Xi.to(dtype=torch.float32, device=b.model.device)
+            th_i = theta_fields[i].to(dtype=torch.float32, device=b.model.device).view(1, -1)
+
+            if len(b.y_hist) == 0:
+                mu_i = torch.zeros(Xi.shape[0], device=b.model.device, dtype=torch.float32)
+                std_i = torch.ones(Xi.shape[0], device=b.model.device, dtype=torch.float32)
+            else:
+                if getattr(b, "posterior_type", None) == "neural_linear":
+                    mu_i, std_i, _, _ = b._linear_posterior(Xi, th_i.squeeze(0))
+                else:
+                    X_hist, Theta_hist, y_hist = b._get_stacked_history(device=b.model.device)
+                    mu_i, std_i, _ = b.model.posterior_on_candidates(
+                        Xi,
+                        th_i,
+                        X_hist,
+                        Theta_hist,
+                        y_hist,
+                        calculate_covariance=False,
+                    )
+
+            mu_i = torch.nan_to_num(mu_i, nan=0.0, posinf=0.0, neginf=0.0)
+            std_i = torch.nan_to_num(std_i, nan=0.0, posinf=0.0, neginf=0.0)
+
+            if deterministic:
+                samp_i = mu_i
+            else:
+                if gen is not None:
+                    z = torch.randn_like(mu_i.to(device), generator=gen).to(mu_i.device)
+                else:
+                    z = torch.randn_like(mu_i)
+                samp_i = mu_i + std_i * z
+
+            infos.append(SelectionInfo(mu=mu_i.detach().cpu(), std=std_i.detach().cpu(), sampled_vals=samp_i.detach().cpu(), rule="ts"))
+            sampled_scores.append(samp_i.to(device))
+
+        if getattr(self, "use_farm_budget", False):
+            if global_budget is None or max_budgets is None:
+                raise ValueError("use_farm_budget=True requires global_budget and max_budgets")
+
+            tick = float(getattr(self, "budget_tick", 0.5))
+            slack = float(getattr(self, "budget_slack", 1e-6))
+
+            max_budgets = max_budgets.to(dtype=torch.float32, device=device).view(-1)
+            # Fast-path: unconstrained budget => skip DP.
+            B_max = float(max_budgets.sum().item())
+            slack = float(getattr(self, "budget_slack", 1e-6))  # ensure slack exists here
+
+            if float(global_budget) >= (B_max - slack):
+                xs = []
+                picks = []
+                for i, s_i in enumerate(sampled_scores):  # scores_list holds the sampled/TS scores per candidate
+                    idx = int(torch.argmax(s_i).item())
+                    picks.append(idx)
+                    xs.append(float(torch.as_tensor(X_candidates_list[i]).view(-1)[idx].item()))
+
+                x_vec = torch.tensor(xs, dtype=torch.get_default_dtype(), device=device)
+                self.t += 1
+                return x_vec, {
+                    "rule": "ts_factored_unconstrained",
+                    "picks": picks,
+                    "total_applied": B_max,
+                    "infos": infos,
+                }
+            costs_list = _applied_costs_from_reductions(X_candidates_list, max_budgets)
+
+            picks, total_applied = _solve_multi_choice_knapsack_dp(
+                scores_list=sampled_scores,
+                costs_list=costs_list,
+                B=float(global_budget) + slack,
+                tick=tick,
+            )
+
+            xs = [float(torch.as_tensor(X_candidates_list[i]).view(-1)[picks[i]].item()) for i in range(n_fields)]
+            x_vec = torch.tensor(xs, dtype=torch.get_default_dtype(), device=device)
+            self.t += 1
+            return x_vec, {"rule": "ts_factored_budget", "picks": picks, "total_applied": float(total_applied), "infos": infos}
+
+        xs = []
+        for i, samp_i in enumerate(sampled_scores):
+            idx = int(torch.argmax(samp_i).item())
+            xs.append(float(torch.as_tensor(X_candidates_list[i]).view(-1)[idx].item()))
+
+        x_vec = torch.tensor(xs, dtype=torch.get_default_dtype(), device=device)
         self.t += 1
         return x_vec, infos
 
@@ -1235,4 +1570,84 @@ class NNAGPBandit:
         self._stack_cache = {"X": X, "Theta": Theta, "y": y}
         self._stack_cache_dirty = False
         return X, Theta, y
+
+    @staticmethod
+    def _applied_costs_from_reductions(
+            X_list: list[torch.Tensor],
+            max_budgets: torch.Tensor,
+    ) -> list[torch.Tensor]:
+        """cost_i(x) = applied_N = max_budget_i - reduction."""
+        costs = []
+        for i, Xi in enumerate(X_list):
+            x = Xi.view(-1)  # (M_i,)
+            max_i = max_budgets[i].to(dtype=x.dtype, device=x.device)
+            costs.append(max_i - x)
+        return costs
+
+    @staticmethod
+    def _solve_multi_choice_knapsack_dp(
+            scores_list: list[torch.Tensor],
+            costs_list: list[torch.Tensor],
+            B: float,
+            tick: float,
+    ) -> tuple[list[int], float]:
+        """
+        Pick exactly one item per group i maximizing sum(scores) s.t. sum(costs) <= B.
+
+        scores_list[i]: (M_i,)
+        costs_list[i]:  (M_i,)
+        Returns: (picked_indices, total_cost)
+        """
+        n = len(scores_list)
+        if n == 0:
+            return [], 0.0
+
+        Bn = int(round(float(B) / float(tick)))
+        NEG = -1e18
+
+        # dp[b] = best score after processing i groups
+        dp = torch.full((Bn + 1,), NEG, dtype=torch.float64)
+        dp[0] = 0.0
+
+        choice = [[-1] * (Bn + 1) for _ in range(n)]
+        prev_b = [[-1] * (Bn + 1) for _ in range(n)]
+
+        for i in range(n):
+            s = scores_list[i].detach().to(dtype=torch.float64).cpu()
+            c = costs_list[i].detach().to(dtype=torch.float64).cpu()
+            c_int = torch.round(c / float(tick)).to(dtype=torch.int64)
+
+            new_dp = torch.full((Bn + 1,), NEG, dtype=torch.float64)
+
+            for b in range(Bn + 1):
+                base = float(dp[b])
+                if base <= NEG / 2:
+                    continue
+                for k in range(s.numel()):
+                    nb = b + int(c_int[k])
+                    if 0 <= nb <= Bn:
+                        val = base + float(s[k])
+                        if val > float(new_dp[nb]):
+                            new_dp[nb] = val
+                            choice[i][nb] = int(k)
+                            prev_b[i][nb] = int(b)
+
+            dp = new_dp
+
+        best_b = int(torch.argmax(dp).item())
+
+        picks = [0] * n
+        b = best_b
+        for i in range(n - 1, -1, -1):
+            k = choice[i][b]
+            if k < 0:
+                # no feasible solution -> greedy fallback (may violate if B is impossible)
+                picks = [int(torch.argmax(scores_list[j]).item()) for j in range(n)]
+                total_cost = float(torch.stack([costs_list[j][picks[j]] for j in range(n)]).sum().item())
+                return picks, total_cost
+            picks[i] = k
+            b = prev_b[i][b]
+
+        total_cost = float(torch.stack([costs_list[i][picks[i]] for i in range(n)]).sum().item())
+        return picks, total_cost
 

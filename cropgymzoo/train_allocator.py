@@ -239,6 +239,7 @@ def train_allocator_for_farm(args):
             n_fields=int(env.n_fields),
             d_theta_per_field=int(d_theta_per_field),
             m_sub=int(m_field),
+            use_farm_budget=True
         )
 
         training_loop_factored(
@@ -744,7 +745,7 @@ def training_loop_factored(
     rng = np.random.RandomState(args.seed)
     torch.set_default_dtype(torch.float32)
 
-    rms = BanditNormalizer(env, rng)
+    rms = BanditNormalizer(env, rng, cache_tag=f"{str(region)}_{str(farm_id)}")
     method = args.method
     test_step = 0
 
@@ -799,9 +800,26 @@ def training_loop_factored(
 
         # Select action vector
         if method == "ucb":
-            x_t, _ = bandit.select_ucb_factored(theta_fields, X_list, delta=0.1)
+            x_t, info = bandit.select_ucb_factored(
+                theta_fields,
+                X_list,
+                delta=0.1,
+                global_budget=float(env.global_budget),
+                max_budgets=torch.as_tensor(env.max_budgets, dtype=torch.float32),
+            )
         else:
-            x_t, _ = bandit.select_ts_factored(theta_fields, X_list)
+            x_t, info = bandit.select_ts_factored(
+                theta_fields,
+                X_list,
+                global_budget=float(env.global_budget),
+                max_budgets=torch.as_tensor(env.max_budgets, dtype=torch.float32),
+            )
+
+        # violation check
+        if getattr(bandit, "use_farm_budget", False):
+            applied = float((torch.as_tensor(env.max_budgets, dtype=torch.float32) - x_t.detach().cpu()).sum().item())
+            if applied > float(env.global_budget) + 1e-3:
+                print(f"[WARN] budget violated: applied={applied:.3f} > B={float(env.global_budget):.3f}")
 
         # Step env (x_t is vector length n_fields)
         _, reward_env, _, _, step_info = env.step(x_t)
@@ -830,44 +848,73 @@ def training_loop_factored(
         if t % test_per_round == 0:
             set_subbandits_train_mode(False)
 
-            years = [2020, 2021, 2022, 2023, 2024]
-            rewards = []
-            info_dict = {}
+            info_dict_full = {}
+            info_dict_reduced = {}
+            for scenario in ["full", "reduced"]:
+                print(f"\n\nEval scenario: {scenario}\n")
 
-            for year in years:
-                env.get_rotation_year(year)
-                th_np, info = env.reset(options={"year": year}, seed=args.seed)
-                th_np = rms.norm_theta(th_np)
-                th_fields_np = env.unflatten_context_per_field(th_np)
-                th_fields = torch.from_numpy(th_fields_np.astype(np.float32))
+                years = [2020, 2021, 2022, 2023, 2024]
+                rewards = []
 
-                X_list = build_full_candidates_per_field()
-                if method == "ucb":
-                    x_eval, _ = bandit.select_ucb_factored(th_fields, X_list, delta=0.1, deterministic=True)
-                else:
-                    x_eval, _ = bandit.select_ts_factored(th_fields, X_list, deterministic=True)
+                for year in years:
+                    env.get_rotation_year(year)
+                    th_np, info = env.reset(options={"year": year}, seed=args.seed)
+                    th_np = rms.norm_theta(th_np)
+                    th_fields_np = env.unflatten_context_per_field(th_np)
+                    th_fields = torch.from_numpy(th_fields_np.astype(np.float32))
 
-                _, raw_reward, _, _, infos = env.step(x_eval)
-                info_dict[year] = infos
-                rewards.append(float(raw_reward))
-                print(f"test year: {year}, reward: {raw_reward}")
+                    X_list = build_full_candidates_per_field()
+                    if method == "ucb":
+                        x_eval, info = bandit.select_ucb_factored(
+                            theta_fields,
+                            X_list,
+                            delta=0.1,
+                            global_budget=float(env.global_budget) if scenario == "full" else float(env.global_budget * 0.7),
+                            max_budgets=torch.as_tensor(env.max_budgets, dtype=torch.float32),
+                        )
+                    else:
+                        x_eval, _ = bandit.select_ts_factored(
+                            theta_fields,
+                            X_list,
+                            global_budget=float(env.global_budget) if scenario == "full" else float(env.global_budget * 0.7),
+                            max_budgets=torch.as_tensor(env.max_budgets, dtype=torch.float32),
+                        )
 
-                if comet_experiment:
-                    comet_experiment.log_metrics(
-                        {f"reward/full/test_year:{year}/raw": float(raw_reward)},
-                        step=test_step,
-                    )
-                    fig = plot_results(
-                        infos["AgentInfos"],
-                        variable_list=["DVS", "Profit", "Reward", "Action", "Yield", "BudgetLeft"],
-                        show=False,
-                    )
-                    comet_experiment.log_figure(
-                        figure_name=f"image/full/plot_year:{year}",
-                        figure=fig,
-                        step=test_step,
-                    )
-                    plt.close(fig)
+                        # violation check
+                        if scenario == "reduced":
+                            applied = float((torch.as_tensor(env.max_budgets,
+                                                             dtype=torch.float32) - (x_t.detach().cpu() * 10)).sum().item())
+                            if applied > float(env.global_budget * 0.7) + 1e-3:
+                                print(
+                                    f"\n\n[WARN] budget violated: applied={applied:.3f} > B={float(env.global_budget * 0.7):.3f}\n")
+
+                    _, raw_reward, _, _, infos = env.step(x_eval)
+                    if scenario == "reduced":
+                        info_dict_reduced[year] = infos['AgentInfos']
+                    else:
+                        info_dict_full[year] = infos['AgentInfos']
+                    rewards.append(float(raw_reward))
+                    print(f"test year: {year}, reward: {raw_reward}")
+
+                    if comet_experiment:
+                        comet_experiment.log_metrics(
+                            {f"reward/{scenario}/test_year:{year}/raw": float(raw_reward)},
+                            step=test_step,
+                        )
+                        fig = plot_results(
+                            infos["AgentInfos"],
+                            variable_list=["DVS", "Profit", "Reward", "Action", "Yield", "BudgetLeft"],
+                            show=False,
+                        )
+                        comet_experiment.log_figure(
+                            figure_name=f"image/{scenario}/plot_year:{year}",
+                            figure=fig,
+                            step=test_step,
+                        )
+                        plt.close(fig)
+
+                    if comet_experiment:
+                        comet_experiment.log_metrics({f"reward/mean/{scenario}": float(np.sum(rewards))}, step=test_step)
 
             # Save eval infos
             pickle_path = os.path.join(
@@ -877,13 +924,26 @@ def training_loop_factored(
             )
             os.makedirs(os.path.dirname(pickle_path), exist_ok=True)
             with open(pickle_path, "wb") as f:
-                pickle.dump(info_dict, f)
+                pickle.dump(info_dict_full, f)
+
+            pickle_path_reduced = os.path.join(
+                _DEFAULT_LOGDIR,
+                f"Bandit_{args.model_dir}_reduced",
+                f"bandit_{region}_{farm_id}_info_{test_step}.pkl",
+            )
+            os.makedirs(os.path.dirname(pickle_path), exist_ok=True)
+            with open(pickle_path, "wb") as f:
+                pickle.dump(info_dict_reduced, f)
 
             if comet_experiment:
-                comet_experiment.log_metrics({"reward/mean/raw": float(np.sum(rewards))}, step=test_step)
                 comet_experiment.log_asset(
                     file_data=pickle_path,
                     file_name=f"bandit_{region}_{farm_id}_full_info.pkl",
+                    step=test_step,
+                )
+                comet_experiment.log_asset(
+                    file_data=pickle_path_reduced,
+                    file_name=f"bandit_{region}_{farm_id}_reduced_info.pkl",
                     step=test_step,
                 )
 
