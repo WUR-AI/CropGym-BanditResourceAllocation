@@ -119,8 +119,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
     # modified/lowered by 5kg/ha to match RL agent actions
     CROP_SOIL_MAX = {
-        "winterwheat": {'clay': 250, 'sand': 190, 'silt': 190, 'peat': 160},
-        "sugarbeet": {'clay': 150, 'sand': 150, 'silt': 150, 'peat': 140},
+        "winterwheat": {'clay': 250, 'sand': 160, 'silt': 190, 'peat': 160},
+        "sugarbeet": {'clay': 150, 'sand': 150, 'silt': 120, 'peat': 140},
         "potato": {'clay': 280, 'sand': 260, 'silt': 210, 'peat': 270},
         "barley": {'clay': 80, 'sand': 80, 'silt': 80, 'peat': 80},
         "seed_onion": {'clay': 170, 'sand': 120, 'silt': 120, 'peat': 120},
@@ -515,42 +515,43 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             soil_type: str,
     ):
         """
-        Keep ParcelEnv instance alive but rebuild the underlying PCSE Engine
-        for a new crop/year/location/soil config.
+        This method only updates configuration so that the NEXT reset()
+        rebuilds the PCSE model correctly. It must not rebuild the model itself.
         """
 
-        # Update metadata
+        # ---- config metadata ----
         self.crop = crop
         self.year = int(year)
+
         self.location = tuple(location)
-        self.area = float(area)
+        self._location = self.location  # PCSEEnv uses _location internally
+
         self.soil_type = soil_type
 
-        # Update max budget if it depends on crop/soil
+        # reset() restores area from area_orig -> update it here to persist
+        self.area = float(area)
+        self.area_orig = float(area)
+
+        # ---- budgets ----
         self.max_budget_n = self.CROP_SOIL_MAX[self.crop][self.soil_type]
         self.budget_n = self.max_budget_n
         self.budget_left = self.max_budget_n
 
-        # Rebuild configs (these should NOT force reload yaml every time)
+        # ---- parameters used by PCSEEnv reset ----
         crop_parameters, site_parameters, soil_parameters = self._init_configs()
-
-        # Replace PCSE parameter objects
         self._crop_params = crop_parameters
         self._site_params = site_parameters
         self._soil_params = soil_parameters
 
-        # Update agromanagement attributes
+        # ---- agromanagement ----
         if getattr(self, "crop_info", None):
             self._agro_management = self.agmt.update_attributes(**self.crop_info[self.crop])
 
-        self._model = None
+            # reset() restores agmt from original_agmt -> update snapshot
+            self.original_agmt = deepcopy(self.agmt)
 
-        # Rebuild model with options for year
-        self._model = self._init_pcse_model(options={"year": self.year})
-
-        # Reset your internal env bookkeeping (VERY IMPORTANT)
-        self._init_action_variables()
-        self._init_infos()
+        # DO NOT touch self._model here.
+        # Caller should do: reset(options={'year': self.year, ...})
 
 
     '''
