@@ -749,6 +749,11 @@ def training_loop_factored(
     method = args.method
     test_step = 0
 
+    # Persistent best-eval trackers
+    best_eval_sum = {"full": float("-inf"), "reduced": float("-inf")}
+    best_eval_step = {"full": None, "reduced": None}
+    best_eval_pickle = {"full": None, "reduced": None}
+
     def set_subbandits_train_mode(train: bool):
         # Your factored NNAGPBandit stores sub-bandits in bandit.sub_bandits
         for sb in getattr(bandit, "sub_bandits", []):
@@ -843,18 +848,23 @@ def training_loop_factored(
         # Update factored bandit
         bandit.update_factored(theta_fields, x_t, y_fields)
 
-        # Periodic eval (simple, no scenarios/candidate samplers)
+        # Periodic eval
         test_per_round = int(args.eval_steps)
         if t % test_per_round == 0:
             set_subbandits_train_mode(False)
 
-            info_dict_full = {}
-            info_dict_reduced = {}
             for scenario in ["full", "reduced"]:
                 print(f"\n\nEval scenario: {scenario}\n")
 
                 years = [2020, 2021, 2022, 2023, 2024]
                 rewards = []
+                info_dict = {}
+
+                # Choose eval budget
+                if scenario == "full":
+                    eval_budget = float(env.global_budget)
+                else:
+                    eval_budget = float(0.7) * float(env.global_budget)
 
                 for year in years:
                     env.get_rotation_year(year)
@@ -864,35 +874,31 @@ def training_loop_factored(
                     th_fields = torch.from_numpy(th_fields_np.astype(np.float32))
 
                     X_list = build_full_candidates_per_field()
+
                     if method == "ucb":
-                        x_eval, info = bandit.select_ucb_factored(
-                            theta_fields,
+                        x_eval, sel_info = bandit.select_ucb_factored(
+                            th_fields,
                             X_list,
                             delta=0.1,
-                            global_budget=float(env.global_budget) if scenario == "full" else float(env.global_budget * 0.7),
+                            global_budget=eval_budget,
                             max_budgets=torch.as_tensor(env.max_budgets, dtype=torch.float32),
                         )
                     else:
-                        x_eval, _ = bandit.select_ts_factored(
-                            theta_fields,
+                        x_eval, sel_info = bandit.select_ts_factored(
+                            th_fields,
                             X_list,
-                            global_budget=float(env.global_budget) if scenario == "full" else float(env.global_budget * 0.7),
+                            global_budget=eval_budget,
                             max_budgets=torch.as_tensor(env.max_budgets, dtype=torch.float32),
                         )
 
-                        # violation check
-                        if scenario == "reduced":
-                            applied = float((torch.as_tensor(env.max_budgets,
-                                                             dtype=torch.float32) - (x_t.detach().cpu() * 10)).sum().item())
-                            if applied > float(env.global_budget * 0.7) + 1e-3:
-                                print(
-                                    f"\n\n[WARN] budget violated: applied={applied:.3f} > B={float(env.global_budget * 0.7):.3f}\n")
+                    # Budget violation check (only meaningful in reduced)
+                    if scenario == "reduced":
+                        applied = float((torch.as_tensor(env.max_budgets, dtype=torch.float32) - (x_eval.detach().cpu() * 10)).sum().item())
+                        if applied > float(eval_budget) + 1e-3:
+                            print(f"\n\n[WARN] budget violated: applied={applied:.3f} > B={float(eval_budget):.3f}\n")
 
                     _, raw_reward, _, _, infos = env.step(x_eval)
-                    if scenario == "reduced":
-                        info_dict_reduced[year] = infos['AgentInfos']
-                    else:
-                        info_dict_full[year] = infos['AgentInfos']
+                    info_dict[year] = infos["AgentInfos"]
                     rewards.append(float(raw_reward))
                     print(f"test year: {year}, reward: {raw_reward}")
 
@@ -913,39 +919,58 @@ def training_loop_factored(
                         )
                         plt.close(fig)
 
+                # Aggregate scenario score
+                sum_reward = float(np.sum(rewards))
+                if comet_experiment:
+                    comet_experiment.log_metric(f"reward/{scenario}/sum", sum_reward, step=test_step)
+
+                # Always save the latest eval info_dict for this scenario
+                latest_pickle_path = os.path.join(
+                    _DEFAULT_LOGDIR,
+                    f"Bandit_{args.model_dir}_{scenario}",
+                    f"bandit_{region}_{farm_id}_info_{test_step}.pkl",
+                )
+                os.makedirs(os.path.dirname(latest_pickle_path), exist_ok=True)
+                with open(latest_pickle_path, "wb") as f:
+                    pickle.dump(info_dict, f)
+
+                if comet_experiment:
+                    comet_experiment.log_asset(
+                        file_data=latest_pickle_path,
+                        file_name=f"bandit_{region}_{farm_id}_{scenario}_info.pkl",
+                        step=test_step,
+                    )
+
+                # Track + save best eval per scenario
+                if sum_reward > best_eval_sum[scenario]:
+                    best_eval_sum[scenario] = sum_reward
+                    best_eval_step[scenario] = int(test_step)
+
+                    best_pickle_path = os.path.join(
+                        _DEFAULT_LOGDIR,
+                        f"Bandit_{args.model_dir}_{scenario}",
+                        f"bandit_{region}_{farm_id}_BEST.pkl",
+                    )
+                    os.makedirs(os.path.dirname(best_pickle_path), exist_ok=True)
+                    with open(best_pickle_path, "wb") as f:
+                        pickle.dump(info_dict, f)
+
+                    best_eval_pickle[scenario] = best_pickle_path
+
+                    print(f"[BEST] New best {scenario}: sum_reward={sum_reward:.6f} at eval_step={test_step}")
                     if comet_experiment:
-                        comet_experiment.log_metrics({f"reward/mean/{scenario}": float(np.sum(rewards))}, step=test_step)
-
-            # Save eval infos
-            pickle_path = os.path.join(
-                _DEFAULT_LOGDIR,
-                f"Bandit_{args.model_dir}_full",
-                f"bandit_{region}_{farm_id}_info_{test_step}.pkl",
-            )
-            os.makedirs(os.path.dirname(pickle_path), exist_ok=True)
-            with open(pickle_path, "wb") as f:
-                pickle.dump(info_dict_full, f)
-
-            pickle_path_reduced = os.path.join(
-                _DEFAULT_LOGDIR,
-                f"Bandit_{args.model_dir}_reduced",
-                f"bandit_{region}_{farm_id}_info_{test_step}.pkl",
-            )
-            os.makedirs(os.path.dirname(pickle_path), exist_ok=True)
-            with open(pickle_path, "wb") as f:
-                pickle.dump(info_dict_reduced, f)
-
-            if comet_experiment:
-                comet_experiment.log_asset(
-                    file_data=pickle_path,
-                    file_name=f"bandit_{region}_{farm_id}_full_info.pkl",
-                    step=test_step,
-                )
-                comet_experiment.log_asset(
-                    file_data=pickle_path_reduced,
-                    file_name=f"bandit_{region}_{farm_id}_reduced_info.pkl",
-                    step=test_step,
-                )
+                        comet_experiment.log_metrics(
+                            {
+                                f"reward/{scenario}/best_sum": float(sum_reward),
+                                f"reward/{scenario}/best_at_step": int(test_step),
+                            },
+                            step=test_step,
+                        )
+                        comet_experiment.log_asset(
+                            file_data=best_pickle_path,
+                            file_name=f"bandit_{region}_{farm_id}_{scenario}_BEST_info.pkl",
+                            step=test_step,
+                        )
 
             test_step += test_per_round
             set_subbandits_train_mode(True)
