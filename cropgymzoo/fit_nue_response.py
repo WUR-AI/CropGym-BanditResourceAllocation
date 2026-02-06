@@ -399,62 +399,62 @@ def feasible_N_bounds_from_constraints(
 # --------------------------------------------------------------------------------------
 
 
-def compute_feasible_bounds_per_field(
-    *,
-    responses: Dict[Tuple[Hashable, Hashable], FieldMetricResponses],
-    max_crop_soil: Dict[Tuple[Hashable, Hashable], float],
-    nue_range: Tuple[float, float] = (0.5, 0.9),
-    nsurp_range: Tuple[float, float] = (0.0, 40.0),
-) -> Dict[Tuple[Hashable, Hashable], Tuple[float, float]]:
-    """Compute feasible (lb, ub) for each (farm_id, field_id).
-
-    This converts your *metric* constraints into a simple bound on applied nitrogen N.
-
-    Constraints enforced (per field):
-      - NUE in [nue_range[0], nue_range[1]] (if NUE model exists)
-      - Nsurp in [nsurp_range[0], nsurp_range[1]] (if Nsurp model exists)
-      - 0 <= N <= max_crop_soil[(farm_id, field_id)]
-
-    Parameters
-    ----------
-    responses:
-        Output from `fit_field_metric_responses(...)` or `load_field_metric_responses(...)`.
-    max_crop_soil:
-        Dict mapping (farm_id, field_id) -> MAX_CROP_SOIL (kg/ha).
-        You said you'll fill this externally.
-
-    Returns
-    -------
-    Dict[(farm_id, field_id)] -> (lb, ub)
-        If a field is infeasible under the fitted model, lb may exceed ub.
-    """
-    out: Dict[Tuple[Hashable, Hashable], Tuple[float, float]] = {}
-
-    nue_min, nue_max = float(nue_range[0]), float(nue_range[1])
-    ns_min, ns_max = float(nsurp_range[0]), float(nsurp_range[1])
-
-    for key, fr in responses.items():
-        bmax = max_crop_soil.get(key)
-        if bmax is None:
-            # If user didn't provide a max for this field, skip it.
-            continue
-
-        nue_model = fr.models.get("NUE")
-        nsurp_model = fr.models.get("Nsurp")
-
-        lb, ub = feasible_N_bounds_from_constraints(
-            nue_model=nue_model,
-            nsurp_model=nsurp_model,
-            bmax_rate=float(bmax),
-            nue_min=nue_min,
-            nue_max=nue_max,
-            nsurp_min=ns_min,
-            nsurp_max=ns_max,
-        )
-
-        out[key] = (float(lb), float(ub))
-
-    return out
+# def compute_feasible_bounds_per_field(
+#     *,
+#     responses: Dict[Tuple[Hashable, Hashable], FieldMetricResponses],
+#     max_crop_soil: Dict[Tuple[Hashable, Hashable], float],
+#     nue_range: Tuple[float, float] = (0.5, 0.9),
+#     nsurp_range: Tuple[float, float] = (0.0, 40.0),
+# ) -> Dict[Tuple[Hashable, Hashable], Tuple[float, float]]:
+#     """Compute feasible (lb, ub) for each (farm_id, field_id).
+#
+#     This converts your *metric* constraints into a simple bound on applied nitrogen N.
+#
+#     Constraints enforced (per field):
+#       - NUE in [nue_range[0], nue_range[1]] (if NUE model exists)
+#       - Nsurp in [nsurp_range[0], nsurp_range[1]] (if Nsurp model exists)
+#       - 0 <= N <= max_crop_soil[(farm_id, field_id)]
+#
+#     Parameters
+#     ----------
+#     responses:
+#         Output from `fit_field_metric_responses(...)` or `load_field_metric_responses(...)`.
+#     max_crop_soil:
+#         Dict mapping (farm_id, field_id) -> MAX_CROP_SOIL (kg/ha).
+#         You said you'll fill this externally.
+#
+#     Returns
+#     -------
+#     Dict[(farm_id, field_id)] -> (lb, ub)
+#         If a field is infeasible under the fitted model, lb may exceed ub.
+#     """
+#     out: Dict[Tuple[Hashable, Hashable], Tuple[float, float]] = {}
+#
+#     nue_min, nue_max = float(nue_range[0]), float(nue_range[1])
+#     ns_min, ns_max = float(nsurp_range[0]), float(nsurp_range[1])
+#
+#     for key, fr in responses.items():
+#         bmax = max_crop_soil.get(key)
+#         if bmax is None:
+#             # If user didn't provide a max for this field, skip it.
+#             continue
+#
+#         nue_model = fr.models.get("NUE")
+#         nsurp_model = fr.models.get("Nsurp")
+#
+#         lb, ub = feasible_N_bounds_from_constraints(
+#             nue_model=nue_model,
+#             nsurp_model=nsurp_model,
+#             bmax_rate=float(bmax),
+#             nue_min=nue_min,
+#             nue_max=nue_max,
+#             nsurp_min=ns_min,
+#             nsurp_max=ns_max,
+#         )
+#
+#         out[key] = (float(lb), float(ub))
+#
+#     return out
 
 
 def allocate_feasible_N(
@@ -462,6 +462,7 @@ def allocate_feasible_N(
     bounds: Dict[Tuple[Hashable, Hashable], Tuple[float, float]],
     total_budget: Optional[float] = None,
     mode: str = "max_sumN",
+    repair_infeasible_budget: bool = True,
 ) -> Dict[Tuple[Hashable, Hashable], float]:
     """Find a feasible N (kg/ha) per field given bound constraints.
 
@@ -485,8 +486,7 @@ def allocate_feasible_N(
     Notes
     -----
     - If total_budget is None, we simply return N_i = ub_i (max_sumN) or lb_i (min_sumN).
-    - If total_budget is too small to satisfy all lower bounds, we still return lb_i,
-      but you should treat it as infeasible (sum(lb) > total_budget).
+    - If total_budget is too small to satisfy all lower bounds and repair_infeasible_budget=True, we return a repaired allocation that satisfies the global budget by allowing per-field lower-bound violations (N_i < lb_i).
     """
     keys = list(bounds.keys())
     lbs = np.array([bounds[k][0] for k in keys], dtype=float)
@@ -509,9 +509,32 @@ def allocate_feasible_N(
     alloc = lbs.copy()
     used = float(np.sum(alloc))
 
-    # If we already exceed the global budget, can't satisfy all lower bounds
+    # If we already exceed the global budget, we cannot satisfy all per-field lower bounds.
+    # Option C repair: enforce sum_i N_i <= B by allowing N_i < lb_i (violating constraints).
     if used > B + 1e-9:
-        # Return lower bounds (signals infeasible for the global budget)
+        if not repair_infeasible_budget:
+            # Return lower bounds (signals infeasible for the global budget)
+            return {k: float(v) for k, v in zip(keys, alloc)}
+
+        # Amount we must remove from allocations to meet the farm budget
+        deficit = used - B
+
+        # Greedy reduction from fields with the largest current allocation first.
+        # With uniform lambda=1, any distribution of violations is equivalent in objective.
+        order = np.argsort(-alloc)  # descending lb
+        for idx in order:
+            if deficit <= 1e-9:
+                break
+            # We can reduce this field down to 0
+            reducible = float(alloc[idx])
+            if reducible <= 1e-12:
+                continue
+            take = min(reducible, float(deficit))
+            alloc[idx] -= take
+            deficit -= take
+
+        # Ensure numerical safety
+        alloc = np.clip(alloc, 0.0, ubs)
         return {k: float(v) for k, v in zip(keys, alloc)}
 
     # Remaining budget to distribute
@@ -710,7 +733,7 @@ def solve_lp_allocation(
     field_crop: Optional[Dict[Tuple[Hashable, Hashable], str]] = None,
     total_budget: Optional[float] = None,
     nue_range: Tuple[float, float] = (0.5, 0.9),
-    nsurp_range: Tuple[float, float] = (0.0, 40.0),
+    nsurp_range: Tuple[float, float] = (0.0, 60.0),
     mode: str = "max_sumN",
 ) -> Tuple[
     Dict[Tuple[Hashable, Hashable], float],
@@ -744,7 +767,20 @@ def solve_lp_allocation(
     if total_budget is not None:
         feasible_under_budget = sum_lb <= float(total_budget) + 1e-9
 
-    alloc = allocate_feasible_N(bounds=bounds, total_budget=total_budget, mode=mode)
+    alloc = allocate_feasible_N(
+        bounds=bounds,
+        total_budget=total_budget,
+        mode=mode,
+        repair_infeasible_budget=True,
+    )
+
+    # Compute total lower-bound violation after allocation (how much we went below lb)
+    total_lb_violation = 0.0
+    if bounds:
+        for k, (lb, _ub) in bounds.items():
+            n_i = float(alloc.get(k, float(lb)))
+            if n_i < float(lb):
+                total_lb_violation += float(lb) - n_i
 
     info = {
         "infeasible_fields": infeasible_fields,
@@ -754,6 +790,8 @@ def solve_lp_allocation(
         "feasible_under_global_budget": bool(feasible_under_budget),
         "mode": str(mode),
         "n_fields": int(len(bounds)),
+        "total_lb_violation": float(total_lb_violation),
+        "repaired_to_meet_budget": bool((total_budget is not None) and (sum_lb > float(total_budget) + 1e-9) and (total_lb_violation > 1e-9)),
     }
     return alloc, bounds, info
 
@@ -804,6 +842,7 @@ def lp_alloc_to_env_reduction_vector(
     farm_id: Hashable,
     possible_agents: List[Hashable],
     max_crop_soil: Dict[Tuple[Hashable, Hashable], float],
+    infeasible_fields: Optional[set[Tuple[Hashable, Hashable]]] = None,
     unit_kg: float = 10.0,
     snap: Optional[float] = 0.5,
     default_n: Optional[float] = None,
@@ -817,6 +856,12 @@ def lp_alloc_to_env_reduction_vector(
 
     for i, field_id in enumerate(possible_agents):
         bmax = float(max_crop_soil[(farm_id, field_id)])
+
+        # If this field has unsatisfiable bounds (lb > ub), apply 0 reductions:
+        # i.e., keep full budget (Napplied = bmax => reduction_units = 0).
+        if infeasible_fields is not None and (farm_id, field_id) in infeasible_fields:
+            reds[i] = 0.0
+            continue
 
         # choose Napplied for this field
         if (farm_id, field_id) in alloc_n:
@@ -844,7 +889,7 @@ def solve_lp_for_env(
     farm_id: Hashable,
     total_budget: Optional[float] = None,
     nue_range: Tuple[float, float] = (0.5, 0.9),
-    nsurp_range: Tuple[float, float] = (0.0, 40.0),
+    nsurp_range: Tuple[float, float] = (0.0, 60.0),
     mode: str = "max_sumN",
     unit_kg: float = 10.0,
     snap: Optional[float] = 0.5,
@@ -873,21 +918,90 @@ def solve_lp_for_env(
         mode=mode,
     )
 
+    # Compute sum of Napplied before discretization (continuous alloc)
+    applied_sum_continuous = float(np.sum(list(alloc_n.values()))) if alloc_n else 0.0
+
     # Convert Napplied -> env reduction units vector
     reductions_vec = lp_alloc_to_env_reduction_vector(
         alloc_n,
         farm_id=farm_id,
         possible_agents=list(env.possible_agents),
         max_crop_soil=max_crop_soil,
+        infeasible_fields=set(lp_info.get("infeasible_fields", [])),
         unit_kg=unit_kg,
         snap=snap,
     )
+
+    # ------------------------------------------------------------------
+    # Enforce STRICT farm-level budget after discretization/snapping.
+    # Rationale: converting Napplied -> reduction units (with snap) can
+    # introduce rounding that pushes sum(Napplied) above total_budget.
+    # Here we greedily increase reductions (decrease Napplied) until the
+    # strict budget is satisfied.
+    # ------------------------------------------------------------------
+    applied_sum = 0.0
+    bmax_vec = np.array([float(env.get_per_parcel_max_budget(a)) for a in env.possible_agents], dtype=float)
+    red_vec = reductions_vec.astype(float).copy()
+
+    applied_vec = bmax_vec - red_vec * float(unit_kg)
+    applied_vec = np.clip(applied_vec, 0.0, bmax_vec)
+    applied_sum = float(np.sum(applied_vec))
+
+    strict_budget_repaired = False
+    if total_budget is not None:
+        B = float(total_budget)
+        tol = 1e-6
+
+        # Max possible reduction-units per field (so Napplied >= 0)
+        max_red_units = bmax_vec / float(unit_kg)
+
+        step = float(snap) if (snap is not None and snap > 0) else 1.0
+        delta_applied = float(unit_kg) * step
+
+        # If rounding caused budget violation, increase reductions greedily
+        if applied_sum > B + tol:
+            strict_budget_repaired = True
+            # Greedy: always reduce the field with the largest current Napplied
+            # (uniform lambda=1 => any distribution is acceptable)
+            # Safety cap on iterations to avoid infinite loops
+            max_iter = int(1e6)
+            it = 0
+            while applied_sum > B + tol and it < max_iter:
+                it += 1
+                # candidates that can still be reduced
+                can_reduce = applied_vec > tol
+                if not np.any(can_reduce):
+                    break
+
+                # pick index with largest applied among reducible
+                idx = int(np.argmax(np.where(can_reduce, applied_vec, -np.inf)))
+
+                # compute the maximum step we can take without exceeding max reduction
+                remaining_units = max_red_units[idx] - red_vec[idx]
+                if remaining_units <= tol:
+                    # cannot reduce this one anymore; mark as not reducible and continue
+                    applied_vec[idx] = 0.0
+                    continue
+
+                take_units = min(step, remaining_units)
+
+                red_vec[idx] += take_units
+                applied_vec[idx] = max(0.0, bmax_vec[idx] - red_vec[idx] * float(unit_kg))
+
+                # update sum (fast incremental)
+                applied_sum = float(np.sum(applied_vec))
+
+            # write back
+            reductions_vec = red_vec.astype(np.float32)
 
     info = {
         **lp_info,
         "alloc_n": alloc_n,
         "bounds": bounds,
         "reductions_vec": reductions_vec,
+        "applied_sum_continuous": float(applied_sum_continuous),
+        "applied_sum_post_discretization": float(applied_sum),
+        "strict_budget_repaired": bool(strict_budget_repaired),
     }
     return reductions_vec, info
 

@@ -106,7 +106,7 @@ def run_region_year(
     name_allocator = "" if allocator is None else f"_{allocator}"
 
     # Loop through farmers with a progress bar
-    num_farmers = len(os.listdir(_YEAR_PATH)) - 1
+    num_farmers = len([name for name in os.listdir(_YEAR_PATH) if ".bak" not in name]) - 1
     if subset:
         num_farmers = 2
     for i in tqdm(range(num_farmers), desc=f"{region}-{year} farmer"):
@@ -141,7 +141,10 @@ def run_region_year(
             env.reconfigure_farm(dict_fields, year=year)
 
         if "reduced" in scenario and allocator is None:
-            env.allocate_bandit_budgets([10 for _ in env.possible_agents])
+            reductions = [
+                (env.get_per_parcel_max_budget(a) - (env.get_per_parcel_max_budget(a) * 0.7)) / 10.0
+                for a in env.possible_agents]
+            env.allocate_bandit_budgets(reductions)
             for ag in env.possible_agents:
             #     env.set_per_parcel_budget(ag, env.get_per_parcel_max_budget(ag) - 100)
             #     env.global_allocated_budget = env._get_global_budget_left()
@@ -155,18 +158,31 @@ def run_region_year(
                 lp_year = lp_year - 5
 
             # Pick the correct LP file (normal vs reduced)
-            lp_suffix = "reduced_" if allocator == "LP_low" else ""
+            lp_suffix = "reduced_" if allocator == "LP_reduced" else "full_"
             lp_name = f"lp_results_{lp_suffix}{agent}.pkl"
             global_farm_id = f"farm{farm_region_mapper(region, i)}"
 
             with open(os.path.join(_DEFAULT_RESULTSDIR, "LP", "nue_response", f"nue_response_{global_farm_id}.pkl"), "rb") as f:
                 lp = pickle.load(f)
 
+            farm_budget = float(env.global_budget)
+
+            if allocator == "LP_reduced" and farm_budget is not None:
+                farm_budget = 0.7 * farm_budget
+
             reductions_vec, info = solve_lp_for_env(
                 env,
                 responses=lp['responses'],  # loaded from pickle
                 farm_id=global_farm_id,
+                total_budget=farm_budget,
             )
+
+            # implied Napplied per field (since reductions are in 10 kg/ha units)
+            applied_sum = 0.0
+            for ag, red_units in zip(env.possible_agents, reductions_vec):
+                n_i = float(env.get_per_parcel_max_budget(ag)) - float(red_units) * 10.0
+                applied_sum += n_i
+            print("LP applied sum:", applied_sum, "farm_budget:", farm_budget)
 
             env.allocate_bandit_budgets(reductions_vec)
 
