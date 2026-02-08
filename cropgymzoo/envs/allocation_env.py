@@ -6,6 +6,7 @@ import torch
 import pickle
 import itertools
 from collections import deque
+import datetime
 
 import numpy as np
 import gymnasium as gym
@@ -17,6 +18,7 @@ from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 from cropgymzoo.utils.defaults import get_default_years
 from cropgymzoo.utils.scenario_utils import model_picker
 from cropgymzoo.utils.rewards import Rewards
+from cropgymzoo.utils.agent_helpers import last_before_nan
 from cropgymzoo.train_policy import load_model, initialize_policy
 from cropgymzoo.eval_policy import MultiRLAgent, load_policy, RoTAgent, RandomAgent
 
@@ -69,6 +71,16 @@ class AllocationBandit(gym.Env):
         self._elite_center_action = None
         self._last_action = None
 
+        # --- multi-year evaluation (daisy-chained) bookkeeping ---
+        self._eval_mode = False
+        self._eval_years: list[int] = []
+        self._eval_ptr: int = 0
+        self._eval_days_before: int = 60
+        self._eval_apply_preN: bool = False
+        self._eval_preN: float = 0.0
+        self._eval_scenario: str = 'max'
+        self._farm_dict_by_year: dict = None
+
         # The MARL env
         self._init_envs(args, warm_up_eps=warm_up_eps)
 
@@ -84,17 +96,170 @@ class AllocationBandit(gym.Env):
     '''
     Gymnasium functions
     '''
+    def _is_multi_eval(self, options: dict | None) -> bool:
+        if not options:
+            return False
+        return ("eval_horizon_years" in options) and ("farm_dict_by_year" in options)
+
+
+    def _all_fields_past_season_year(self, season_year: int) -> bool:
+        """True if every field has advanced beyond `season_year` (or terminated)."""
+        for ag, env in self.farm.fields.items():
+            try:
+                infos = env.unwrapped.infos
+                sy_list = infos.get("SeasonYear", [])
+                if not sy_list:
+                    return False
+                sy = sy_list[-1]
+                # If still in or before the target season, keep running
+                if sy is None or int(sy) <= int(season_year):
+                    # unless env has terminated (horizon end)
+                    if not getattr(env, "terminated", False) and not getattr(env.unwrapped, "terminated", False):
+                        return False
+            except Exception:
+                return False
+        return True
+
+
+    def _collect_agent_infos_for_season(self, season_year: int) -> dict:
+        """Return {agent -> infos_dict_for_that_season_year} using ParcelEnv grouping."""
+        out = {}
+        for ag, env in self.farm.fields.items():
+            try:
+                by_year = env.unwrapped._group_infos_by_season_year()
+                if int(season_year) in by_year:
+                    out[ag] = by_year[int(season_year)]
+                else:
+                    # fallback: provide at least Date/CropName if available
+                    out[ag] = {k: v for k, v in env.unwrapped.infos.items() if k in ("Date", "CropName", "SeasonYear", "CropActive")}
+            except Exception:
+                out[ag] = {}
+        return out
+
+
+    def _run_marl_until_end_of_season(self, season_year: int, scenario: str = 'max'):
+        """Run the PettingZoo env forward (without resetting) until all fields pass `season_year`."""
+        # MultiRLAgent needs recurrent state tracking; RoTAgent/RandomAgent do not.
+        next_states = None
+        is_multirl = isinstance(self.env_agent, MultiRLAgent)
+        if is_multirl:
+            from tianshou.data import Batch
+            next_states = {ag: None for ag in self.farm.possible_agents}
+
+        # iterate until season boundary reached
+        # (also breaks if env terminates completely)
+        max_iters = int(10_000_000)  # safety cap
+        it = 0
+        for agent in self.farm.agent_iter():
+            it += 1
+            if it > max_iters:
+                break
+
+            obs, rew, term, trunc, info = self.farm.last()
+
+            # If overall env has terminated for this agent, advance dead-step handling
+            if self.farm.terminations.get(agent, False) or self.farm.truncations.get(agent, False):
+                self.farm.step(None)
+            else:
+                if is_multirl:
+                    # match eval_policy.MultiRLAgent.run preprocessing
+                    processed_info = Batch({k: [v[-1]] for k, v in info.items()})
+                    processed_info['env_id'] = [0]
+                    with torch.no_grad():
+                        out = self.env_agent.get_action(
+                            agent,
+                            obs=obs,
+                            next_states=next_states,
+                            info=processed_info,
+                        )
+                    action = out.act.item()
+                    state = None if not hasattr(out, 'state') else out.state
+                    next_states[agent] = state
+                else:
+                    action = self.env_agent.get_action(agent, env=self.farm, scenario=scenario)
+
+                self.farm.step(action)
+
+            # check season boundary after each env.step()
+            if self._all_fields_past_season_year(season_year):
+                break
+
+            # if no agents left, break
+            if not getattr(self.farm, "agents", None):
+                break
+
+
     def reset(self, *, seed=None, options=None):
 
         options = self._get_default_reset_options() if options is None else options
 
         assert 'year' in options, "If testing, make sure to pass 'year' in the options dictionary!"
 
-        self.year = options.get('year')
-
         options['seed'] = seed
 
+        # Detect multi-year evaluation (daisy-chained) mode
+        self._eval_mode = self._is_multi_eval(options)
+        if self._eval_mode:
+            self._eval_years = [int(y) for y in list(options.get('eval_horizon_years', []))]
+            if not self._eval_years:
+                raise ValueError("eval_horizon_years must be a non-empty list in multi-year eval mode")
+            self._eval_ptr = 0
+            # We allow the bandit decision point to be configurable; 7 days is fine and often simpler.
+            self._eval_days_before = int(options.get('days_before_sowing', 7))
+            self._eval_apply_preN = bool(options.get('apply_preseason_N', False))
+            self._eval_preN = float(options.get('preseason_N', 0.0))
+            self._eval_scenario = str(options.get('marl_scenario', 'max'))
+            self._farm_dict_by_year = options.get('farm_dict_by_year')
+
+            # In this mode, `year` is the current season label year (first in horizon)
+            self.year = int(options.get('year', self._eval_years[0]))
+            if self.year != self._eval_years[0]:
+                # keep them consistent: year should match the first horizon label
+                self.year = int(self._eval_years[0])
+                options['year'] = int(self.year)
+
+            # Evaluation-time preseason support:
+            # - disable auto-skipping to sowing so we can advance to per-field allocation dates
+            options["preseason_allocation"] = True
+            options["wait_for_crop"] = False
+
+            # Reset the underlying farm ONCE with multi-year options
+            self.farm.reset(seed=seed, options=options)
+
+            # Advance to the first allocation moment (per-field)
+            self.farm.advance_fields_to_allocation_dates(
+                days_before_sowing=self._eval_days_before,
+                preseason_N=self._eval_preN,
+                apply_preseason_N=self._eval_apply_preN,
+                season_year=int(self._eval_years[self._eval_ptr]),
+                farm_dict_by_year=options.get('farm_dict_by_year'),
+            )
+
+            # Fresh episode infos
+            self.infos = {}
+            return self._get_context(), self._construct_info(options)
+
+        # -------------------------
+        # Original single-season behavior
+        # -------------------------
+        self.year = options.get('year')
+
+        # Evaluation-time preseason support:
+        preseason = bool(options.get("preseason_allocation", False))
+        if preseason:
+            options["wait_for_crop"] = False
+
         self.farm.reset(seed=seed, options=options)
+
+        if preseason:
+            days_before = int(options.get("days_before_sowing", 60))
+            apply_preN = bool(options.get("apply_preseason_N", False))
+            preN = float(options.get("preseason_N", 0.0))
+            self.farm.advance_fields_to_allocation_dates(
+                days_before_sowing=days_before,
+                preseason_N=preN,
+                apply_preseason_N=apply_preN,
+            )
 
         return self._get_context(), self._construct_info(options)
 
@@ -119,9 +284,52 @@ class AllocationBandit(gym.Env):
         # allocate here
         self.farm.allocate_bandit_budgets(self.infos['AllocationAction'])
 
-        # runs one episode of the MARL agent
-        infos_agents = self.env_agent.run([self.year], year_key=False)
+        # -------------------------
+        # Multi-year daisy-chained evaluation mode
+        # -------------------------
+        if getattr(self, "_eval_mode", False):
+            # current season label year
+            season_year = int(self._eval_years[self._eval_ptr])
+            self.year = season_year
+            self.infos['current_season_year'] = season_year
 
+            # Run MARL forward until end of THIS season (without resetting)
+            self._run_marl_until_end_of_season(season_year=season_year, scenario=self._eval_scenario)
+
+            # Collect agent infos for this season only
+            infos_agents = self._collect_agent_infos_for_season(season_year)
+            self.infos['AgentInfos'] = infos_agents
+
+            # compute bandit reward from per-season outputs
+            reward = self._get_reward()
+
+            # advance pointer
+            self._eval_ptr += 1
+            done = (self._eval_ptr >= len(self._eval_years))
+
+            if not done:
+                # Advance to the next allocation moment (typically 7 days before next sowing)
+                next_year = int(self._eval_years[self._eval_ptr])
+                self.farm.advance_fields_to_allocation_dates(
+                    days_before_sowing=self._eval_days_before,
+                    preseason_N=self._eval_preN,
+                    apply_preseason_N=self._eval_apply_preN,
+                    season_year=next_year,
+                    farm_dict_by_year=self._farm_dict_by_year,
+                )
+                obs = self._get_context()
+                if self.render:
+                    print(self.farm)
+                return obs, reward, False, False, self.infos
+
+            # terminal of multi-step eval episode
+            obs = np.zeros(1, dtype=np.float32)
+            return obs, reward, True, False, self.infos
+
+        # -------------------------
+        # Original one-step behavior
+        # -------------------------
+        infos_agents = self.env_agent.run([self.year], year_key=False)
         self.infos['AgentInfos'] = infos_agents
         reward = self._get_reward()
 
@@ -131,10 +339,10 @@ class AllocationBandit(gym.Env):
     def _get_reward(self):
         agents = list(self.parcel_meta_infos.keys())
 
-        separate_nsurp = [self.infos['AgentInfos'][ag]['Nsurp'][-1] for ag in agents]
+        separate_nsurp = [last_before_nan(self.infos['AgentInfos'][ag]['Nsurp']) for ag in agents]
 
         # NUE key is usually 'Nue' in this codebase, but keep a safe fallback.
-        separate_nue = [self.infos['AgentInfos'][ag]['Nue'][-1] for ag in agents]
+        separate_nue = [last_before_nan(self.infos['AgentInfos'][ag]['Nue']) for ag in agents]
 
         separate_reward = []
         for nsurp, nue in zip(separate_nsurp, separate_nue):
@@ -216,6 +424,25 @@ class AllocationBandit(gym.Env):
     def _context_value(self, key: str):
         """Compute a single context feature."""
         if key == "InitialN":
+            # Daisy-chain eval: use N at current decision date (after preseason advance)
+            if getattr(self, "_eval_mode", False):
+                out = []
+                use_navail = bool(getattr(self, "use_navail", False))
+                for a in self.agents_order:
+                    try:
+                        pcse_out = self.farm.fields[a].model.get_output()
+                        last = pcse_out[-1] if pcse_out else {}
+                        if use_navail and ("NAVAIL" in last) and (last["NAVAIL"] is not None):
+                            out.append(float(last["NAVAIL"]))
+                        else:
+                            no3 = last.get("NO3", 0.0) or 0.0
+                            nh4 = last.get("NH4", 0.0) or 0.0
+                            out.append(float(no3) + float(nh4))
+                    except Exception:
+                        out.append(float(self.farm.get_initial_n()[a]))
+                return out
+
+            # single-year / training behavior
             return [self.farm.get_initial_n()[a] for a in self.agents_order]
 
         if key == "CropPrice":
@@ -416,15 +643,59 @@ class AllocationBandit(gym.Env):
         return out
 
     def _get_early_season_weather_features(self, feature: str):
-        """Return [mean_over_iters( mean of the feature sequence for this agent ), per agent]."""
         out = []
+
+        # Current season label in multi-year eval
+        season_year = None
+        if getattr(self, "_eval_mode", False):
+            season_year = int(self.infos.get("current_season_year", -1))
+            if season_year == -1:
+                try:
+                    season_year = int(self._eval_years[self._eval_ptr])
+                except Exception:
+                    season_year = None
+
         for agent in self.agents_order:
-            days = [day['day'] for day in self.farm.fields[agent].model.get_output()]
+            env = self.farm.fields[agent].unwrapped
             vals = []
-            for day in days:
-                val = getattr(self.farm.fields[agent].wdp(day), feature)
-                vals.append(val / 1e6 if feature == 'IRRAD' else val)
-            out.append(float(round(np.mean(vals), 3)))
+
+            # If we have a season_year, use a fixed window before sowing (robust at preseason)
+            if season_year is not None:
+                days_before = int(getattr(self, "_eval_days_before", 7))
+
+                sow_date = None
+                specs = getattr(env, "_campaign_specs", None)
+                if specs:
+                    for spec in specs:
+                        try:
+                            if int(spec.get("label_year", -1)) == int(season_year):
+                                sow_date = spec.get("crop_start_date", None)
+                                break
+                        except Exception:
+                            continue
+                    if sow_date is None:
+                        sow_date = specs[0].get("crop_start_date", None)
+
+                if sow_date is None:
+                    sow_date = getattr(getattr(env, "agmt", None), "crop_start_date", None)
+
+                if sow_date is not None:
+                    start = sow_date - datetime.timedelta(days=60)
+                    cur = start
+                    while cur < sow_date:
+                        v = getattr(self.farm.fields[agent].wdp(cur), feature)
+                        vals.append((v / 1e6) if feature == "IRRAD" else v)
+                        cur += datetime.timedelta(days=1)
+
+            # Fallback: original behavior if not in eval mode or sow_date missing
+            if not vals:
+                days = [d["day"] for d in self.farm.fields[agent].model.get_output() if d.get("day") is not None]
+                for day in days:
+                    v = getattr(self.farm.fields[agent].wdp(day), feature)
+                    vals.append((v / 1e6) if feature == "IRRAD" else v)
+
+            out.append(float(round(np.mean(vals), 3)) if vals else 0.0)
+
         return out
 
     def set_elite_center_action(self, action):

@@ -59,6 +59,7 @@ from cropgymzoo.utils.defaults import (
 )
 from cropgymzoo.utils.curriculum import make_default_stage_manager
 from cropgymzoo.utils.scenario_utils import get_scenario_based_on_name, get_scenario_based_on_loc, get_coords_for_soil
+from cropgymzoo.utils.agent_helpers import last_before_nan
 
 import torch as th
 import torch.nn as nn
@@ -342,6 +343,9 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         # append new information to the infos dict
         self._populate_infos(pcse_output, action, reward, terminated)
 
+        # if terminated:
+        #     self.infos["infos_by_year"] = self._group_infos_by_season_year()
+
         return obs, reward, terminated, truncated, self.infos
 
     def reset(self, seed=None, options=None, **kwargs):
@@ -350,7 +354,11 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         Here, growing season budget is also determined.
         """
 
+        if options is None:
+            options = {}
         assert 'year' in options, "Please reset environment with a year"
+        # Keep `self.year` consistent for downstream code paths (prices, logging, etc.)
+        self.year = int(options['year'])
 
         # Only for invalid action masking
         # self.reset_non_zero_action_count()
@@ -366,8 +374,63 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         # reset various variables
         self._reset_action_variables()
 
-        # overwrite for new eps
-        self.overwrite_year(year=options['year'])
+        if "eval_horizon_years" in options and "farm_dict_by_year" in options:
+            horizon_years = list(options["eval_horizon_years"])
+            farm_by_year = options["farm_dict_by_year"]
+
+            def _safe_replace(d: datetime.date, year: int) -> datetime.date:
+                try:
+                    return d.replace(year=year)
+                except ValueError:
+                    return d.replace(year=year, day=28)
+
+            campaign_specs = []
+            for y in horizon_years:
+                crop_y = farm_by_year[y][self.name]["crop"]  # self.name is field id like "field-3"
+                tpl = self.crop_info[crop_y]
+
+                start_year = (y - 1) if crop_y == "winterwheat" else y
+
+                campaign_date = _safe_replace(self.agmt.str_to_datetime(tpl["campaign_date"]), start_year)
+                crop_start_date = _safe_replace(self.agmt.str_to_datetime(tpl["crop_start_date"]), start_year)
+
+                crop_end_date = None
+                if "crop_end_date" in tpl and tpl["crop_end_date"] not in (None, "", "null"):
+                    crop_end_date = _safe_replace(self.agmt.str_to_datetime(tpl["crop_end_date"]), y)
+
+                campaign_specs.append({
+                    "campaign_date": campaign_date,
+                    "crop_name": tpl.get("crop_name", crop_y),
+                    "variety_name": tpl.get("variety_name", self.agmt.variety_name),
+                    "crop_start_date": crop_start_date,
+                    "crop_start_type": tpl.get("crop_start_type", self.agmt.crop_start_type),
+                    "crop_end_date": crop_end_date,
+                    "crop_end_type": tpl.get("crop_end_type", self.agmt.crop_end_type),
+                    "max_duration": int(tpl.get("max_duration", self.agmt.max_duration))
+                                    if self.agmt.max_duration is not None else None,
+                })
+
+            # Attach label years to specs for grouping (year label is your season year)
+            for spec, y in zip(campaign_specs, horizon_years):
+                spec["label_year"] = int(y)
+
+            self._init_campaign_tracking(campaign_specs)
+            # Precompute per-season prices so evaluation runs can reflect year-varying prices
+            self._init_price_tracking(horizon_years=horizon_years, farm_by_year=farm_by_year)
+
+            self._agro_management = pcse_env.AgroManagementContainer.build_multi_campaign_structure(campaign_specs)
+
+            # Evaluation: don't skip to sowing, and ensure multi-crop parameters exist
+            options["wait_for_crop"] = bool(options.get("wait_for_crop", False))
+            options["multi_crop"] = True
+
+        else:
+            # Original single-season behavior
+            self.overwrite_year(year=options["year"])
+
+            self._init_campaign_tracking(None)
+            if hasattr(self, '_price_by_season_year'):
+                self._price_by_season_year = {}
 
         # use options. Shift soil and randomise N conditions
         # site_params = self._special_init_conditions()
@@ -382,7 +445,14 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         # reset PCSE
         obs = super().reset(seed=seed, options=options)
 
-        self.day_of_planting = self.agmt.crop_start_date
+        # For multi-year runs, `agmt` may not reflect the full chained structure; use the first campaign start when possible.
+        if getattr(self, '_campaign_specs', None):
+            try:
+                self.day_of_planting = self._campaign_specs[0].get('crop_start_date', self.agmt.crop_start_date)
+            except Exception:
+                self.day_of_planting = self.agmt.crop_start_date
+        else:
+            self.day_of_planting = self.agmt.crop_start_date
         self._update_budget_left()
 
         # get infos
@@ -478,6 +548,9 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
     def get_latest_info(self, feature):
         return self.infos[feature][-1]
 
+    def get_latest_season_info(self, feature, season):
+        return last_before_nan(self._group_infos_by_season_year()[season][feature])
+
     def set_budget(self, budget):
         self.budget_n = budget
         self.budget_left = self.budget_n
@@ -553,6 +626,60 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         # DO NOT touch self._model here.
         # Caller should do: reset(options={'year': self.year, ...})
 
+    # ------------------------------------------------------------------
+    # Multi-season evaluation helpers
+    # ------------------------------------------------------------------
+    def begin_new_season(
+        self,
+        *,
+        season_year: int,
+        crop_name: str | None = None,
+        max_budget_n: float | None = None,
+        reset_reward: bool = True,
+        reset_actions: bool = True,
+        reset_prices: bool = True,
+    ) -> None:
+        """Prepare this parcel env for a new season *without* resetting the PCSE model.
+
+        Used for daisy-chained evaluation where the PCSE state (soil N, moisture, etc.)
+        must carry over across campaigns.
+
+        What this resets:
+        - action counters / action-derived info variables (Naction, NonZeroActionCount, etc.)
+        - season budget (budget_n, budget_left, max_budget_n)
+        - reward accumulators/prices (optional)
+
+        What this does NOT reset:
+        - the PCSE model state (Engine/kiosk), weather provider, soil water, mineral N pools
+        """
+
+        # Update season/year label used by price lookups etc.
+        self.year = int(season_year)
+
+        # Update crop label used throughout reward + info (PCSE crop itself is controlled by agromanager)
+        if crop_name is not None:
+            self.crop = str(crop_name)
+
+        # Reset reward trackers (profit, constraint accumulators, etc.) per season
+        if reset_reward:
+            self.reward_container.reset()
+            self.rewards_obj.reset()
+
+        # Reset action tracking / counters per season
+        if reset_actions:
+            self._reset_action_variables()
+
+        # Reset seasonal budgets
+        if max_budget_n is not None:
+            self.max_budget_n = float(max_budget_n)
+            self.budget_n = float(max_budget_n)
+            # budget_left should be full at start of season
+            self.budget_left = float(max_budget_n)
+
+        # Refresh prices for the season/crop if requested
+        if reset_prices:
+            self._reset_prices()
+
 
     '''
     Helper functions for various things
@@ -615,6 +742,75 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         self.fertilizer_price = self._get_fertilizer_price()
         self.crop_price = self._get_crop_price()
+
+    def _init_price_tracking(self, horizon_years: list[int], farm_by_year: dict):
+        """Precompute per-season prices for multi-year evaluation.
+
+        Stores mapping: season_label_year -> {'crop': str, 'crop_price': float, 'fertilizer_price': float}
+
+        This uses the existing `_get_crop_price()` and `_get_fertilizer_price()` logic by temporarily
+        setting `self.year`/`self.crop` for each season.
+        """
+        price_map: dict[int, dict] = {}
+        # snapshot current state
+        _year0 = getattr(self, 'year', None)
+        _crop0 = getattr(self, 'crop', None)
+        _cp0 = getattr(self, 'crop_price', None)
+        _fp0 = getattr(self, 'fertilizer_price', None)
+
+        try:
+            for y in horizon_years:
+                crop_y = farm_by_year[y][self.name]['crop']
+                # temporarily set context for existing price helpers
+                self.year = int(y)
+                self.crop = str(crop_y)
+                try:
+                    cp = float(self._get_crop_price())
+                except Exception:
+                    cp = float(_cp0) if _cp0 is not None else 0.0
+                try:
+                    fp = float(self._get_fertilizer_price())
+                except Exception:
+                    fp = float(_fp0) if _fp0 is not None else 0.0
+                price_map[int(y)] = {
+                    'crop': str(crop_y),
+                    'crop_price': cp,
+                    'fertilizer_price': fp,
+                }
+        finally:
+            # restore
+            if _year0 is not None:
+                self.year = _year0
+            if _crop0 is not None:
+                self.crop = _crop0
+            if _cp0 is not None:
+                self.crop_price = _cp0
+            if _fp0 is not None:
+                self.fertilizer_price = _fp0
+
+        self._price_by_season_year = price_map
+
+
+    def _maybe_update_prices_for_date(self, d: datetime.date):
+        """Update `self.crop_price` / `self.fertilizer_price` for the current simulation date.
+
+        For multi-year evaluation runs, this ensures prices reflect the active season label year.
+        """
+        season_year, active_crop = self._active_campaign_for_date(d)
+        if season_year is None:
+            return
+        mp = getattr(self, '_price_by_season_year', None)
+        if not mp or season_year not in mp:
+            return
+        rec = mp[season_year]
+        # keep crop in sync with active campaign for any downstream logic
+        if active_crop is not None:
+            self.crop = active_crop
+        if 'crop_price' in rec:
+            self.crop_price = float(rec['crop_price'])
+        if 'fertilizer_price' in rec:
+            self.fertilizer_price = float(rec['fertilizer_price'])
+
 
     def _update_budget_left(self):
         self.reward_class.budget_left = self.budget_left
@@ -974,6 +1170,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
     def _init_infos(self):
         self.infos = {
             "Date": [],
+            'SeasonYear': [],
+            'CropActive': [],
             **{name: [] for name in self.crop_features},
             **{name: [] for name in self.weather_features},
             **{name: [] for name in self.action_features},
@@ -1129,7 +1327,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         return math.sin(angle), math.cos(angle)
 
     def _get_crop_code(self):
-        return self.CROP_CODE_MAP[self.crop]
+        return self.CROP_CODE_MAP[(self.infos["CropName"][-1] if self.infos.get("CropName") else self.crop)]
 
     def _get_fertilizer_price(self):
         try:
@@ -1145,6 +1343,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             self,
             wso,
     ):
+        if wso is None:
+            return np.nan
         if self.crop == 'winterwheat':
             return wso / 0.85  # 15% water/moisture assumption
         elif self.crop == 'sugarbeet':
@@ -1162,9 +1362,169 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         except KeyError:
             return list(self.crop_prices[self.crop].values())[-1]
 
+    def _init_campaign_tracking(self, campaign_specs: list[dict] | None):
+        """
+        Initialize per-episode campaign tracking for daisy-chained multi-year runs.
+
+        campaign_specs elements must include:
+          - campaign_date (datetime.date)
+          - label_year (int)
+          - crop_name (str)
+        """
+        if campaign_specs is None:
+            self._campaign_specs = None
+            self._campaign_ptr = None
+            return
+        self._campaign_specs = sorted(campaign_specs, key=lambda s: s["campaign_date"])
+        self._campaign_ptr = 0
+
+    def _active_campaign_for_date(self, d: datetime.date) -> tuple[int | None, str | None]:
+        """Return (season_label_year, crop_name) for a given simulation date d."""
+        if not getattr(self, "_campaign_specs", None):
+            return None, None
+
+        specs = self._campaign_specs
+        ptr = int(getattr(self, "_campaign_ptr", 0) or 0)
+        ptr = max(0, min(ptr, len(specs) - 1))
+
+        # advance pointer while next campaign has started
+        while (ptr + 1) < len(specs) and specs[ptr + 1]["campaign_date"] <= d:
+            ptr += 1
+        self._campaign_ptr = ptr
+
+        spec = specs[ptr]
+        y = spec.get("label_year", None)
+        return (int(y) if y is not None else None), spec.get("crop_name", None)
+
+    def _group_infos_by_season_year(self) -> dict:
+        """Return a dict mapping SeasonYear -> dict of sliced info series."""
+        if "SeasonYear" not in self.infos or not self.infos["SeasonYear"]:
+            return {}
+        years = [y for y in self.infos["SeasonYear"] if y is not None]
+        if not years:
+            return {}
+
+        uniq = sorted(set(int(y) for y in years))
+        by_year = {}
+
+        for y in uniq:
+            idx = [i for i, yy in enumerate(self.infos["SeasonYear"]) if yy == y]
+            sub = {}
+            for k, seq in self.infos.items():
+                try:
+                    sub[k] = [seq[i] for i in idx]
+                except Exception:
+                    continue
+            by_year[int(y)] = sub
+
+        return by_year
+
+    def get_latest_season_info(
+            self,
+            key: str,
+            season_year: int,
+            default=None,
+            *,
+            skip_nan: bool = True,
+            skip_none: bool = True,
+            skip_inf: bool = True,
+            require_crop_active: bool = True,
+    ):
+        """Return the last *valid* value of infos[key] restricted to SeasonYear==season_year.
+
+        Robust to post-harvest/maturity tails that may contain None/NaN/Inf.
+
+        If require_crop_active=True and infos['CropActive'] exists, only consider entries where
+        CropActive is True (useful for daisy-chained multi-season runs where values after harvest
+        or between campaigns can be NaN/None).
+        """
+
+        def _is_invalid(v) -> bool:
+            if skip_none and v is None:
+                return True
+
+            # numeric scalars (python + numpy)
+            if isinstance(v, (int, float, np.integer, np.floating)):
+                try:
+                    fv = float(v)
+                except Exception:
+                    return False  # if it can't be cast, treat as non-numeric
+                if skip_nan and np.isnan(fv):
+                    return True
+                if skip_inf and np.isinf(fv):
+                    return True
+                if (skip_nan or skip_inf) and (not np.isfinite(fv)):
+                    return True
+
+            return False
+
+        try:
+            infos = getattr(self, "infos", {})
+            sy_list = infos.get("SeasonYear", [])
+            seq = infos.get(key, [])
+            if not sy_list or not seq:
+                return default
+
+            crop_active_list = infos.get("CropActive", None)
+
+            n = min(len(sy_list), len(seq))
+            if crop_active_list is not None:
+                n = min(n, len(crop_active_list))
+
+            target = int(season_year) if season_year is not None else season_year
+
+            # walk backwards: last matching season AND valid value (and optionally CropActive)
+            for i in range(n - 1, -1, -1):
+                if sy_list[i] != target:
+                    continue
+
+                if require_crop_active and crop_active_list is not None:
+                    if not bool(crop_active_list[i]):
+                        continue
+
+                v = seq[i]
+                if _is_invalid(v):
+                    continue
+                return v
+
+            # fallback: if we required CropActive and found nothing, try again without it
+            if require_crop_active and crop_active_list is not None:
+                for i in range(n - 1, -1, -1):
+                    if sy_list[i] != target:
+                        continue
+                    v = seq[i]
+                    if _is_invalid(v):
+                        continue
+                    return v
+
+            return default
+        except Exception:
+            return default
+
+    def get_season_indices(self, season_year: int) -> list[int]:
+        """Indices i where SeasonYear[i] == season_year."""
+        try:
+            sy_list = self.infos.get("SeasonYear", [])
+            return [i for i, yy in enumerate(sy_list) if yy == season_year]
+        except Exception:
+            return []
+
     def _populate_infos(self, pcse_output, action, reward, terminate):
 
         self.infos["Date"].append(pcse_output[-1]['day'])
+
+        # Multi-year daisy-chaining support: map each day to a season label year + active crop
+        d = self.infos["Date"][-1]
+        season_year, active_crop = self._active_campaign_for_date(d)
+        self.infos["SeasonYear"].append(season_year)
+
+        # Determine whether crop is active (helps interpret NaNs between campaigns)
+        dvs_val = pcse_output[-1].get("DVS", None)
+        try:
+            crop_active = (dvs_val is not None) and (not np.isnan(dvs_val))
+        except Exception:
+            crop_active = dvs_val is not None
+        self.infos["CropActive"].append(bool(crop_active))
 
         for feature in self.crop_features:
             f = self._transform_crop_feature(pcse_output[-1], feature)
@@ -1182,7 +1542,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.infos['Reward'].append(reward)
         self.infos['Action'].append(action if not isinstance(action, (np.ndarray, th.Tensor)) else action.item())
         self.infos['Yield'].append(self._get_fresh_weight(pcse_output[-1]['WSO']))
-        self.infos['CropName'].append(self.crop)
+        # Use campaign-derived crop name when available (daisy-chained multi-crop runs)
+        self.infos["CropName"].append(active_crop if active_crop is not None else self.crop)
         self.infos['Alive'].append(True if not terminate else False)
         self.infos['ActionMask'].append(self.action_mask())
         self.infos['RFTRA'].append(pcse_output[-1]['RFTRA'])
@@ -1234,6 +1595,8 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
     def _misc_features_mapper(self, terminated = False):
         pcse_output = self.model.get_output()
+        crop_active = self._crop_active_from_pcse_output(pcse_output)
+
         misc_process = {
             'SinDay': lambda: self._encode_doy(self.date)[0],
             'CosDay': lambda: self._encode_doy(self.date)[1],
@@ -1248,7 +1611,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                     nh4_depo=get_nh4_deposition_pcse(pcse_output),
                     no3_depo=get_no3_deposition_pcse(pcse_output),
                     crop_name=self.crop,
-                )
+                ) if crop_active else np.nan
             ),
             'Nsurp': lambda: (
                 get_surplus_n(
@@ -1257,12 +1620,22 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                     nh4_depo=get_nh4_deposition_pcse(pcse_output),
                     no3_depo=get_no3_deposition_pcse(pcse_output),
                     crop_name=self.crop,
-                )
+                ) if crop_active else np.nan
             ),
             'area': lambda: self.area,
         }
 
         return {k: misc_process[k]() for k in self.misc_features if k in misc_process}
+
+    @staticmethod
+    def _crop_active_from_pcse_output(pcse_output) -> bool:
+        if not pcse_output:
+            return False
+        dvs = pcse_output[-1].get("DVS", None)
+        try:
+            return dvs is not None and np.isfinite(float(dvs))
+        except Exception:
+            return False
 
     '''
     Randomizers. NOTE: The weather randomizer is under utils/domain_randomizer.py

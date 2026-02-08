@@ -1126,6 +1126,13 @@ class Rewards:
 
         @staticmethod
         def nsurplus_score(nsurp, low=0.0, high=40.0, max_dev=100.0):
+            try:
+                nsurp = float(nsurp)
+            except Exception:
+                return 0.0
+            if not np.isfinite(nsurp):
+                return 0.0
+
             if low <= nsurp <= high:
                 return 1.0
 
@@ -1140,6 +1147,13 @@ class Rewards:
 
         @staticmethod
         def nue_score(nue, low=0.5, high=0.9, max_dev=0.2):
+            try:
+                nue = float(nue)
+            except Exception:
+                return 0.0
+            if not np.isfinite(nue):
+                return 0.0
+
             if low <= nue <= high:
                 return 1.0
 
@@ -1340,6 +1354,13 @@ def calculate_nue(
         nh4_depo=None,
         crop_name=None
 ):
+    try:
+        n_so_val = float(n_so)
+    except Exception:
+        return np.nan
+    if not np.isfinite(n_so_val):
+        return np.nan
+
     n_in = input_nue(
         n_input,
         year=year,

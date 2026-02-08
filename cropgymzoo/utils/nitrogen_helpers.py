@@ -6,6 +6,7 @@ import pcse
 import os
 
 import pandas as pd
+import numpy as np
 
 from pcse.soil.snomin import SNOMIN
 from pcse.input.csvweatherdataprovider import CSVWeatherDataProvider
@@ -253,6 +254,13 @@ def get_surplus_n(
         nh4_depo=None,
         crop_name=None
 ):
+    try:
+        n_so_val = float(n_so)
+    except Exception:
+        return np.nan
+    if not np.isfinite(n_so_val):
+        return np.nan
+
     n_i = input_nue(
         n_input,
         year=year,

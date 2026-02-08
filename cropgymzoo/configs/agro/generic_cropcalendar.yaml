@@ -6,6 +6,5 @@
         crop_start_type: sowing
         crop_end_date:
         crop_end_type: maturity
-        max_duration: 365
     TimedEvents: null
     StateEvents: null

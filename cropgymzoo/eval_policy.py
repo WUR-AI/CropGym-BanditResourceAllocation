@@ -93,14 +93,64 @@ class BaseAgent(ABC):
 
         self.agents = self.env.possible_agents
 
-    def run(self, years: list, year_key=True, scenario: str = 'max') -> dict:
+    def run(
+        self,
+        years: list,
+        year_key: bool = True,
+        scenario: str = 'max',
+        *,
+        reset_options: dict | None = None,
+        reset_each_year: bool = True,
+    ) -> dict:
+        """Run policy in the wrapped PettingZoo env.
 
+        Default behavior (training-style): reset once per year with options={'year': year}.
+
+        Daisy-chained evaluation behavior: set reset_each_year=False and provide reset_options.
+        In that mode we reset exactly once (typically with keys like 'year', 'eval_horizon_years',
+        'farm_dict_by_year', and possibly 'days_before_sowing'), and then run until termination.
+
+        Returns
+        -------
+        dict
+            If reset_each_year=True: {year -> {agent -> terminal_info}}
+            If reset_each_year=False: {agent -> terminal_info} (year_key is ignored)
+        """
+
+        # ------------------------------------------------------------
+        # Multi-year daisy-chained episode: reset once, run once
+        # ------------------------------------------------------------
+        if not reset_each_year:
+            if reset_options is None:
+                raise ValueError("reset_each_year=False requires reset_options")
+
+            # One reset for the entire horizon
+            self.env.reset(options=reset_options)
+
+            info_dict: dict = {}
+            for agent in self.env.agent_iter():
+                obs, rew, term, trunc, info = self.env.last()
+                action = self.get_action(agent, env=self.env, scenario=scenario)
+
+                if self.env.terminations[agent]:
+                    info_dict[agent] = info
+                    self.env.step(None)
+                else:
+                    self.env.step(action)
+
+            if self.render:
+                self.env.render()
+            return info_dict
+
+        # ------------------------------------------------------------
+        # Original behavior: reset per year
+        # ------------------------------------------------------------
         info_dict = {}
         for year in years:
             if year_key:
                 info_dict[year] = {}
 
-            self.env.reset(options={'year': year})
+            self.env.reset(options={'year': year} if reset_options is None else {**reset_options, 'year': year})
 
             for agent in self.env.agent_iter():
                 obs, rew, term, trunc, info = self.env.last()
@@ -224,23 +274,37 @@ class MultiRLAgent(BaseAgent):
 
         return out
 
-    def run(self, years: list, year_key=True, scenario=None) -> dict:
-        info_dict = {}
-        for i, year in enumerate(years):
-            if year_key:
-                info_dict[year] = {}
+    def run(
+        self,
+        years: list,
+        year_key: bool = True,
+        scenario=None,
+        *,
+        reset_options: dict | None = None,
+        reset_each_year: bool = True,
+    ) -> dict:
+        """Run the learned multi-agent policy.
 
-            next_states = {
-                ag: None for ag in self.agents
-            }
+        Supports a single daisy-chained evaluation episode by setting reset_each_year=False and
+        providing reset_options.
+        """
 
-            self.env.reset(options={'year': year})
+        # ------------------------------------------------------------
+        # Multi-year daisy-chained episode: reset once, run once
+        # ------------------------------------------------------------
+        if not reset_each_year:
+            if reset_options is None:
+                raise ValueError("reset_each_year=False requires reset_options")
+
+            info_dict: dict = {}
+            next_states = {ag: None for ag in self.agents}
+
+            self.env.reset(options=reset_options)
 
             for agent in self.env.agent_iter():
                 obs, rew, term, trunc, info = self.env.last()
 
-                # get appropriate info shape for policy
-                processed_info = Batch({k: [i[-1]] for k, i in info.items()})
+                processed_info = Batch({k: [v[-1]] for k, v in info.items()})
                 processed_info['env_id'] = [0]
 
                 with torch.no_grad():
@@ -253,7 +317,46 @@ class MultiRLAgent(BaseAgent):
 
                 action = out.act.item()
                 state = None if not hasattr(out, 'state') else out.state
+                next_states[agent] = state
 
+                if self.env.terminations[agent]:
+                    info_dict[agent] = info
+                    self.env.step(None)
+                else:
+                    self.env.step(action)
+
+            if self.render:
+                self.env.render()
+            return info_dict
+
+        # ------------------------------------------------------------
+        # Original behavior: reset per year
+        # ------------------------------------------------------------
+        info_dict = {}
+        for i, year in enumerate(years):
+            if year_key:
+                info_dict[year] = {}
+
+            next_states = {ag: None for ag in self.agents}
+
+            self.env.reset(options={'year': year} if reset_options is None else {**reset_options, 'year': year})
+
+            for agent in self.env.agent_iter():
+                obs, rew, term, trunc, info = self.env.last()
+
+                processed_info = Batch({k: [v[-1]] for k, v in info.items()})
+                processed_info['env_id'] = [0]
+
+                with torch.no_grad():
+                    out = self.get_action(
+                        agent,
+                        obs=obs,
+                        next_states=next_states,
+                        info=processed_info,
+                    )
+
+                action = out.act.item()
+                state = None if not hasattr(out, 'state') else out.state
                 next_states[agent] = state
 
                 if self.env.terminations[agent]:

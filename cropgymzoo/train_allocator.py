@@ -3,6 +3,7 @@ import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 import torch
+import yaml
 
 import numpy as np
 import os
@@ -16,7 +17,7 @@ from cropgymzoo.agents.nn_agp import NNAGPBandit
 from cropgymzoo.utils.agent_helpers import min_max_normalize
 from cropgymzoo.utils.callbacks import _setup_bandit_comet, log_selection_info, log_model_histograms, fig_to_chw_uint8
 from cropgymzoo.envs.allocation_env import AllocationBandit
-from cropgymzoo import _DEFAULT_LOGDIR, _DEFAULT_RESULTSDIR
+from cropgymzoo import _DEFAULT_LOGDIR, _DEFAULT_RESULTSDIR, _SCENARIO_PATH
 from cropgymzoo.utils.plotters import plot_results
 
 
@@ -848,7 +849,7 @@ def training_loop_factored(
         # Update factored bandit
         bandit.update_factored(theta_fields, x_t, y_fields)
 
-        # Periodic eval
+        # Periodic eval (daisy-chained multi-year evaluation)
         test_per_round = int(args.eval_steps)
         if t % test_per_round == 0:
             set_subbandits_train_mode(False)
@@ -866,9 +867,31 @@ def training_loop_factored(
                 else:
                     eval_budget = float(0.7) * float(env.global_budget)
 
-                for year in years:
-                    env.get_rotation_year(year)
-                    th_np, info = env.reset(options={"year": year}, seed=args.seed)
+                # Build farm_dict_by_year once (needed for chained campaigns)
+                farm_dict_by_year = {}
+                for y in years:
+                    with open(os.path.join(_SCENARIO_PATH, f"{env.region}", f"{y}", f"farmer_{env.farm_id}.yaml"), 'r') as f:
+                        farm_dict_by_year[int(y)] = yaml.safe_load(f)
+
+                # Ensure env has the right agent set (field ids) before reset
+                env.get_rotation_year(years[0])
+
+                # Reset ONCE with horizon options
+                th_np, info = env.reset(
+                    options={
+                        "year": int(years[0]),
+                        "eval_horizon_years": [int(y) for y in years],
+                        "farm_dict_by_year": farm_dict_by_year,
+                        "preseason_allocation": True,
+                        # simpler decision point: 7 days before sowing
+                        "days_before_sowing": 7,
+                    },
+                    seed=args.seed,
+                )
+
+                done = False
+                while not done:
+                    # Normalize (flat) context
                     th_np = rms.norm_theta(th_np)
                     th_fields_np = env.unflatten_context_per_field(th_np)
                     th_fields = torch.from_numpy(th_fields_np.astype(np.float32))
@@ -897,14 +920,26 @@ def training_loop_factored(
                         if applied > float(eval_budget) + 1e-3:
                             print(f"\n\n[WARN] budget violated: applied={applied:.3f} > B={float(eval_budget):.3f}\n")
 
-                    _, raw_reward, _, _, infos = env.step(x_eval)
-                    info_dict[year] = infos["AgentInfos"]
+                    th_np, raw_reward, done, _, infos = env.step(x_eval)
+
+                    # The env returns the current season label year in multi-year mode
+                    season_year = int(infos.get("current_season_year", -1))
+                    if season_year == -1:
+                        # fallback: use last Date year
+                        try:
+                            season_year = int(infos["AgentInfos"][env.agents_order[0]]["SeasonYear"][-1])
+                        except Exception:
+                            season_year = None
+
+                    if season_year is not None:
+                        info_dict[int(season_year)] = infos["AgentInfos"]
+
                     rewards.append(float(raw_reward))
-                    print(f"test year: {year}, reward: {raw_reward}")
+                    print(f"test season_year: {season_year}, reward: {raw_reward}")
 
                     if comet_experiment:
                         comet_experiment.log_metrics(
-                            {f"reward/{scenario}/test_year:{year}/raw": float(raw_reward)},
+                            {f"reward/{scenario}/test_year:{season_year}/raw": float(raw_reward)},
                             step=test_step,
                         )
                         fig = plot_results(
@@ -913,7 +948,7 @@ def training_loop_factored(
                             show=False,
                         )
                         comet_experiment.log_figure(
-                            figure_name=f"image/{scenario}/plot_year:{year}",
+                            figure_name=f"image/{scenario}/plot_year:{season_year}",
                             figure=fig,
                             step=test_step,
                         )

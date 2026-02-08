@@ -1,5 +1,6 @@
 import os
 import yaml
+import datetime
 
 from collections import Counter
 
@@ -26,6 +27,7 @@ from cropgymzoo.utils.defaults import (
 )
 from cropgymzoo.utils.curriculum import make_default_stage_manager
 from cropgymzoo.utils.scenario_utils import choose_soil_type
+from cropgymzoo.utils.agent_helpers import last_before_nan
 
 
 def make_multi_env(
@@ -173,6 +175,8 @@ class MultiFieldEnv(AECEnv, EzPickle):
         self.global_allocated_budget  = self.global_budget
 
         self.total_area = np.sum([self.get_field_size(agent) for agent in self.possible_agents])
+
+        self._print_season_year = None
 
 
     def reset(self, seed=None, options=None):
@@ -467,6 +471,201 @@ class MultiFieldEnv(AECEnv, EzPickle):
                     type=field["type"],
                 )
         print("Scenario fields initialized!")
+
+    def advance_fields_to_allocation_dates(
+            self,
+            *,
+            days_before_sowing: int = 60,
+            preseason_N: float = 0.0,
+            apply_preseason_N: bool = False,
+            season_year: int | None = None,
+            farm_dict_by_year: dict | None = None,
+    ) -> dict:
+        """Advance each field's internal PCSE model to its own allocation date.
+
+        alloc_date = crop_start_date - days_before_sowing
+
+        During multi-season evaluation, this also:
+        - resets action counters and seasonal budget for the *requested* season_year
+        - updates the per-field crop label used in reward/price logic
+
+        Returns: dict(agent -> alloc_date)
+        """
+
+        # Determine crop per agent for the requested season (if provided)
+        crop_by_agent = {}
+        if season_year is not None:
+            if isinstance(farm_dict_by_year, dict) and int(season_year) in farm_dict_by_year:
+                for agent in self.possible_agents:
+                    crop_by_agent[agent] = farm_dict_by_year[int(season_year)][agent]["crop"]
+
+        alloc_dates = {}
+        for agent in self.possible_agents:
+            env = self.fields[agent].unwrapped
+
+            # If season_year is provided, reset action state + budgets for this new season
+            if season_year is not None:
+                crop_name = crop_by_agent.get(agent, None)
+                # choose a max budget for this crop; fallback to current max_budget_n/global max
+                max_budget = env.CROP_SOIL_MAX[crop_name][env.soil_type]
+
+                env.begin_new_season(
+                    season_year=int(season_year),
+                    crop_name=crop_name,
+                    max_budget_n=float(max_budget) if max_budget is not None else None,
+                    reset_reward=True,
+                    reset_actions=True,
+                    reset_prices=True,
+                )
+
+            # Now compute allocation date based on the (possibly updated) agmt crop_start_date
+            sow_date = env.agmt.crop_start_date
+            alloc_date = sow_date - datetime.timedelta(days=int(days_before_sowing))
+            alloc_dates[agent] = alloc_date
+
+            self._advance_field_to_date(
+                agent,
+                alloc_date,
+                preseason_N=preseason_N,
+                apply_preseason_N=apply_preseason_N,
+            )
+
+        return alloc_dates
+
+    def _advance_field_to_date(
+            self,
+            agent: str,
+            target_date: datetime.date,
+            *,
+            preseason_N: float = 0.0,
+            apply_preseason_N: bool = False,
+    ) -> None:
+        """Advance a single field's PCSE model to `target_date` using Engine.run()."""
+        env = self.fields[agent].unwrapped
+
+        # Determine current simulation date
+        try:
+            curr_date = env.date  # PCSEEnv property
+        except Exception:
+            curr_date = getattr(getattr(env, "_model", None), "day", None)
+
+        if curr_date is None:
+            raise RuntimeError(f"Cannot determine current PCSE date for agent {agent}")
+
+        days_to_run = int((target_date - curr_date).days)
+        if days_to_run <= 0:
+            return
+
+        model = getattr(env, "model", None)
+        if model is None:
+            model = getattr(env, "_model", None)
+        if model is None:
+            raise RuntimeError(f"Cannot access PCSE model for agent {agent}")
+
+        # Optional: apply preseason N exactly once on target_date
+        if apply_preseason_N and float(preseason_N) > 0.0 and days_to_run >= 1:
+            if days_to_run > 1:
+                model.run(days=days_to_run - 1, action=0)
+            model.run(days=1, action=float(preseason_N))
+        else:
+            model.run(days=days_to_run, action=0)
+
+    # ------------------------------------------------------------------
+    # Daisy-chained multi-season evaluation helpers (RL-only or RoT-only)
+    # ------------------------------------------------------------------
+
+    def _all_fields_past_season_year(self, season_year: int) -> bool:
+        """True iff every field's latest SeasonYear is strictly > season_year."""
+        for ag in self.possible_agents:
+            infos = getattr(self.fields[ag].unwrapped, "infos", {})
+            sy_seq = infos.get("SeasonYear", None)
+            if not sy_seq:
+                return False
+            sy = sy_seq[-1]
+            if sy is None:
+                return False
+            try:
+                if int(sy) <= int(season_year):
+                    return False
+            except Exception:
+                return False
+        return True
+
+    def collect_agent_infos_for_season(self, season_year: int) -> dict:
+        """Return {agent -> {info_key -> list(values_for_that_season)}}."""
+        out = {}
+        for ag in self.possible_agents:
+            env = self.fields[ag].unwrapped
+            infos = getattr(env, "infos", {})
+            sy_seq = infos.get("SeasonYear", [])
+            idx = [i for i, yy in enumerate(sy_seq) if yy == season_year]
+            sub = {}
+            for k, seq in infos.items():
+                try:
+                    sub[k] = [seq[i] for i in idx]
+                except KeyError:
+                    print(f"Warning: {k} not found in agent {ag}'s infos")
+            out[ag] = sub
+        return out
+
+    def run_until_past_season_year(
+        self,
+        *,
+        season_year: int,
+        env_agent,
+        next_states: dict | None = None,
+    ) -> dict | None:
+        """Step the AEC env until all fields are past `season_year`.
+
+        Returns next_states if `env_agent` is MultiRLAgent-like, else None.
+        """
+        is_multirl = env_agent.__class__.__name__ == "MultiRLAgent"
+
+        if is_multirl and next_states is None:
+            next_states = {ag: None for ag in self.possible_agents}
+
+        max_iters = int(10_000_000)
+        it = 0
+
+        for agent in self.agent_iter():
+            it += 1
+            if it > max_iters:
+                break
+
+            obs, rew, term, trunc, info = self.last()
+
+            if self.terminations.get(agent, False) or self.truncations.get(agent, False):
+                self.step(None)
+            else:
+                if is_multirl:
+                    from tianshou.data import Batch
+                    import torch
+
+                    processed_info = Batch({k: [v[-1]] for k, v in info.items()})
+                    processed_info["env_id"] = [0]
+
+                    with torch.no_grad():
+                        out = env_agent.get_action(
+                            agent,
+                            obs=obs,
+                            next_states=next_states,
+                            info=processed_info,
+                        )
+                    action = out.act.item()
+                    state = None if not hasattr(out, "state") else out.state
+                    next_states[agent] = state
+                else:
+                    action = env_agent.get_action(agent, env=self)
+
+                self.step(action)
+
+            if self._all_fields_past_season_year(int(season_year)):
+                break
+
+            if not getattr(self, "agents", None):
+                break
+
+        return next_states if is_multirl else None
 
     def set_curriculum_stage(self, stage: int):
         for agent in self.possible_agents:
@@ -820,105 +1019,89 @@ class MultiFieldEnv(AECEnv, EzPickle):
         return fert / 10
 
     def rule_of_thumb(self, agent_name, use_dvs=True):
-        """Simple farmer rule-based fertilization schedule based on crop + soil."""
+        """Simple farmer rule-based fertilization schedule based on crop + soil.    Robust to multi-season evaluation:
+        - DVS can be None during fallow / between campaigns.
+        - Crop/season can change for the same field agent across daisy-chained campaigns.
+        """
         crop = self.get_per_field_crop_name()[agent_name]
         soil = self.get_per_field_soil_type()[agent_name]
-        budget_left  = self.get_per_parcel_budget_left(agent_name)
-        dvs = self.fields[agent_name].model.get_output()[-1]["DVS"]
-        # dvs = self.get_per_parcel_dvs(agent_name)[-1]
-        dap_plant = self.get_dap(agent_name)  # assume infos contains this
+        budget_left = self.get_per_parcel_budget_left(agent_name)
+
+        # --- lazy init of tracking dicts (in case older checkpoints/envs don't have them) ---
+        if not hasattr(self, "_dvs_prev"):
+            self._dvs_prev = {}
+        if not hasattr(self, "_dvs_triggered"):
+            self._dvs_triggered = {}
+        if not hasattr(self, "_dvs_crop_prev"):
+            self._dvs_crop_prev = {}
+        if not hasattr(self, "_dvs_season_prev"):
+            self._dvs_season_prev = {}
+
+        self._dvs_prev.setdefault(agent_name, None)
+        self._dvs_triggered.setdefault(agent_name, set())
+
+        # Detect current season label year if available (daisy-chaining), else None
+        try:
+            season_year = self.fields[agent_name].unwrapped.get_latest_info("SeasonYear")
+        except Exception:
+            season_year = None
+
+        # Reset triggers when crop or season changes
+        if self._dvs_crop_prev.get(agent_name, None) != crop or self._dvs_season_prev.get(agent_name,
+                                                                                          None) != season_year:
+            self._dvs_triggered[agent_name] = set()
+            self._dvs_prev[agent_name] = None
+            self._dvs_crop_prev[agent_name] = crop
+            self._dvs_season_prev[agent_name] = season_year
+
+        # Get current DVS safely (can be None between campaigns)
+        try:
+            dvs = self.fields[agent_name].model.get_output()[-1].get("DVS", None)
+        except Exception:
+            dvs = None
+
+        # If crop is inactive/fallow, do not fertilize and reset DVS tracking
+        if dvs is None:
+            self._dvs_prev[agent_name] = None
+            self._dvs_triggered[agent_name] = set()
+            return 0.0
+
+        # Ensure float for comparisons
+        try:
+            dvs = float(dvs)
+        except Exception:
+            self._dvs_prev[agent_name] = None
+            self._dvs_triggered[agent_name] = set()
+            return 0.0
+
+        dap_plant = self.get_dap(agent_name)
         fert = 0.0
 
         if use_dvs:
-            prev_dvs = self._dvs_prev[agent_name]
-            for thr, soil_map in self.get_handbook_dict_dvs(agent_name).get(crop, []).items():
-                # only trigger once: detect crossing + track which thresholds already fired
-                crossed = (dvs >= thr) #and (prev_dvs < thr)
+            prev_dvs = self._dvs_prev.get(agent_name, None)
+            handbook = self.get_handbook_dict_dvs(agent_name).get(crop, {})  # dict(threshold -> soil_map)
+
+            for thr, soil_map in handbook.items():
+                # Trigger once per threshold per season; allow "crossing" logic when prev_dvs exists
+                crossed = (dvs >= float(thr)) and (prev_dvs is None or prev_dvs < float(thr))
                 if crossed and (thr not in self._dvs_triggered[agent_name]):
                     fert = float(soil_map.get(soil, 0.0))
                     self._dvs_triggered[agent_name].add(thr)
                     break
         else:
-            # check if today matches any scheduled DAP for this crop
             for day, soil_map in self.get_handbook_dict(agent_name).get(crop, {}).items():
                 if self._is_at_date(dap_plant, day):
-                    fert = soil_map.get(soil, 0.0)  # default 0 if soil not found
-                    break  # stop after first match
+                    fert = soil_map.get(soil, 0.0)
+                    break
 
         self._dvs_prev[agent_name] = dvs
 
         allowed_fert = max(min(max(0, budget_left), fert), 0)
+        return allowed_fert / 10
 
-        return allowed_fert / 10  # align with action space
 
-
-    def _get_each_agent_actions(self) -> dict[str, int]:
-        """Rule-based fertiliser policy for warm-up episodes."""
-
-        # today_doy = self.shared_space["DayOfYear"]
-        actions = {}
-
-        for ag, env in self.fields.items():
-            info = env.unwrapped.get_latest_info
-            crop = env.unwrapped._get_crop_code()
-            n_applied_so_far = info("Naction")  # kg N ha-¹ already used
-            cap = self._get_crop_caps()[crop]
-
-            best_frac = 0.0
-
-            # Figure out which split the parcel is currently in
-            pending_dose = 0
-            for trigger, frac in self._get_schedule()[crop]:
-                if "doy" in trigger:
-                    low, high = trigger["doy"]
-                    if low <= env.unwrapped.date.timetuple().tm_yday <= high:
-                        best_frac = max(best_frac, frac)
-                elif "days_after_emerg" in trigger:
-                    # 1.  Is emergence day already known?
-                    emerg_doy = self._emergence_doy.get(ag)
-                    today_doy = info("Date").timetuple().tm_yday
-
-                    # 2.  If not, check whether the crop has now emerged.
-                    dvs = info("DVS")                       # 0 = sowing, ~1 = anthesis
-                    if emerg_doy is None and dvs is not None and dvs > 0.01:
-                        emerg_doy = today_doy     # record first emergence
-                        self._emergence_doy[ag] = emerg_doy
-                    if emerg_doy is not None:
-                        dae = (today_doy - emerg_doy) % 365
-                        low, high = trigger["days_after_emerg"]
-                        if low <= dae <= high:
-                            best_frac = max(best_frac, frac)
-                elif "leaf_stage" in trigger:
-                    leaves = info("LAI")
-                    low, high = trigger["leaf_stage"]
-                    if low <= leaves <= high:
-                        best_frac = max(best_frac, frac)
-                else:
-                    continue
-
-            planned_total_by_now = cap * best_frac  # kg the crop *ought* to have
-            deficit = max(0, planned_total_by_now - n_applied_so_far)
-            # clip by remaining farm-level budget
-            dose_today = min(deficit, self.global_budget_left, env.unwrapped.max_single_dose)
-
-            if dose_today > 0:
-                act = self._dose_to_action(env, dose_today)
-                self.global_budget_left -= env.unwrapped.available_doses[act]
-            else:
-                act = 0  # no-op
-
-            actions[ag] = act
-
-        return actions
-
-    def _dose_to_action(self, env, desired_kg):
-        """Map kg N to the closest allowed discrete action ID."""
-        doses = env.unwrapped.available_doses  # e.g. [0, 30, 60, 90]
-        # pick the smallest dose ≥ desired, else highest available
-        target = min((d for d in doses if d >= desired_kg), default=max(doses))
-        return doses.index(target)  # assumes ascending order
-
-    def _get_shared_obs_keys(self):
+    @staticmethod
+    def _get_shared_obs_keys():
         return ["NO3", "NH4", "Yield", "BudgetLeft", "Naction", "NamountSO", "FertilizerPrice", "CropCode"]
 
     def _convert_crop_reference(self, dict_to_convert):
@@ -967,19 +1150,25 @@ class MultiFieldEnv(AECEnv, EzPickle):
 
         return {**schedule, **crop_schedule}
 
+    def set_print_season_year(self, season_year: int | None) -> None:
+        """Force __str__ to print a specific season year (useful for multi-season eval)."""
+        self._print_season_year = None if season_year is None else int(season_year)
+
     def __str__(self) -> str:
         """
         Return a multiline string such as
 
             Farm status – budget left: 350 / 400 kg N
-            Field          Crop        N applied   Yield (t/ha)
-            ---------------------------------------------------
-            parcel_001     winterwheat       80          3.5
-            parcel_002     potato            30            –
-            parcel_003     sugarbeet          –            –
+            Field          Crop        Season  Date       N applied   Yield[t/ha]         NUE   Nsurp     Profit     Reward
+            ---------------------------------------------------------------------------------------------------------------
+            parcel_001     winterwheat   2021  03/15/2021       80          3.5         0.80    12.0     1000.0      0.95
+            parcel_002     potato        2021  03/17/2021       30            –            –       –          –         –
+            parcel_003     sugarbeet     2021  03/20/2021        –            –            –       –          –         –
 
             Crop distribution → winterwheat:1 | potato:1 | sugarbeet:1
         """
+
+        from collections import Counter
 
         def safe(env, key, default="–"):
             try:
@@ -990,46 +1179,137 @@ class MultiFieldEnv(AECEnv, EzPickle):
             except Exception:
                 return default
 
+        def safe_season(env, key, season, default="–"):
+            try:
+                val = env.unwrapped.get_latest_season_info(key, season)
+                if val is None:
+                    return default
+                return val
+            except Exception:
+                return default
+
+        def safe_grab(env, key, season, default="-"):
+            if season is None:
+                return safe(env, key, default)
+            return safe_season(env, key, season, default)
+
+        def latest_season_year(env):
+            try:
+                sy = env.unwrapped.get_latest_info("SeasonYear")
+                return int(sy) if sy is not None else None
+            except Exception:
+                return None
+
+        def _display_season_year() -> int | None:
+            # If an external caller set a display season, prefer it.
+            _sy = self._print_season_year
+            return int(_sy) if _sy is not None else None
+
+        def season_sum(env, key, season_year):
+            """Sum a time-series info key restricted to the given season_year, if possible."""
+            try:
+                infos = env.unwrapped.infos
+                if season_year is None:
+                    seq = infos.get(key, [])
+                    return float(np.nansum(seq)) if seq else 0.0
+
+                sy_list = infos.get("SeasonYear", [])
+                seq = infos.get(key, [])
+                if not sy_list or not seq:
+                    return 0.0
+                idx = [i for i, yy in enumerate(sy_list) if yy == season_year]
+                if not idx:
+                    return 0.0
+                return float(np.nansum([seq[i] for i in idx]))
+            except Exception:
+                return 0.0
+
         # use a flexible formatter
         def format_val(val, width, prec=2):
-            return f"{val:>{width}.{prec}f}" if isinstance(val, (int, float)) else f"{val:>{width}}"
+            if isinstance(val, (int, float, np.floating)):
+                # avoid printing nan as 'nan' with fixed width
+                if isinstance(val, float) and (np.isnan(val) or np.isinf(val)):
+                    return f"{'–':>{width}}"
+                return f"{val:>{width}.{prec}f}"
+            return f"{str(val):>{width}}"
 
-        header = f"Farm status; sowing year {self.year} – budget left: {round(self.global_budget_left * self.get_farm_area_sum(), 1)} / {round(self.global_allocated_budget * self.get_farm_area_sum(), 1)} kg N or {self.global_budget_left} / {self.global_allocated_budget} kg N / ha (Max. {self._get_global_max_budget()}) | Cum. Reward: {self.get_cumulative_reward():.1f}"
-        cols = ("Field (area[ha])", "Crop", "Date", "N applied", "Yield[t/ha]", "NUE", "Nsurp", "Profit", "Reward")
-        fmt_header = "{:20} {:12} {:10} {:>10} {:>15} {:>7} {:>7} {:>10} {:>10}"
-        lines = [header, fmt_header.format(*cols), "-" * 110]
+        # Determine which season we are currently in (for daisy-chained eval)
+        current_season_year = _display_season_year()
+        if current_season_year is None:
+            season_candidates = []
+            for _fid, _env in self.fields.items():
+                sy = latest_season_year(_env)
+                if sy is not None:
+                    season_candidates.append(sy)
+            current_season_year = max(season_candidates) if season_candidates else None
+
+        # Header: show both env.year and current_season_year when they differ
+        season_str = (
+            f"season {current_season_year}" if current_season_year is not None else "season –"
+        )
+        base_year_str = getattr(self, "year", None)
+        # In daisy-chained eval, self.year may remain at the reset year; prefer current season.
+        if current_season_year is not None:
+            base_year_str = int(current_season_year)
+        if base_year_str is None:
+            year_str = season_str
+        else:
+            year_str = f"year {base_year_str} ({season_str})" if (current_season_year is not None and int(base_year_str) != int(current_season_year)) else f"year {base_year_str}"
+
+        # Budget left: in multi-season eval budgets may be per-season; keep current fields' view.
+        header = (
+            f"Farm status; {year_str} – budget left: "
+            f"{round(self.global_budget_left * self.get_farm_area_sum(), 1)} / "
+            f"{round(self.global_allocated_budget * self.get_farm_area_sum(), 1)} kg N "
+            f"or {self.global_budget_left} / {self.global_allocated_budget} kg N / ha "
+            f"(Max. {self._get_global_max_budget()}) | Cum. Reward: {self.get_cumulative_reward():.1f}"
+        )
+
+        cols = ("Field (area[ha])", "Crop", "Season", "Date", "N applied", "Yield[t/ha]", "NUE", "Nsurp", "Profit", "Reward")
+        fmt_header = "{:20} {:12} {:6} {:10} {:>10} {:>15} {:>7} {:>7} {:>10} {:>10}"
+        lines = [header, fmt_header.format(*cols), "-" * 128]
 
         # build one row per parcel
         crop_counts = Counter()
         for field_id, env in self.fields.items():
-            crop = env.unwrapped.crop
-            crop_counts[crop] += 1
+            sy = current_season_year if current_season_year is not None else latest_season_year(env)
+            # Prefer infos-driven CropName (handles multi-crop daisy-chaining)
+            crop = safe_grab(env, "CropName", sy, default=getattr(env.unwrapped, "crop", "–"))
+            crop_counts[str(crop)] += 1
 
-            val_yield = safe(env, "Yield")
-            val_yield = val_yield / 1000 if isinstance(val_yield, (int, float)) else val_yield
-            val_date = safe(env, "Date")
-            val_date = val_date.strftime("%m/%d/%Y")
+            sy_disp = str(sy) if sy is not None else "–"
+
+            val_yield = safe_grab(env, "Yield", sy)
+            val_yield = val_yield / 1000 if isinstance(val_yield, (int, float, np.floating)) else val_yield
+
+            val_date = safe_grab(env, "Date", sy)
+            if hasattr(val_date, "strftime"):
+                val_date = val_date.strftime("%m/%d/%Y")
+
+            # Reward: show per-season cumulative reward when SeasonYear exists, else full cumulative.
+            r_cum = season_sum(env, "Reward", sy)
 
             vals = [
                 f"{field_id} ({env.unwrapped.area:.1f})",
                 crop,
+                sy,
                 val_date,
-                safe(env, "Naction"),
+                safe_grab(env, "Naction", sy),
                 val_yield,
-                safe(env, "Nue"),
-                safe(env, "Nsurp"),
-                safe(env, "Profit"),
-                np.cumsum(env.infos["Reward"])[-1],
+                safe_grab(env, "Nue", sy),
+                safe_grab(env, "Nsurp", sy),
+                safe_grab(env, "Profit", sy),
+                r_cum,
             ]
 
             line = (
-                f"{vals[0]:20} {vals[1]:12} {vals[2]:10} "
-                f"{format_val(vals[3], 10)} "
-                f"{format_val(vals[4], 15)} "
-                f"{format_val(vals[5], 7)} "
+                f"{vals[0]:20} {str(vals[1]):12} {format_val(vals[2], 6, prec=0)} {str(vals[3]):10} "
+                f"{format_val(vals[4], 10)} "
+                f"{format_val(vals[5], 15)} "
                 f"{format_val(vals[6], 7)} "
-                f"{format_val(vals[7], 10)} "
-                f"{format_val(vals[8], 10)}"
+                f"{format_val(vals[7], 7)} "
+                f"{format_val(vals[8], 10)} "
+                f"{format_val(vals[9], 10)}"
             )
             lines.append(line)
 

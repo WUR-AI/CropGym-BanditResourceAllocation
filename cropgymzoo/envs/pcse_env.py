@@ -48,7 +48,10 @@ class AgroManagementContainer:
         self.crop_start_type: str = agro_management[0][self.campaign_date]['CropCalendar']['crop_start_type']
         self.crop_end_date: datetime.date = agro_management[0][self.campaign_date]['CropCalendar']['crop_end_date']
         self.crop_end_type: str = agro_management[0][self.campaign_date]['CropCalendar']['crop_end_type']
-        self.max_duration: int = agro_management[0][self.campaign_date]['CropCalendar']['max_duration']
+        try:
+            self.max_duration: int | None = agro_management[0][self.campaign_date]['CropCalendar']['max_duration']
+        except KeyError:
+            self.max_duration = None
 
         self.structure = None
         self.build_structure()
@@ -63,10 +66,47 @@ class AgroManagementContainer:
                             crop_start_type: {self.crop_start_type}
                             crop_end_date: {self._yaml_value(self.crop_end_date)}
                             crop_end_type: {self.crop_end_type}
-                            max_duration: {self.max_duration}
+                            max_duration: {self._yaml_value(self.max_duration)}
                         TimedEvents: null
                         StateEvents: null
                 ''', Loader=yaml.SafeLoader)
+
+    @staticmethod
+    def build_multi_campaign_structure(campaign_specs: list[dict]) -> list:
+        """
+        Build PCSE agromanagement structure with multiple daisy-chained campaigns.
+
+        Each spec requires:
+          - campaign_date (datetime.date)
+          - crop_name (str)
+          - variety_name (str)
+          - crop_start_date (datetime.date)
+          - crop_start_type (str)
+          - crop_end_type (str)
+          - max_duration (int)
+        Optional:
+          - crop_end_date (datetime.date or None)
+        """
+        specs = sorted(campaign_specs, key=lambda s: s["campaign_date"])
+        structure = []
+        for s in specs:
+            cdate = s["campaign_date"]
+            structure.append({
+                cdate: {
+                    "CropCalendar": {
+                        "crop_name": s["crop_name"],
+                        "variety_name": s.get("variety_name", "") or "",
+                        "crop_start_date": s["crop_start_date"],
+                        "crop_start_type": s.get("crop_start_type", "sowing"),
+                        "crop_end_date": s.get("crop_end_date", None),
+                        "crop_end_type": s.get("crop_end_type", "maturity"),
+                        "max_duration": int(s.get("max_duration", 365)) if s.get("max_duration") is not None else None,
+                    },
+                    "TimedEvents": None,
+                    "StateEvents": None,
+                }
+            })
+        return structure
 
     def update_attributes(self, **changes: dict):
         """
@@ -499,6 +539,9 @@ class PCSEEnv(gym.Env):
 
     def _init_pcse_model(self, options={}, *args, **kwargs) -> Engine:
 
+        if options is None:
+            options = {}
+
         # Inject different initial condition every episode if it specified in args
         if 'site_params' in options:
             if 'NH4I' in options['site_params']:
@@ -509,6 +552,21 @@ class PCSEEnv(gym.Env):
                 self._site_params['NO3ConcR'] = options['site_params']['NO3ConcR']
         if 'soil_params' in options:
             self._soil_params = options['soil_params']
+        #
+        # if bool(options.get("multi_crop", False)):
+        #     crop_dir = os.path.join(self._CONFIG_PATH, "crop")
+        #     crop_files = [
+        #         os.path.join(crop_dir, fn)
+        #         for fn in os.listdir(crop_dir)
+        #         if fn.endswith(".yaml") or fn.endswith(".yml")
+        #     ]
+        #     merged_cropdata = {}
+        #     for fp in sorted(crop_files):
+        #         reader = pcse.input.PCSEFileReader(fp)
+        #         merged_cropdata.update(dict(reader))
+        #     if merged_cropdata:
+        #         self._crop_params = merged_cropdata
+
         # Combine the config files in a single PCSE ParameterProvider object
         self._parameter_provider = pcse.base.ParameterProvider(cropdata=self._crop_params,
                                                                sitedata=self._site_params,
@@ -787,6 +845,12 @@ class PCSEEnv(gym.Env):
 
         # Create an info dict
         info = dict()
+
+        # Allow overriding wait_for_crop per reset (useful for evaluation-time preseason simulation)
+        if options is None:
+            options = {}
+        if "wait_for_crop" in options:
+            self._wait_for_crop = bool(options["wait_for_crop"])
 
         # Create a PCSE engine / crop growth model
         self._model = self._init_pcse_model(options)

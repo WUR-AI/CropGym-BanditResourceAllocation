@@ -127,3 +127,7 @@ def min_max_denormalize(x_norm, min_val=0, max_val=10_000_000) -> float:
     """Scale from [0, 1] -> [min_val, max_val]."""
     return x_norm * (max_val - min_val) + min_val
 
+def last_before_nan(x, default=np.nan):
+    a = np.asarray(x, dtype=float)
+    valid = a[~np.isnan(a)]
+    return valid[-1] if valid.size else x[-1]
