@@ -319,11 +319,15 @@ class AllocationBandit(gym.Env):
                 )
                 obs = self._get_context()
                 if self.render:
+                    self.farm.set_print_season_year(next_year-1)
                     print(self.farm)
                 return obs, reward, False, False, self.infos
 
             # terminal of multi-step eval episode
             obs = np.zeros(1, dtype=np.float32)
+            if self.render:
+                self.farm.set_print_season_year(self._eval_years[-1])
+                print(self.farm)
             return obs, reward, True, False, self.infos
 
         # -------------------------
@@ -396,6 +400,7 @@ class AllocationBandit(gym.Env):
     def _get_context_keys():
         return [
             "InitialN",
+            "InitialWC",
             "CropPrice",
             "CropCode",
             "FertilizerPrice",
@@ -429,21 +434,31 @@ class AllocationBandit(gym.Env):
                 out = []
                 use_navail = bool(getattr(self, "use_navail", False))
                 for a in self.agents_order:
-                    try:
-                        pcse_out = self.farm.fields[a].model.get_output()
-                        last = pcse_out[-1] if pcse_out else {}
-                        if use_navail and ("NAVAIL" in last) and (last["NAVAIL"] is not None):
-                            out.append(float(last["NAVAIL"]))
-                        else:
-                            no3 = last.get("NO3", 0.0) or 0.0
-                            nh4 = last.get("NH4", 0.0) or 0.0
-                            out.append(float(no3) + float(nh4))
-                    except Exception:
-                        out.append(float(self.farm.get_initial_n()[a]))
+                    pcse_out = self.farm.fields[a].model.get_output()
+                    last = pcse_out[-1] if pcse_out else {}
+                    if use_navail and ("NAVAIL" in last) and (last["NAVAIL"] is not None):
+                        out.append(float(last["NAVAIL"]))
+                    else:
+                        no3 = np.sum(last.get("NO3"))
+                        nh4 = np.sum(last.get("NH4"))
+                        out.append(float(no3) + float(nh4)/1e-4)
                 return out
 
             # single-year / training behavior
             return [self.farm.get_initial_n()[a] for a in self.agents_order]
+
+        if key == "InitialWC":
+            if getattr(self, "_eval_mode", False):
+                out = []
+                for a in self.agents_order:
+                    pcse_out = self.farm.fields[a].model.get_output()
+                    last = pcse_out[-1] if pcse_out else {}
+
+                    wc = np.sum(last.get("WC"))
+                    out.append(float(wc))
+                return out
+
+            return [self.farm.get_initial_wc()[a] for a in self.agents_order]
 
         if key == "CropPrice":
             return [self.farm.get_per_field_crop_price()[a] for a in self.agents_order]

@@ -323,6 +323,11 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         if self.keep_soil_moisture:
             self._do_auto_irrigation()
 
+        # align crop name from active campaign
+        specs = getattr(self, "_campaign_specs", None)
+        ptr = getattr(self, "_campaign_ptr", 0)
+        self.crop = (specs[ptr].get("crop_name", self.crop) if specs else self.crop)
+
         self.n_steps += 1
 
         # advance one step of the PCSEEngine wrapper and apply action(s)
@@ -442,6 +447,11 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         # reset prices
         self._reset_prices()
 
+        # manual override for randomisation
+        if options.get("random_initial_conditions", False):
+            options["site_params"] = self._overwrite_initial_conditions(random=True)
+            options["site_params"] = {'WAV': self.rng.normal(30, 10)}
+
         # reset PCSE
         obs = super().reset(seed=seed, options=options)
 
@@ -547,9 +557,6 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
     def get_latest_info(self, feature):
         return self.infos[feature][-1]
-
-    def get_latest_season_info(self, feature, season):
-        return last_before_nan(self._group_infos_by_season_year()[season][feature])
 
     def set_budget(self, budget):
         self.budget_n = budget
@@ -1034,9 +1041,9 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         return 0
 
-    def _overwrite_initial_conditions(self):
+    def _overwrite_initial_conditions(self, random=True):
         # N initial conditions
-        list_nh4i, list_no3i = self._generate_realistic_n()
+        list_nh4i, list_no3i = self._generate_realistic_n(random=random)
         self.eval_nh4i = list_nh4i
         self.eval_no3i = list_no3i
 
@@ -1237,7 +1244,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         self.crop_price = self._get_crop_price()
 
 
-    def _generate_realistic_n(self, random: bool=False, len_soil: int | None = None) -> tuple[list, list]:
+    def _generate_realistic_n(self, random: bool=True, len_soil: int | None = None) -> tuple[list, list]:
         """ method to overwrite a random N initial condition for every call of reset()
             Implemented based on discussions with Herman Berghuijs, for NL conditions
         """

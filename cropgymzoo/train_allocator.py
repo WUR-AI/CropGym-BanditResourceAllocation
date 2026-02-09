@@ -18,7 +18,7 @@ from cropgymzoo.utils.agent_helpers import min_max_normalize
 from cropgymzoo.utils.callbacks import _setup_bandit_comet, log_selection_info, log_model_histograms, fig_to_chw_uint8
 from cropgymzoo.envs.allocation_env import AllocationBandit
 from cropgymzoo import _DEFAULT_LOGDIR, _DEFAULT_RESULTSDIR, _SCENARIO_PATH
-from cropgymzoo.utils.plotters import plot_results
+from cropgymzoo.utils.plotters import plot_results, plot_results_daisy_chained
 
 
 class BanditNormalizer:
@@ -467,6 +467,7 @@ def training_loop(env: AllocationBandit, bandit: NNAGPBandit, args, comet_experi
         theta_t, env_info = env.reset(
             options={
                 'year': rng.choice(env.years),
+                "random_initial_conditions": True,
             },
             seed=args.seed
         )
@@ -922,14 +923,7 @@ def training_loop_factored(
 
                     th_np, raw_reward, done, _, infos = env.step(x_eval)
 
-                    # The env returns the current season label year in multi-year mode
-                    season_year = int(infos.get("current_season_year", -1))
-                    if season_year == -1:
-                        # fallback: use last Date year
-                        try:
-                            season_year = int(infos["AgentInfos"][env.agents_order[0]]["SeasonYear"][-1])
-                        except Exception:
-                            season_year = None
+                    season_year = int(infos["AgentInfos"][env.agents_order[0]]["SeasonYear"][-1])
 
                     if season_year is not None:
                         info_dict[int(season_year)] = infos["AgentInfos"]
@@ -953,7 +947,22 @@ def training_loop_factored(
                             step=test_step,
                         )
                         plt.close(fig)
+                else:
+                    if comet_experiment:
+                        fig = plot_results_daisy_chained(
+                            info_dict,  # dict[season_year] -> AgentInfos
+                            variable_list=["DVS", "Profit", "Reward", "Action", "Yield", "BudgetLeft"],
+                            show=False,
+                        )
+                        comet_experiment.log_figure(
+                            figure_name=f"image/{scenario}/plot_eval",
+                            figure=fig,
+                            step=test_step,
+                        )
+                        plt.close(fig)
 
+                # Return this
+                env.unwrapped.farm.set_print_season_year(None)
                 # Aggregate scenario score
                 sum_reward = float(np.sum(rewards))
                 if comet_experiment:
@@ -981,9 +990,16 @@ def training_loop_factored(
                     best_eval_sum[scenario] = sum_reward
                     best_eval_step[scenario] = int(test_step)
 
+                    os.makedirs(
+                        os.path.join(
+                            _DEFAULT_LOGDIR,
+                            f"Bandit_{args.model_dir}_{scenario}_s{args.seed}"
+                        ), exist_ok=True
+                    )
+
                     best_pickle_path = os.path.join(
                         _DEFAULT_LOGDIR,
-                        f"Bandit_{args.model_dir}_{scenario}",
+                        f"Bandit_{args.model_dir}_{scenario}_s{args.seed}",
                         f"bandit_{region}_{farm_id}_BEST.pkl",
                     )
                     os.makedirs(os.path.dirname(best_pickle_path), exist_ok=True)

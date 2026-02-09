@@ -550,22 +550,10 @@ class PCSEEnv(gym.Env):
             if 'NH4ConcR' in options['site_params']:
                 self._site_params['NH4ConcR'] = options['site_params']['NH4ConcR']
                 self._site_params['NO3ConcR'] = options['site_params']['NO3ConcR']
+            if 'WAV' in options['site_params']:
+                self._site_params['WAV'] = options['site_params']['WAV']
         if 'soil_params' in options:
             self._soil_params = options['soil_params']
-        #
-        # if bool(options.get("multi_crop", False)):
-        #     crop_dir = os.path.join(self._CONFIG_PATH, "crop")
-        #     crop_files = [
-        #         os.path.join(crop_dir, fn)
-        #         for fn in os.listdir(crop_dir)
-        #         if fn.endswith(".yaml") or fn.endswith(".yml")
-        #     ]
-        #     merged_cropdata = {}
-        #     for fp in sorted(crop_files):
-        #         reader = pcse.input.PCSEFileReader(fp)
-        #         merged_cropdata.update(dict(reader))
-        #     if merged_cropdata:
-        #         self._crop_params = merged_cropdata
 
         # Combine the config files in a single PCSE ParameterProvider object
         self._parameter_provider = pcse.base.ParameterProvider(cropdata=self._crop_params,

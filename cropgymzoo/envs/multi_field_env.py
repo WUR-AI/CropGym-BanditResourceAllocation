@@ -503,20 +503,21 @@ class MultiFieldEnv(AECEnv, EzPickle):
         for agent in self.possible_agents:
             env = self.fields[agent].unwrapped
 
-            # If season_year is provided, reset action state + budgets for this new season
-            if season_year is not None:
-                crop_name = crop_by_agent.get(agent, None)
-                # choose a max budget for this crop; fallback to current max_budget_n/global max
-                max_budget = env.CROP_SOIL_MAX[crop_name][env.soil_type]
+            crop_name = crop_by_agent[agent]
+            # choose a max budget for this crop; fallback to current max_budget_n/global max
+            max_budget = env.CROP_SOIL_MAX[crop_name][env.soil_type]
 
-                env.begin_new_season(
-                    season_year=int(season_year),
-                    crop_name=crop_name,
-                    max_budget_n=float(max_budget) if max_budget is not None else None,
-                    reset_reward=True,
-                    reset_actions=True,
-                    reset_prices=True,
-                )
+            # setting a bunch of stuff
+            env.year=int(season_year)
+            env.crop=crop_name
+            env.reward_container.reset()
+            env.rewards_obj.reset()
+            env._reset_action_variables()
+            env.max_budget_n = float(max_budget)
+            env.budget_n = float(max_budget)
+            env.budget_left = float(max_budget)
+            env._reset_prices()
+
 
             # Now compute allocation date based on the (possibly updated) agmt crop_start_date
             sow_date = env.agmt.crop_start_date
@@ -761,6 +762,9 @@ class MultiFieldEnv(AECEnv, EzPickle):
             return {a: self.fields[a].unwrapped.infos['NAVAIL'][0] for a in self.possible_agents}
         else:
             return {a: self.fields[a].unwrapped.infos['NO3'][0] + self.fields[a].unwrapped.infos['NH4'][0] for a in self.possible_agents}
+
+    def get_initial_wc(self):
+        return {a: self.fields[a].unwrapped.infos['WC'][0] for a in self.possible_agents}
 
     def get_cumulative_reward(self):
         return np.sum([np.cumsum(self.fields[a].unwrapped.infos['Reward'])[-1] for a in self.possible_agents])
@@ -1209,18 +1213,41 @@ class MultiFieldEnv(AECEnv, EzPickle):
             """Sum a time-series info key restricted to the given season_year, if possible."""
             try:
                 infos = env.unwrapped.infos
-                if season_year is None:
-                    seq = infos.get(key, [])
-                    return float(np.nansum(seq)) if seq else 0.0
 
                 sy_list = infos.get("SeasonYear", [])
                 seq = infos.get(key, [])
-                if not sy_list or not seq:
+                crop_active = infos.get("CropActive", None)  # may be missing
+
+                if not seq:
                     return 0.0
-                idx = [i for i, yy in enumerate(sy_list) if yy == season_year]
-                if not idx:
+
+                # If no season requested, optionally sum only during CropActive
+                if season_year is None:
+                    n = len(seq)
+                    if crop_active is not None:
+                        n = min(n, len(crop_active))
+                        vals = [seq[i] for i in range(n) if bool(crop_active[i])]
+                    else:
+                        vals = list(seq)
+                    return float(np.nansum(vals)) if vals else 0.0
+
+                if not sy_list:
                     return 0.0
-                return float(np.nansum([seq[i] for i in idx]))
+
+                # Align lengths defensively
+                n = min(len(sy_list), len(seq))
+                if crop_active is not None:
+                    n = min(n, len(crop_active))
+
+                target = int(season_year)
+
+                # Filter: SeasonYear == target AND CropActive == True (if available)
+                if crop_active is not None:
+                    vals = [seq[i] for i in range(n) if sy_list[i] == target and bool(crop_active[i])]
+                else:
+                    vals = [seq[i] for i in range(n) if sy_list[i] == target]
+
+                return float(np.nansum(vals)) if vals else 0.0
             except Exception:
                 return 0.0
 
