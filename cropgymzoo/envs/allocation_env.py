@@ -19,10 +19,11 @@ from cropgymzoo.utils.defaults import get_default_years
 from cropgymzoo.utils.scenario_utils import model_picker
 from cropgymzoo.utils.rewards import Rewards
 from cropgymzoo.utils.agent_helpers import last_before_nan
+from cropgymzoo.utils.historical_forecasts import OpenMeteoHistoricalForecastStore, ForecastWindow
 from cropgymzoo.train_policy import load_model, initialize_policy
 from cropgymzoo.eval_policy import MultiRLAgent, load_policy, RoTAgent, RandomAgent
 
-from cropgymzoo import _SCENARIO_PATH, _CONFIG_PATH
+from cropgymzoo import _SCENARIO_PATH, _CONFIG_PATH, _BASE_PATH
 
 # ---------------------------------------------------------------------
 # Gymnasium env that works for any n_fields
@@ -80,6 +81,8 @@ class AllocationBandit(gym.Env):
         self._eval_preN: float = 0.0
         self._eval_scenario: str = 'max'
         self._farm_dict_by_year: dict = None
+
+        self.forecast_horizon_days = 14
 
         # The MARL env
         self._init_envs(args, warm_up_eps=warm_up_eps)
@@ -278,8 +281,29 @@ class AllocationBandit(gym.Env):
         # check if action is valid
         assert self.action_space.contains(action), f"{action} is an invalid action"
 
-        # save action this episode
-        self.infos['AllocationAction'] = action
+        # --- reinterpret bandit output as "fertilizer to apply" instead of "reduction" ---
+        # MultiFieldEnv.allocate_bandit_budgets expects "reductions" (in 10 kg units), where:
+        #   reduction=0   -> allocate max
+        #   reduction=max -> allocate 0
+        #
+        # If the bandit now outputs "fertilizer to apply" (in the same 10 kg units),
+        # we convert apply_units -> reduction_units via:
+        #   reduction_units = max_units - apply_units
+
+        max_budgets = np.asarray(
+            [
+                self.farm.get_per_parcel_max_budget(a)
+                for a in self.agents_order
+            ], dtype=np.float32)  # per-field max N (kg)
+        max_units = max_budgets / 10.0  # per-field max in "units"
+
+        apply_units = np.asarray(action, dtype=np.float32).reshape(-1) # bandit outputs apply in "units
+        apply_units = np.clip(apply_units, 0.0, max_units) # "
+
+        reduction_units = max_units - apply_units  # 0 apply -> max reduction; max apply -> 0 reduction
+
+        # save as reductions because allocate_bandit_budgets uses reductions
+        self.infos['AllocationAction'] = reduction_units.astype(np.float32)
 
         # allocate here
         self.farm.allocate_bandit_budgets(self.infos['AllocationAction'])
@@ -361,6 +385,15 @@ class AllocationBandit(gym.Env):
         reward = np.sum(weighted_reward)
         return reward
 
+    def build_full_candidates_per_field(self):
+        """Return list of tensors, each (M_i, 1) for select_*_factored API."""
+        X_list = []
+        base_arms = _make_base_arms(self, cap=1.0)
+        for ag in self.agents_order:
+            vals = np.asarray(base_arms[ag], dtype=np.float32)
+            X_list.append(torch.from_numpy(vals.reshape(-1, 1)))
+        return X_list
+
     def unflatten_context_per_field(self, theta_flat: np.ndarray) -> np.ndarray:
         """
         Convert flat theta (keys-major) into per-field theta matrix.
@@ -404,12 +437,20 @@ class AllocationBandit(gym.Env):
             "CropPrice",
             "CropCode",
             "FertilizerPrice",
-            "Area",
+            # "Area",
             "MaxBudget",
             "EarlySeasonPrecipitation",
             "EarlySeasonTemperatureMin",
             # "EarlySeasonTemperatureMax",
             "EarlySeasonIrradiation",
+            "ForecastPrecipitation",
+            "ForecastTemperatureMin",
+            # "ForecastTemperatureMax",
+            "ForecastIrradiation",
+            "PreviousSeasonPrecipitation",
+            "PreviousSeasonTemperatureMin",
+            # "PreviousSeasonTemperatureMax",
+            "PreviousSeasonIrradiation",
             # "HistoricalCropPrices",
             # "HistoricalFertilizerPrices",
             # "HistoricalProfit",
@@ -419,44 +460,39 @@ class AllocationBandit(gym.Env):
             # "HistoricalBudgetLeft",
             # "HistoricalNUE",
             # "HistoricalNsurplus",
-            "HistoricalPrecipitation",
-            "HistoricalTemperatureMin",
+            # "HistoricalPrecipitation",
+            # "HistoricalTemperatureMin",
             # "HistoricalTemperature",
             # "HistoricalTemperatureMax",
-            "HistoricalIrradiation",
+            # "HistoricalIrradiation",
         ]
 
     def _context_value(self, key: str):
         """Compute a single context feature."""
         if key == "InitialN":
             # Daisy-chain eval: use N at current decision date (after preseason advance)
-            if getattr(self, "_eval_mode", False):
-                out = []
-                use_navail = bool(getattr(self, "use_navail", False))
-                for a in self.agents_order:
-                    pcse_out = self.farm.fields[a].model.get_output()
-                    last = pcse_out[-1] if pcse_out else {}
-                    if use_navail and ("NAVAIL" in last) and (last["NAVAIL"] is not None):
-                        out.append(float(last["NAVAIL"]))
-                    else:
-                        no3 = np.sum(last.get("NO3"))
-                        nh4 = np.sum(last.get("NH4"))
-                        out.append(float(no3) + float(nh4)/1e-4)
-                return out
-
-            # single-year / training behavior
-            return [self.farm.get_initial_n()[a] for a in self.agents_order]
+            out = []
+            use_navail = bool(getattr(self, "use_navail", False))
+            for a in self.agents_order:
+                pcse_out = self.farm.fields[a].model.get_output()
+                last = pcse_out[-1] if pcse_out else {}
+                if use_navail and ("NAVAIL" in last) and (last["NAVAIL"] is not None):
+                    out.append(float(last["NAVAIL"]))
+                else:
+                    no3 = np.sum(last.get("NO3"))
+                    nh4 = np.sum(last.get("NH4"))
+                    out.append((float(no3) + float(nh4))/1e-4)
+            return out
 
         if key == "InitialWC":
-            if getattr(self, "_eval_mode", False):
-                out = []
-                for a in self.agents_order:
-                    pcse_out = self.farm.fields[a].model.get_output()
-                    last = pcse_out[-1] if pcse_out else {}
+            out = []
+            for a in self.agents_order:
+                pcse_out = self.farm.fields[a].model.get_output()
+                last = pcse_out[-1] if pcse_out else {}
 
-                    wc = np.sum(last.get("WC"))
-                    out.append(float(wc))
-                return out
+                wc = np.sum(last.get("WC"))
+                out.append(float(wc))
+            return out
 
             return [self.farm.get_initial_wc()[a] for a in self.agents_order]
 
@@ -475,6 +511,34 @@ class AllocationBandit(gym.Env):
         if key == "MaxBudget":
             return self._get_max_budgets()
 
+        if key == "ForecastPrecipitation":
+            out = []
+            for a in self.agents_order:
+                w = self._get_forecast_window(a)
+                out.append(float(w.precipitation_mean_mm_per_day))
+            return out
+
+        if key == "ForecastTemperatureMin":
+            out = []
+            for a in self.agents_order:
+                w = self._get_forecast_window(a)
+                out.append(float(w.tmin_mean_c))
+            return out
+
+        if key == "ForecastTemperatureMax":
+            out = []
+            for a in self.agents_order:
+                w = self._get_forecast_window(a)
+                out.append(float(w.tmax_mean_c))
+            return out
+
+        if key == "ForecastIrradiation":
+            out = []
+            for a in self.agents_order:
+                w = self._get_forecast_window(a)
+                out.append(float(w.irradiation_mean_mj_m2_per_day))
+            return out
+
         # --- early season features ---
         if key == "EarlySeasonPrecipitation":
             return self._get_early_season_weather_features("RAIN")
@@ -487,6 +551,37 @@ class AllocationBandit(gym.Env):
 
         if key == "EarlySeasonIrradiation":
             return self._get_early_season_weather_features("IRRAD")
+
+        # --- previous season (calendar year) features ---
+        if key in (
+                "PreviousSeasonPrecipitation",
+                "PreviousSeasonTemperatureMin",
+                "PreviousSeasonIrradiation",
+        ):
+            cache = getattr(self, "_prev_season_ctx_cache", None)
+
+            # Safety fallback: if cache wasn't precomputed, compute it now once.
+            if cache is None:
+                cache = {}
+                for a in self.agents_order:
+                    try:
+                        env = self.farm.fields[a].unwrapped
+                        decision_date = self._get_decision_date_for_agent(a)
+                        cache[a] = env.get_previous_calendar_year_means_from_wdp(decision_date)
+                    except Exception:
+                        cache[a] = {
+                            "PreviousSeasonPrecipitation": float("nan"),
+                            "PreviousSeasonTemperatureMin": float("nan"),
+                            "PreviousSeasonIrradiation": float("nan"),
+                        }
+                self._prev_season_ctx_cache = cache
+
+            return [
+                float(cache[a].get(key) / 1e6
+                      if key == "PreviousSeasonIrradiation"
+                      else cache[a].get(key))
+                for a in self.agents_order
+            ]
 
         # --- historical end-season features ---
         if key == "HistoricalCropPrices":
@@ -533,6 +628,15 @@ class AllocationBandit(gym.Env):
             return self._get_historical_weather_features("IRRAD")
 
         raise KeyError(f"Unknown context key: {key}")
+
+    def _get_previous_season_context(self, agent: str) -> dict[str, float]:
+        """Previous calendar-year (Jan 1 .. Dec 31) means using the field's WDP."""
+        env = self.farm.fields[agent].unwrapped
+        decision_date = self._get_decision_date_for_agent(agent)
+        # This uses the current model's weather provider; if the provider lacks coverage for that year,
+        # the env method will skip missing days and may return NaNs.
+        return env.get_previous_calendar_year_means_from_wdp(decision_date)
+
 
     def _get_historical_context_keys(self):
         return self._get_context_keys()[5:]
@@ -622,6 +726,17 @@ class AllocationBandit(gym.Env):
     def _get_context(self):
         keys = self._get_context_keys()
 
+        # Precompute previous-season (calendar-year) stats once per agent to avoid repeated 365-day loops
+        if any(k.startswith("PreviousSeason") for k in keys):
+            cache = {}
+            for a in self.agents_order:
+                env = self.farm.fields[a].unwrapped
+                decision_date = self._get_decision_date_for_agent(a)
+                cache[a] = env.get_previous_calendar_year_means_from_wdp(decision_date)
+            self._prev_season_ctx_cache = cache
+        else:
+            self._prev_season_ctx_cache = None
+
         context = {
             key: self._context_value(key)
             for key in keys
@@ -695,19 +810,31 @@ class AllocationBandit(gym.Env):
                     sow_date = getattr(getattr(env, "agmt", None), "crop_start_date", None)
 
                 if sow_date is not None:
-                    start = sow_date - datetime.timedelta(days=60)
+                    window_days = 60
+                    start = sow_date - datetime.timedelta(days=window_days)
                     cur = start
                     while cur < sow_date:
                         v = getattr(self.farm.fields[agent].wdp(cur), feature)
                         vals.append((v / 1e6) if feature == "IRRAD" else v)
                         cur += datetime.timedelta(days=1)
 
-            # Fallback: original behavior if not in eval mode or sow_date missing
+            # Fallback: original behavior (single-season): use a fixed 60-day window before sowing
             if not vals:
-                days = [d["day"] for d in self.farm.fields[agent].model.get_output() if d.get("day") is not None]
-                for day in days:
-                    v = getattr(self.farm.fields[agent].wdp(day), feature)
-                    vals.append((v / 1e6) if feature == "IRRAD" else v)
+                sow_date_fb = getattr(getattr(self.farm.fields[agent].unwrapped, "agmt", None), "crop_start_date", None)
+
+                if sow_date_fb is not None:
+                    start = sow_date_fb - datetime.timedelta(days=60)
+                    cur = start
+                    while cur < sow_date_fb:
+                        v = getattr(self.farm.fields[agent].wdp(cur), feature)
+                        vals.append((v / 1e6) if feature == "IRRAD" else v)
+                        cur += datetime.timedelta(days=1)
+                else:
+                    # last-resort: fall back to using available simulated days
+                    days = [d["day"] for d in self.farm.fields[agent].model.get_output() if d.get("day") is not None]
+                    for day in days:
+                        v = getattr(self.farm.fields[agent].wdp(day), feature)
+                        vals.append((v / 1e6) if feature == "IRRAD" else v)
 
             out.append(float(round(np.mean(vals), 3)) if vals else 0.0)
 
@@ -1151,6 +1278,80 @@ class AllocationBandit(gym.Env):
             }
         return agent_info
 
+    def _get_forecast_store(self):
+        """
+        Lazy init. Uses optional on-disk cache to avoid repeated API hits.
+        """
+        store = getattr(self, "_forecast_store", None)
+        if store is not None:
+            return store
+
+        # load API key as you described
+        api_key = None
+        if os.path.exists(os.path.join(_BASE_PATH, "openmeteo_api")):
+            with open(os.path.join(_BASE_PATH, "openmeteo_api", "api"), "r") as f:
+                api_key = f.readline()
+
+        # Optional disk cache: pick a location that makes sense in your project.
+        # If you don't want disk caching, set cache_dir=None.
+        os.makedirs(os.path.join(_BASE_PATH, "openmeteo_cache", "historical_forecast_daily"), exist_ok=True)
+        cache_dir = os.path.join(_BASE_PATH, "openmeteo_cache", "historical_forecast_daily")
+
+        self._forecast_store = OpenMeteoHistoricalForecastStore(
+            api_key=api_key,
+            cache_dir=cache_dir,
+            timeout_s=30.0,
+        )
+        return self._forecast_store
+
+    def _get_field_latlon(self, agent: str) -> tuple[float, float]:
+        env = self.farm.fields[agent].unwrapped
+
+        # Try the one you explicitly referenced first
+        for attr in ("locations", "location", "_location"):
+            if hasattr(env, attr):
+                val = getattr(env, attr)
+                if isinstance(val, (list, tuple)) and len(val) == 2:
+                    lat, lon = float(val[0]), float(val[1])
+                    return lat, lon
+
+        raise AttributeError(
+            f"Could not find field coordinates on env for agent={agent}. "
+            "Tried attributes: locations, location, _location."
+        )
+
+    def _get_decision_date_for_agent(self, agent: str):
+        """
+        Uses the last PCSE output day as the decision date.
+        Assumes you've already advanced the env to the allocation moment.
+        """
+        env = self.farm.fields[agent].unwrapped
+        pcse_out = env.model.get_output()
+        if not pcse_out:
+            raise RuntimeError("PCSE output is empty; cannot infer decision date.")
+        last = pcse_out[-1]
+        d = last.get("day", None)
+        if d is None:
+            raise RuntimeError("PCSE output row has no 'day' key; cannot infer decision date.")
+        return d  # usually datetime.date
+
+    def _get_forecast_window(self, agent: str) -> ForecastWindow:
+        # horizon for forecast mean; choose how you want to configure it
+        horizon_days = int(getattr(self, "forecast_horizon_days", 7))
+
+        lat, lon = self._get_field_latlon(agent)
+        decision_date = self._get_decision_date_for_agent(agent)
+
+        store = self._get_forecast_store()
+        # timezone: keep UTC unless you explicitly need local solar-time alignment
+        return store.summarize_window(
+            lat=lat,
+            lon=lon,
+            decision_date=decision_date,
+            horizon_days=horizon_days,
+            timezone="UTC",
+        )
+
     '''
     Init helpers
     '''
@@ -1193,6 +1394,9 @@ class AllocationBandit(gym.Env):
             with open(os.path.join(_SCENARIO_PATH, f"{self.region}", "2020",
                                    f"farmer_{self.farm_id}.yaml"), 'rb') as f:
                 dict_fields = yaml.safe_load(f)
+
+        if not any("Historical" in s for s in self._get_context_keys()):
+            warm_up_eps = 0
 
         self.farm = MultiFieldEnv(
             warm_up=self.warm_up_eps,
@@ -1239,19 +1443,8 @@ class AllocationBandit(gym.Env):
 
         # Set up action space based on farm
         self.base_arms = _make_base_arms(self, cap=self.cap)  # if len(self.farm.possible_agents) < 8 else 0.4)
-        # self.super_arms = _make_super_arms(self, self.base_arms)
-        # self.super_arms_reduced = _make_super_arms(self, self.base_arms, reduced=True)
-        # assert self.super_arms.size > self.super_arms_reduced.size
-        # self.top_super_arms = _make_topk_super_arms(
-        #     self.base_arms,
-        #     self.farm.possible_agents,
-        #     top_k=3
-        # )
-        # self.super_arm_to_idx = {
-        #     tuple(a): i for i, a in enumerate(self.super_arms)
-        # }
 
-        highs = np.array(self.max_budgets, dtype=np.float32)
+        highs = np.array([30.0 for _ in self.agents_order], dtype=np.float32)
         lows = np.zeros_like(highs, dtype=np.float32)
 
         # Action space
