@@ -1179,10 +1179,17 @@ class NNAGPBandit:
         sampled_scores: list[torch.Tensor] = []
 
         # RNG for TS
-        gen = None
-        if seed is not None:
-            gen = torch.Generator(device=device)
-            gen.manual_seed(int(seed))
+        # If `seed` is provided, TS becomes reproducible across runs.
+        # Use per-field generators so results do not depend on loop ordering.
+        base_seed = None if seed is None else int(seed)
+
+        def _make_gen(field_idx: int):
+            if base_seed is None:
+                return None
+            g = torch.Generator(device=device)
+            # decorrelate fields while staying deterministic
+            g.manual_seed(base_seed + field_idx * 10007)
+            return g
 
         for i, b in enumerate(self.sub_bandits):
             Xi = X_candidates_list[i]
@@ -1212,10 +1219,11 @@ class NNAGPBandit:
             if deterministic:
                 samp_i = mu_i
             else:
-                if gen is not None:
-                    z = torch.randn_like(mu_i.to(device), generator=gen).to(mu_i.device)
+                g_i = _make_gen(i)
+                if g_i is not None:
+                    z = torch.randn(mu_i.shape, device=mu_i.device, dtype=mu_i.dtype, generator=g_i)
                 else:
-                    z = torch.randn_like(mu_i)
+                    z = torch.randn(mu_i.shape, device=mu_i.device, dtype=mu_i.dtype)
                 samp_i = mu_i + std_i * z
 
             infos.append(SelectionInfo(mu=mu_i.detach().cpu(), std=std_i.detach().cpu(), sampled_vals=samp_i.detach().cpu(), rule="ts"))
