@@ -509,6 +509,74 @@ class PCSEEnv(gym.Env):
         # Define Gym action space
         self.action_space = self._get_action_space()
 
+    def _wdp_for_date(self, d: datetime.date):
+        """Return a single-day weather record from the underlying PCSE weather data provider."""
+        # PCSE engines typically expose the provider as `weatherdataprovider`.
+        # In this codebase `Engine.wdp` also proxies it.
+        wdp = None
+        try:
+            wdp = self.model.wdp
+        except Exception:
+            wdp = getattr(self.model, "weatherdataprovider", None)
+        if wdp is None:
+            raise RuntimeError("PCSE weather data provider (wdp) is not available on the model.")
+        return wdp(d)
+
+    def get_calendar_year_means_from_wdp(self, year: int) -> dict[str, float]:
+        """Mean RAIN/TMIN/IRRAD over calendar year (Jan 1 .. Dec 31) using the PCSE weather provider.
+
+        Notes
+        -----
+        - Uses whatever coverage the current WDP has. If some days are missing, they are skipped.
+        - If no days are available, returns NaNs.
+        """
+        start = datetime.date(int(year), 1, 1)
+        end = datetime.date(int(year), 12, 31)
+
+        rains: list[float] = []
+        tmins: list[float] = []
+        irrads: list[float] = []
+
+        d = start
+        while d <= end:
+            try:
+                w = self._wdp_for_date(d)
+            except Exception:
+                d += datetime.timedelta(days=1)
+                continue
+
+            # PCSE WeatherDataContainer exposes fields as attributes.
+            # Keep names aligned with your existing historical keys: RAIN, TMIN, IRRAD.
+            try:
+                r = getattr(w, "RAIN", None)
+                t = getattr(w, "TMIN", None)
+                i = getattr(w, "IRRAD", None)
+
+                if r is not None:
+                    rains.append(float(r))
+                if t is not None:
+                    tmins.append(float(t))
+                if i is not None:
+                    irrads.append(float(i))
+            except Exception:
+                pass
+
+            d += datetime.timedelta(days=1)
+
+        def _mean(xs: list[float]) -> float:
+            return float(sum(xs) / len(xs)) if xs else float("nan")
+
+        return {
+            "PreviousSeasonPrecipitation": _mean(rains),
+            "PreviousSeasonTemperatureMin": _mean(tmins),
+            "PreviousSeasonIrradiation": _mean(irrads),
+        }
+
+    def get_previous_calendar_year_means_from_wdp(self, decision_date: datetime.date) -> dict[str, float]:
+        """Convenience wrapper: for a decision_date in year Y, summarize calendar year Y-1."""
+        prev_year = int(decision_date.year) - 1
+        return self.get_calendar_year_means_from_wdp(prev_year)
+
     def new_wdp(self, options):
         # Reuse an existing weather provider when possible to avoid heavy re-initialization.
         rm = getattr(self, 'random_manager', None)
