@@ -76,7 +76,7 @@ class AllocationBandit(gym.Env):
         self._eval_mode = False
         self._eval_years: list[int] = []
         self._eval_ptr: int = 0
-        self._eval_days_before: int = 60
+        self._eval_days_before: int = 7
         self._eval_apply_preN: bool = False
         self._eval_preN: float = 0.0
         self._eval_scenario: str = 'max'
@@ -232,8 +232,6 @@ class AllocationBandit(gym.Env):
             # Advance to the first allocation moment (per-field)
             self.farm.advance_fields_to_allocation_dates(
                 days_before_sowing=self._eval_days_before,
-                preseason_N=self._eval_preN,
-                apply_preseason_N=self._eval_apply_preN,
                 season_year=int(self._eval_years[self._eval_ptr]),
                 farm_dict_by_year=options.get('farm_dict_by_year'),
             )
@@ -318,10 +316,12 @@ class AllocationBandit(gym.Env):
             self.infos['current_season_year'] = season_year
 
             # Run MARL forward until end of THIS season (without resetting)
-            self._run_marl_until_end_of_season(season_year=season_year, scenario=self._eval_scenario)
+            self.farm.run_til_past_season_year(
+                season_year=season_year,
+            )
 
             # Collect agent infos for this season only
-            infos_agents = self._collect_agent_infos_for_season(season_year)
+            infos_agents = self.farm.collect_agent_infos_for_season(season_year)
             self.infos['AgentInfos'] = infos_agents
 
             # compute bandit reward from per-season outputs
@@ -336,15 +336,15 @@ class AllocationBandit(gym.Env):
                 next_year = int(self._eval_years[self._eval_ptr])
                 self.farm.advance_fields_to_allocation_dates(
                     days_before_sowing=self._eval_days_before,
-                    preseason_N=self._eval_preN,
-                    apply_preseason_N=self._eval_apply_preN,
                     season_year=next_year,
                     farm_dict_by_year=self._farm_dict_by_year,
                 )
                 obs = self._get_context()
+
                 if self.render:
                     self.farm.set_print_season_year(next_year-1)
                     print(self.farm)
+
                 return obs, reward, False, False, self.infos
 
             # terminal of multi-step eval episode

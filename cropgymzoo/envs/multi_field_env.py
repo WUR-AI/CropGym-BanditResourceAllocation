@@ -621,7 +621,6 @@ class MultiFieldEnv(AECEnv, EzPickle):
     def run_til_past_season_year(
             self,
             season_year: int,
-            final_year: int,
     ) -> dict | None:
         for agent in self.possible_agents:
             env = self.fields[agent].unwrapped
