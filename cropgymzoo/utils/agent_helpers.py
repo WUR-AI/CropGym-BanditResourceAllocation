@@ -3,7 +3,7 @@ from typing import Iterable
 import numpy as np
 
 
-def _make_base_arms(self, cap: float = 0.4) -> dict[str, np.ndarray]:
+def _make_base_arms(self, cap: float = 1.0) -> dict[str, np.ndarray]:
     """
     Per-farm allowed reductions in kg/ha: [0, delta, 2*delta, ..., floor(cap*budget/delta)*delta].
     """

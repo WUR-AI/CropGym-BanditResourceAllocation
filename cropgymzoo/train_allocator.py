@@ -764,21 +764,16 @@ def training_loop_factored(
     def hist_size_total() -> int:
         return int(sum(len(sb.y_hist) for sb in getattr(bandit, "sub_bandits", [])))
 
-    def build_full_candidates_per_field():
-        """Return list of tensors, each (M_i, 1) for select_*_factored API."""
-        X_list = []
-        for ag in env.agents_order:
-            vals = np.asarray(env.base_arms[ag], dtype=np.float32)
-            X_list.append(torch.from_numpy(vals.reshape(-1, 1)))
-        return X_list
-
     for t in range(1, args.rounds + 1):
         # Keep your existing rotation-year behavior if you want it
         if region is not None or farm_id is not None:
             env.get_rotation_year(rng.choice([2020, 2021, 2022, 2023, 2024]))
 
         theta_np, env_info = env.reset(
-            options={"year": rng.choice(env.years)},
+            options={
+                "year": rng.choice(env.years),
+                "random_initial_conditions": True,
+            },
             seed=args.seed,
         )
         if comet_experiment:
@@ -792,7 +787,7 @@ def training_loop_factored(
         theta_fields = torch.from_numpy(theta_fields_np.astype(np.float32))
 
         # FULL candidate set per field (tiny)
-        X_list = build_full_candidates_per_field()
+        X_list = env.build_full_candidates_per_field()
 
         # Train surrogate occasionally
         train_every = int(getattr(args, "train_every", 1))
@@ -837,7 +832,7 @@ def training_loop_factored(
             comet_experiment.log_metrics({"reward/train/reward": float(reward_env)}, step=t)
 
         # Update your rolling historical context
-        env.add_stats_to_context(env.filter_historical_info(step_info["AgentInfos"]))
+        # env.add_stats_to_context(env.filter_historical_info(step_info["AgentInfos"]))
 
         # Per-field reward components (consistent with env._get_reward())
         y_fields = env.compute_per_field_rewards(n_surp_infos, nue_infos)
@@ -857,171 +852,178 @@ def training_loop_factored(
 
             for scenario in ["full", "reduced"]:
                 print(f"\n\nEval scenario: {scenario}\n")
+                best_seed_reward = []
+                for n in range(5):
+                    seed = args.seed + n
+                    years = [2020, 2021, 2022, 2023, 2024]
+                    rewards = []
+                    info_dict = {}
 
-                years = [2020, 2021, 2022, 2023, 2024]
-                rewards = []
-                info_dict = {}
-
-                # Choose eval budget
-                if scenario == "full":
-                    eval_budget = float(env.global_budget)
-                else:
-                    eval_budget = float(0.7) * float(env.global_budget)
-
-                # Build farm_dict_by_year once (needed for chained campaigns)
-                farm_dict_by_year = {}
-                for y in years:
-                    with open(os.path.join(_SCENARIO_PATH, f"{env.region}", f"{y}", f"farmer_{env.farm_id}.yaml"), 'r') as f:
-                        farm_dict_by_year[int(y)] = yaml.safe_load(f)
-
-                # Ensure env has the right agent set (field ids) before reset
-                env.get_rotation_year(years[0])
-
-                # Reset ONCE with horizon options
-                th_np, info = env.reset(
-                    options={
-                        "year": int(years[0]),
-                        "eval_horizon_years": [int(y) for y in years],
-                        "farm_dict_by_year": farm_dict_by_year,
-                        "preseason_allocation": True,
-                        # simpler decision point: 7 days before sowing
-                        "days_before_sowing": 7,
-                    },
-                    seed=args.seed,
-                )
-
-                done = False
-                while not done:
-                    # Normalize (flat) context
-                    th_np = rms.norm_theta(th_np)
-                    th_fields_np = env.unflatten_context_per_field(th_np)
-                    th_fields = torch.from_numpy(th_fields_np.astype(np.float32))
-
-                    X_list = build_full_candidates_per_field()
-
-                    if method == "ucb":
-                        x_eval, sel_info = bandit.select_ucb_factored(
-                            th_fields,
-                            X_list,
-                            delta=0.1,
-                            global_budget=eval_budget,
-                            max_budgets=torch.as_tensor(env.max_budgets, dtype=torch.float32),
-                        )
+                    # Choose eval budget
+                    if scenario == "full":
+                        eval_budget = float(env.global_budget)
                     else:
-                        x_eval, sel_info = bandit.select_ts_factored(
-                            th_fields,
-                            X_list,
-                            global_budget=eval_budget,
-                            max_budgets=torch.as_tensor(env.max_budgets, dtype=torch.float32),
-                        )
+                        eval_budget = float(0.7) * float(env.global_budget)
 
-                    # Budget violation check (only meaningful in reduced)
-                    if scenario == "reduced":
-                        applied = float((torch.as_tensor(env.max_budgets, dtype=torch.float32) - (x_eval.detach().cpu() * 10)).sum().item())
-                        if applied > float(eval_budget) + 1e-3:
-                            print(f"\n\n[WARN] budget violated: applied={applied:.3f} > B={float(eval_budget):.3f}\n")
+                    # Build farm_dict_by_year once (needed for chained campaigns)
+                    farm_dict_by_year = {}
+                    for y in years:
+                        with open(os.path.join(_SCENARIO_PATH, f"{env.region}", f"{y}", f"farmer_{env.farm_id}.yaml"), 'r') as f:
+                            farm_dict_by_year[int(y)] = yaml.safe_load(f)
 
-                    th_np, raw_reward, done, _, infos = env.step(x_eval)
+                    # Ensure env has the right agent set (field ids) before reset
+                    env.get_rotation_year(years[0])
 
-                    season_year = int(infos["AgentInfos"][env.agents_order[0]]["SeasonYear"][-1])
-
-                    if season_year is not None:
-                        info_dict[int(season_year)] = infos["AgentInfos"]
-
-                    rewards.append(float(raw_reward))
-                    print(f"test season_year: {season_year}, reward: {raw_reward}")
-
-                    if comet_experiment:
-                        comet_experiment.log_metrics(
-                            {f"reward/{scenario}/test_year:{season_year}/raw": float(raw_reward)},
-                            step=test_step,
-                        )
-                        fig = plot_results(
-                            infos["AgentInfos"],
-                            variable_list=["DVS", "Profit", "Reward", "Action", "Yield", "BudgetLeft"],
-                            show=False,
-                        )
-                        comet_experiment.log_figure(
-                            figure_name=f"image/{scenario}/plot_year:{season_year}",
-                            figure=fig,
-                            step=test_step,
-                        )
-                        plt.close(fig)
-                else:
-                    if comet_experiment:
-                        fig = plot_results_daisy_chained(
-                            info_dict,  # dict[season_year] -> AgentInfos
-                            variable_list=["DVS", "Profit", "Reward", "Action", "Yield", "BudgetLeft"],
-                            show=False,
-                        )
-                        comet_experiment.log_figure(
-                            figure_name=f"image/{scenario}/plot_eval",
-                            figure=fig,
-                            step=test_step,
-                        )
-                        plt.close(fig)
-
-                # Return this
-                env.unwrapped.farm.set_print_season_year(None)
-                # Aggregate scenario score
-                sum_reward = float(np.sum(rewards))
-                if comet_experiment:
-                    comet_experiment.log_metric(f"reward/{scenario}/sum", sum_reward, step=test_step)
-
-                # Always save the latest eval info_dict for this scenario
-                latest_pickle_path = os.path.join(
-                    _DEFAULT_LOGDIR,
-                    f"Bandit_{args.model_dir}_{scenario}",
-                    f"bandit_{region}_{farm_id}_info_{test_step}.pkl",
-                )
-                os.makedirs(os.path.dirname(latest_pickle_path), exist_ok=True)
-                with open(latest_pickle_path, "wb") as f:
-                    pickle.dump(info_dict, f)
-
-                if comet_experiment:
-                    comet_experiment.log_asset(
-                        file_data=latest_pickle_path,
-                        file_name=f"bandit_{region}_{farm_id}_{scenario}_info.pkl",
-                        step=test_step,
+                    # Reset ONCE with horizon options
+                    th_np, info = env.reset(
+                        options={
+                            "year": int(years[0]),
+                            "eval_horizon_years": [int(y) for y in years],
+                            "farm_dict_by_year": farm_dict_by_year,
+                            "preseason_allocation": True,
+                            # simpler decision point: 7 days before sowing
+                            "days_before_sowing": 7,
+                        },
+                        seed=args.seed,
                     )
 
-                # Track + save best eval per scenario
-                if sum_reward > best_eval_sum[scenario]:
-                    best_eval_sum[scenario] = sum_reward
-                    best_eval_step[scenario] = int(test_step)
+                    done = False
+                    while not done:
+                        # Normalize (flat) context
+                        th_np = rms.norm_theta(th_np)
+                        th_fields_np = env.unflatten_context_per_field(th_np)
+                        th_fields = torch.from_numpy(th_fields_np.astype(np.float32))
 
-                    os.makedirs(
-                        os.path.join(
+                        X_list = env.build_full_candidates_per_field()
+
+                        if method == "ucb":
+                            x_eval, sel_info = bandit.select_ucb_factored(
+                                th_fields,
+                                X_list,
+                                delta=0.1,
+                                global_budget=eval_budget,
+                                max_budgets=torch.as_tensor(env.max_budgets, dtype=torch.float32),
+                                deterministic=True,
+                            )
+                        else:
+                            x_eval, sel_info = bandit.select_ts_factored(
+                                th_fields,
+                                X_list,
+                                global_budget=eval_budget,
+                                max_budgets=torch.as_tensor(env.max_budgets, dtype=torch.float32),
+                                seed=seed,
+                            )
+
+                        # Budget violation check (only meaningful in reduced)
+                        if scenario == "reduced":
+                            applied = float((torch.as_tensor(env.max_budgets, dtype=torch.float32) - (x_eval.detach().cpu() * 10)).sum().item())
+                            if applied > float(eval_budget) + 1e-3:
+                                print(f"\n\n[WARN] budget violated: applied={applied:.3f} > B={float(eval_budget):.3f}\n")
+
+                        th_np, raw_reward, done, _, infos = env.step(x_eval)
+
+                        season_year = int(infos["AgentInfos"][env.agents_order[0]]["SeasonYear"][-1])
+
+                        if season_year is not None:
+                            info_dict[int(season_year)] = infos["AgentInfos"]
+
+                        rewards.append(float(raw_reward))
+                        print(f"test season_year: {season_year}, reward: {raw_reward}")
+
+                        if comet_experiment:
+                            comet_experiment.log_metrics(
+                                {f"s{seed}/reward/{scenario}/test_year:{season_year}/raw": float(raw_reward)},
+                                step=test_step,
+                            )
+                            fig = plot_results(
+                                infos["AgentInfos"],
+                                variable_list=["DVS", "Profit", "Action", "Yield", "BudgetLeft"],
+                                show=False,
+                            )
+                            comet_experiment.log_figure(
+                                figure_name=f"s{seed}/image/{scenario}/plot_year:{season_year}",
+                                figure=fig,
+                                step=test_step,
+                            )
+                            plt.close(fig)
+                    else:
+                        if comet_experiment:
+                            fig = plot_results_daisy_chained(
+                                info_dict,  # dict[season_year] -> AgentInfos
+                                variable_list=["DVS", "Profit", "Action", "Yield", "BudgetLeft", "NAVAIL"],
+                                show=False,
+                            )
+                            comet_experiment.log_figure(
+                                figure_name=f"s{seed}/image/{scenario}/plot_eval",
+                                figure=fig,
+                                step=test_step,
+                            )
+                            plt.close(fig)
+
+                    # Return this
+                    env.unwrapped.farm.set_print_season_year(None)
+                    # Aggregate scenario score
+                    sum_reward = float(np.sum(rewards))
+                    best_seed_reward.append(sum_reward)
+                    if comet_experiment:
+                        comet_experiment.log_metric(f"s{seed}/reward/{scenario}/sum", sum_reward, step=test_step)
+
+                        # Always save the latest eval info_dict for this scenario
+                        latest_pickle_path = os.path.join(
                             _DEFAULT_LOGDIR,
-                            f"Bandit_{args.model_dir}_{scenario}_s{args.seed}"
-                        ), exist_ok=True
-                    )
-
-                    best_pickle_path = os.path.join(
-                        _DEFAULT_LOGDIR,
-                        f"Bandit_{args.model_dir}_{scenario}_s{args.seed}",
-                        f"bandit_{region}_{farm_id}_BEST.pkl",
-                    )
-                    os.makedirs(os.path.dirname(best_pickle_path), exist_ok=True)
-                    with open(best_pickle_path, "wb") as f:
-                        pickle.dump(info_dict, f)
-
-                    best_eval_pickle[scenario] = best_pickle_path
-
-                    print(f"[BEST] New best {scenario}: sum_reward={sum_reward:.6f} at eval_step={test_step}")
-                    if comet_experiment:
-                        comet_experiment.log_metrics(
-                            {
-                                f"reward/{scenario}/best_sum": float(sum_reward),
-                                f"reward/{scenario}/best_at_step": int(test_step),
-                            },
-                            step=test_step,
+                            f"Bandit_{args.model_dir}_{scenario}",
+                            f"bandit_{region}_{farm_id}_info_{test_step}.pkl",
                         )
-                        comet_experiment.log_asset(
-                            file_data=best_pickle_path,
-                            file_name=f"bandit_{region}_{farm_id}_{scenario}_BEST_info.pkl",
-                            step=test_step,
-                        )
+                        os.makedirs(os.path.dirname(latest_pickle_path), exist_ok=True)
+                        with open(latest_pickle_path, "wb") as f:
+                            pickle.dump(info_dict, f)
+
+                        if comet_experiment:
+                            comet_experiment.log_asset(
+                                file_data=latest_pickle_path,
+                                file_name=f"bandit_{region}_{farm_id}_{scenario}_info.pkl",
+                                step=test_step,
+                            )
+
+                        # Track + save best eval per scenario
+                        if sum_reward > best_eval_sum[scenario]:
+                            best_eval_sum[scenario] = sum_reward
+                            best_eval_step[scenario] = int(test_step)
+
+                            os.makedirs(
+                                os.path.join(
+                                    _DEFAULT_LOGDIR,
+                                    f"Bandit_{args.model_dir}_{scenario}_s{seed}"
+                                ), exist_ok=True
+                            )
+
+                            best_pickle_path = os.path.join(
+                                _DEFAULT_LOGDIR,
+                                f"Bandit_{args.model_dir}_{scenario}_s{seed}",
+                                f"bandit_{region}_{farm_id}_BEST.pkl",
+                            )
+                            os.makedirs(os.path.dirname(best_pickle_path), exist_ok=True)
+                            with open(best_pickle_path, "wb") as f:
+                                pickle.dump(info_dict, f)
+
+                            best_eval_pickle[scenario] = best_pickle_path
+
+                            print(f"[BEST] New best {scenario}: sum_reward={sum_reward:.6f} at eval_step={test_step}")
+                            if comet_experiment:
+                                comet_experiment.log_metrics(
+                                    {
+                                        f"reward/{scenario}/best_sum": float(sum_reward),
+                                        f"reward/{scenario}/best_at_step": int(test_step),
+                                    },
+                                    step=test_step,
+                                )
+                                comet_experiment.log_asset(
+                                    file_data=best_pickle_path,
+                                    file_name=f"bandit_{region}_{farm_id}_{scenario}_BEST_info.pkl",
+                                    step=test_step,
+                                )
+                if comet_experiment:
+                    comet_experiment.log_metric(f"Metrics/{scenario}/best_eval", max(best_seed_reward), step=test_step)
 
             test_step += test_per_round
             set_subbandits_train_mode(True)
