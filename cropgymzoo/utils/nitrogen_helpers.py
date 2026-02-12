@@ -203,12 +203,26 @@ def get_disaggregated_deposition(year, start_date, end_date):
     return nh4_dis, no3_dis
 
 
-def get_nh4_deposition_pcse(output):
-    return output[-1]['RNH4DEPOSTT'] / m2_to_ha
+def _last_index_where_dvs_is_2(output, *, n=10):
+    key = 'DVS'
+    start = max(0, len(output) - n)
+    for i in range(len(output) - 1, start - 1, -1):  # scan last n entries backwards
+        v = output[i].get(key)
+        if v is not None:
+            return i
+    raise ValueError(f"No non-None '{key}' found in the last {n} entries.")
 
 
-def get_no3_deposition_pcse(output):
-    return output[-1]['RNO3DEPOSTT'] / m2_to_ha
+def get_nh4_deposition_pcse(output, multi_campaign=False):
+    if not multi_campaign:
+        return output[-1]['RNO3DEPOSTT'] / m2_to_ha
+    return output[_last_index_where_dvs_is_2(output)]['RNH4DEPOSTT'] / m2_to_ha
+
+
+def get_no3_deposition_pcse(output, multi_campaign=False):
+    if not multi_campaign:
+        return output[-1]['RNO3DEPOSTT'] / m2_to_ha
+    return output[_last_index_where_dvs_is_2(output)]['RNO3DEPOSTT'] / m2_to_ha
 
 
 def get_n_deposition_pcse(output):

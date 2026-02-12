@@ -519,9 +519,12 @@ class MultiFieldEnv(AECEnv, EzPickle):
             env._reset_prices()
 
 
-            # Now compute allocation date based on the (possibly updated) agmt crop_start_date
-            sow_date = env.agmt.crop_start_date
+            # Take the sowing date of current season
+            sow_date = env._campaign_specs[env._campaign_ptr]['crop_start_date']
+            # sow_date = sow_date.replace(year=env.date.year)
             alloc_date = sow_date - datetime.timedelta(days=int(days_before_sowing))
+
+            assert alloc_date <= sow_date, f"Crop start date {sow_date} cannot be before allocation date {alloc_date}"
             alloc_dates[agent] = alloc_date
 
             self._advance_field_to_date(
@@ -530,7 +533,6 @@ class MultiFieldEnv(AECEnv, EzPickle):
                 preseason_N=preseason_N,
                 apply_preseason_N=apply_preseason_N,
             )
-
         return alloc_dates
 
     def _advance_field_to_date(
@@ -541,8 +543,16 @@ class MultiFieldEnv(AECEnv, EzPickle):
             preseason_N: float = 0.0,
             apply_preseason_N: bool = False,
     ) -> None:
-        """Advance a single field's PCSE model to `target_date` using Engine.run()."""
-        env = self.fields[agent].unwrapped
+        """Advance a single field to (approximately) target_date.
+
+        - If use_rule_of_thumb=False: fast-forward using Engine.run(...), action=0 (or one preseason pulse).
+        - If use_rule_of_thumb=True: advance using ParcelEnv.step(...) at the env timestep (e.g., 7 days),
+          calling rule_of_thumb each step (and optionally applying preseason_N on the last step before target).
+
+        With timestep>1, exact target alignment may be impossible; if allow_overshoot=True we stop once date >= target_date.
+        """
+        parcel = self.fields[agent]
+        env = parcel.unwrapped
 
         # Determine current simulation date
         try:
@@ -563,7 +573,6 @@ class MultiFieldEnv(AECEnv, EzPickle):
         if model is None:
             raise RuntimeError(f"Cannot access PCSE model for agent {agent}")
 
-        # Optional: apply preseason N exactly once on target_date
         if apply_preseason_N and float(preseason_N) > 0.0 and days_to_run >= 1:
             if days_to_run > 1:
                 model.run(days=days_to_run - 1, action=0)
@@ -609,6 +618,44 @@ class MultiFieldEnv(AECEnv, EzPickle):
             out[ag] = sub
         return out
 
+    def run_til_past_season_year(
+            self,
+            season_year: int,
+            final_year: int,
+    ) -> dict | None:
+        for agent in self.possible_agents:
+            env = self.fields[agent].unwrapped
+            # Now compute allocation date
+
+            if env.model.flag_terminate:
+                days_to_run = -1
+            else:
+                days_to_run = 900
+            if days_to_run <= 0:
+                return
+
+            # number of 7-day steps to reach/past target
+            n_steps = int(np.ceil(days_to_run / 7))
+
+            for s in range(max(n_steps, 1)):
+                action = self.rule_of_thumb(agent)
+
+                # print("year", season_year, "s", s, "agent", agent)
+
+                _, _, term, _, info = env.step(action)
+
+                ca = info['CropActive'][-1]
+                sy = info['SeasonYear'][-1]
+                dvs = info['DVS'][-1]
+                check_season_year = sy > season_year  # or season_year == final_year
+                if not ca and check_season_year:
+                    break
+
+                if term:
+                    break
+
+        return
+
     def run_until_past_season_year(
         self,
         *,
@@ -632,6 +679,17 @@ class MultiFieldEnv(AECEnv, EzPickle):
             it += 1
             if it > max_iters:
                 break
+
+            if self._all_fields_past_season_year(int(season_year)):
+                break
+
+            if not getattr(self, "agents", None):
+                break
+
+            yr = self.fields[agent].unwrapped.infos["SeasonYear"][-1]
+            if yr > season_year:
+                self.agent_selection = self._agent_selector.next()
+                continue
 
             obs, rew, term, trunc, info = self.last()
 
@@ -660,11 +718,6 @@ class MultiFieldEnv(AECEnv, EzPickle):
 
                 self.step(action)
 
-            if self._all_fields_past_season_year(int(season_year)):
-                break
-
-            if not getattr(self, "agents", None):
-                break
 
         return next_states if is_multirl else None
 
@@ -837,6 +890,8 @@ class MultiFieldEnv(AECEnv, EzPickle):
         self._dvs_prev = {ag: 0.0 for ag in self.agents}
         # which DVS thresholds have already been triggered for this agent
         self._dvs_triggered = {ag: set() for ag in self.agents}
+
+        self._freeze_past_season_year = None
 
 
     def _init_fields(self, seed: int = None, farm_dict: dict = None):
@@ -1022,16 +1077,21 @@ class MultiFieldEnv(AECEnv, EzPickle):
 
         return fert / 10
 
-    def rule_of_thumb(self, agent_name, use_dvs=True):
-        """Simple farmer rule-based fertilization schedule based on crop + soil.    Robust to multi-season evaluation:
-        - DVS can be None during fallow / between campaigns.
-        - Crop/season can change for the same field agent across daisy-chained campaigns.
+    def rule_of_thumb(self, agent_name, use_dvs: bool = True) -> float:
+        """Rule-based fertilization schedule based on crop + soil.
+
+        Multi-season safe:
+        - Uses CropActive (preferred) to avoid post-harvest tails.
+        - Resets per-agent triggers when crop or SeasonYear changes.
+        - DVS thresholds are applied in sorted order and only once per season.
         """
+        import numpy as np
+
         crop = self.get_per_field_crop_name()[agent_name]
         soil = self.get_per_field_soil_type()[agent_name]
         budget_left = self.get_per_parcel_budget_left(agent_name)
 
-        # --- lazy init of tracking dicts (in case older checkpoints/envs don't have them) ---
+        # --- lazy init of tracking dicts ---
         if not hasattr(self, "_dvs_prev"):
             self._dvs_prev = {}
         if not hasattr(self, "_dvs_triggered"):
@@ -1051,29 +1111,53 @@ class MultiFieldEnv(AECEnv, EzPickle):
             season_year = None
 
         # Reset triggers when crop or season changes
-        if self._dvs_crop_prev.get(agent_name, None) != crop or self._dvs_season_prev.get(agent_name,
-                                                                                          None) != season_year:
+        if (self._dvs_crop_prev.get(agent_name, None) != crop) or (
+                self._dvs_season_prev.get(agent_name, None) != season_year):
             self._dvs_triggered[agent_name] = set()
             self._dvs_prev[agent_name] = None
             self._dvs_crop_prev[agent_name] = crop
             self._dvs_season_prev[agent_name] = season_year
 
-        # Get current DVS safely (can be None between campaigns)
+        # Prefer CropActive as the "are we in a crop campaign?" check
+        crop_active = None
+        try:
+            crop_active = self.fields[agent_name].unwrapped.get_latest_info("CropActive")
+        except Exception:
+            crop_active = None
+
+        if crop_active is False:
+            # definitely not in crop -> never fertilize; reset tracking
+            self._dvs_prev[agent_name] = None
+            self._dvs_triggered[agent_name] = set()
+            return 0.0
+
+        # Get current DVS safely (fallback guard if CropActive missing)
         try:
             dvs = self.fields[agent_name].model.get_output()[-1].get("DVS", None)
         except Exception:
             dvs = None
 
-        # If crop is inactive/fallow, do not fertilize and reset DVS tracking
         if dvs is None:
+            # likely between campaigns / fallow
             self._dvs_prev[agent_name] = None
             self._dvs_triggered[agent_name] = set()
             return 0.0
 
-        # Ensure float for comparisons
+        # Ensure numeric and finite DVS
         try:
             dvs = float(dvs)
         except Exception:
+            self._dvs_prev[agent_name] = None
+            self._dvs_triggered[agent_name] = set()
+            return 0.0
+
+        if not np.isfinite(dvs):
+            self._dvs_prev[agent_name] = None
+            self._dvs_triggered[agent_name] = set()
+            return 0.0
+
+        # Some models can emit slightly negative DVS early; treat as "not started"
+        if dvs < -0.05:
             self._dvs_prev[agent_name] = None
             self._dvs_triggered[agent_name] = set()
             return 0.0
@@ -1083,25 +1167,32 @@ class MultiFieldEnv(AECEnv, EzPickle):
 
         if use_dvs:
             prev_dvs = self._dvs_prev.get(agent_name, None)
-            handbook = self.get_handbook_dict_dvs(agent_name).get(crop, {})  # dict(threshold -> soil_map)
+            handbook = self.get_handbook_dict_dvs(agent_name).get(crop, {})  # {thr: {soil: kg/ha}}
 
-            for thr, soil_map in handbook.items():
-                # Trigger once per threshold per season; allow "crossing" logic when prev_dvs exists
-                crossed = (dvs >= float(thr)) and (prev_dvs is None or prev_dvs < float(thr))
+            # deterministic threshold order; ensures large timestep jumps trigger earliest first
+            for thr in sorted(handbook.keys(), key=lambda x: float(x)):
+                soil_map = handbook[thr]
+                thr_f = float(thr)
+
+                crossed = (dvs >= thr_f) and (prev_dvs is None or prev_dvs < thr_f)
                 if crossed and (thr not in self._dvs_triggered[agent_name]):
                     fert = float(soil_map.get(soil, 0.0))
                     self._dvs_triggered[agent_name].add(thr)
                     break
         else:
-            for day, soil_map in self.get_handbook_dict(agent_name).get(crop, {}).items():
-                if self._is_at_date(dap_plant, day):
-                    fert = soil_map.get(soil, 0.0)
+            handbook = self.get_handbook_dict(agent_name).get(crop, {})  # {day: {soil: kg/ha}}
+            for day in sorted(handbook.keys(), key=lambda x: int(x)):
+                soil_map = handbook[day]
+                if self._is_at_date(dap_plant, int(day)):
+                    fert = float(soil_map.get(soil, 0.0))
                     break
 
         self._dvs_prev[agent_name] = dvs
 
-        allowed_fert = max(min(max(0, budget_left), fert), 0)
-        return allowed_fert / 10
+        # enforce budget and non-negativity
+
+        allowed_fert = max(min(max(0.0, float(budget_left)), fert), 0.0)
+        return allowed_fert / 10.0
 
 
     @staticmethod
@@ -1210,43 +1301,35 @@ class MultiFieldEnv(AECEnv, EzPickle):
             return int(_sy) if _sy is not None else None
 
         def season_sum(env, key, season_year):
-            """Sum a time-series info key restricted to the given season_year, if possible."""
+            """Sum a time-series info key.
+
+            Behavior:
+            - If `season_year` is None: sum over the full sequence `seq`.
+            - If `season_year` is not None: mask by `CropActive == True` (if available) and sum.
+
+            Notes:
+            - Uses `np.nansum` and tolerates missing/shorter `CropActive`.
+            """
             try:
                 infos = env.unwrapped.infos
 
-                sy_list = infos.get("SeasonYear", [])
                 seq = infos.get(key, [])
                 crop_active = infos.get("CropActive", None)  # may be missing
 
                 if not seq:
                     return 0.0
 
-                # If no season requested, optionally sum only during CropActive
+                # No season requested: sum the whole sequence
                 if season_year is None:
-                    n = len(seq)
-                    if crop_active is not None:
-                        n = min(n, len(crop_active))
-                        vals = [seq[i] for i in range(n) if bool(crop_active[i])]
-                    else:
-                        vals = list(seq)
-                    return float(np.nansum(vals)) if vals else 0.0
+                    return float(np.nansum(seq))
 
-                if not sy_list:
-                    return 0.0
+                # Season provided: sum only when CropActive is True (if CropActive exists)
+                if crop_active is None:
+                    return float(np.nansum(seq))
 
-                # Align lengths defensively
-                n = min(len(sy_list), len(seq))
-                if crop_active is not None:
-                    n = min(n, len(crop_active))
-
-                target = int(season_year)
-
-                # Filter: SeasonYear == target AND CropActive == True (if available)
-                if crop_active is not None:
-                    vals = [seq[i] for i in range(n) if sy_list[i] == target and bool(crop_active[i])]
-                else:
-                    vals = [seq[i] for i in range(n) if sy_list[i] == target]
-
+                season_mask = [y == season_year for y in infos['SeasonYear']]
+                n = min(len(seq), len(crop_active))
+                vals = [seq[i] for i in range(n) if bool(season_mask[i])]
                 return float(np.nansum(vals)) if vals else 0.0
             except Exception:
                 return 0.0

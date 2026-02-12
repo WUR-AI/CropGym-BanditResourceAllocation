@@ -1,5 +1,7 @@
 import numpy as np
 
+from cropgymzoo.utils.nitrogen_helpers import _last_index_where_dvs_is_2
+
 
 def get_previous_index(pcse_output, timestep):
     return (np.ceil(len(pcse_output) / timestep).astype('int') - 1) * timestep - 1
@@ -44,6 +46,10 @@ def get_conversion_factor(var, dict_lintul_wofost=get_dict_lintul_wofost()):
 
 def get_n_storage_organ(pcse_output):
     return pcse_output[-1]['NamountSO']
+
+
+def get_n_storage_organ_active(pcse_output):
+    return pcse_output[_last_index_where_dvs_is_2(pcse_output)]['NamountSO']
 
 
 def get_year_in_step(pcse_output):

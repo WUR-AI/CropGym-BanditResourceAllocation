@@ -450,7 +450,7 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         # manual override for randomisation
         if options.get("random_initial_conditions", False):
             options["site_params"] = self._overwrite_initial_conditions(random=True)
-            options["site_params"] = {'WAV': self.rng.normal(30, 10)}
+            options["site_params"] = {'WAV': self.rng.normal(30, 5)}
 
         # reset PCSE
         obs = super().reset(seed=seed, options=options)
@@ -971,6 +971,47 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
         reward += self._terminated_reward_signal(output, reward, terminated)
 
         return reward, growth
+
+    def _season_end_reached(self) -> bool:
+        """True when we just transitioned from an active crop to inactive (harvest/maturity)
+        inside multi-campaign (daisy-chained) runs.
+        """
+
+        ca = self.infos["CropActive"]
+        sy = self.infos["SeasonYear"]
+        # Most robust: CropActive True -> False
+        if len(ca) >= 2 and bool(ca[-2]) is True and bool(ca[-1]) is False:
+            return True
+        # Fallback: SeasonYear changed (if you tag it at boundaries)
+        # if len(sy) >= 2 and sy[-2] is not None and sy[-1] is not None:
+        #     if int(sy[-1]) != int(sy[-2]):
+        #         return True
+        return False
+
+    def _nsu_terminal_reward(self, output) -> float:
+        """Compute the terminal NSU reward component robustly (handles None outputs)."""
+        n_output = process_pcse.get_n_storage_organ_active(output)
+
+        # keep your existing side-effect call (if you need it)
+        _ = self.reward_class.return_final_reward(
+            obj=self.reward_container,
+            n_fertilized=self.reward_container.get_total_fertilization,
+            n_output=n_output,
+            no3_depo=get_no3_deposition_pcse(output, multi_campaign=True),
+            nh4_depo=get_nh4_deposition_pcse(output, multi_campaign=True),
+            budget_left=self.budget_left,
+            crop_name=self.crop,
+        )
+
+        return float(
+            self.reward_container.calculate_reward_nsurp(
+                n_fertilized=self.reward_container.get_total_fertilization,
+                n_output=n_output,
+                no3_depo=get_no3_deposition_pcse(output, multi_campaign=True),
+                nh4_depo=get_nh4_deposition_pcse(output, multi_campaign=True),
+                crop_name=self.crop,
+            )
+        )
 
     def _terminated_reward_signal(self, output, reward, terminated):
         if terminated and self.reward_function in reward_functions_end():
@@ -1527,10 +1568,9 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
 
         # Determine whether crop is active (helps interpret NaNs between campaigns)
         dvs_val = pcse_output[-1].get("DVS", None)
-        try:
-            crop_active = (dvs_val is not None) and (not np.isnan(dvs_val))
-        except Exception:
-            crop_active = dvs_val is not None
+        crop_active = (dvs_val is not None) and (not np.isnan(dvs_val)) and (dvs_val != 2.0)
+        # dvs_val2 = pcse_output[-2].get("DVS", None)
+        # crop_active2 = (dvs_val2 is not None) and (not np.isnan(dvs_val2) and (dvs_val2 != 2.0))
         self.infos["CropActive"].append(bool(crop_active))
 
         for feature in self.crop_features:
@@ -1547,6 +1587,12 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
             self.infos[feature].append(self._misc_features_mapper(terminate)[feature])
 
         self.infos['Reward'].append(reward)
+        if (not terminate) and (self.reward_function == "NSU") and self._season_end_reached():
+            term_r = self._nsu_terminal_reward(pcse_output)
+            if term_r:
+                # add to the last step reward so per-season aggregation includes it
+                self.infos["Reward"][-1] = float(self.infos["Reward"][-1]) + float(term_r)
+
         self.infos['Action'].append(action if not isinstance(action, (np.ndarray, th.Tensor)) else action.item())
         self.infos['Yield'].append(self._get_fresh_weight(pcse_output[-1]['WSO']))
         # Use campaign-derived crop name when available (daisy-chained multi-crop runs)
