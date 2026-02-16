@@ -5,6 +5,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 import torch
 import yaml
+import shutil
 
 import numpy as np
 import os
@@ -759,10 +760,12 @@ def training_loop_factored(
     seq_len = int(getattr(args, "seq_len", 5))
     theta_seq = deque(maxlen=seq_len)  # stores (n_fields, d_theta_per_field)
 
+    seed_range = 3
+
     # Persistent best-eval trackers
-    best_eval_sum = {"full": float("-inf"), "reduced": float("-inf")}
-    best_eval_step = {"full": None, "reduced": None}
-    best_eval_pickle = {"full": None, "reduced": None}
+    best_eval_sum = {seed: {"full": float("-inf"), "reduced": float("-inf")} for seed in range(args.seed, args.seed + seed_range)}
+    best_eval_step = {seed: {"full": None, "reduced": None} for seed in range(args.seed, args.seed + seed_range)}
+    best_eval_pickle = {seed: {"full": None, "reduced": None} for seed in range(args.seed, args.seed + seed_range)}
 
     def set_subbandits_train_mode(train: bool):
         # Your factored NNAGPBandit stores sub-bandits in bandit.sub_bandits
@@ -857,6 +860,8 @@ def training_loop_factored(
 
         else:  # use multi campaign
 
+            train_raw_reward = []
+
             train_years = [2015, 2016, 2017, 2018, 2019]
             train_farm_dict_by_year = {}
             for y in train_years:
@@ -920,9 +925,6 @@ def training_loop_factored(
                 nue_infos = [last_before_nan(step_infos['AgentInfos'][a]["Nue"]) for a in env.unwrapped.agents_order]
                 print(f"reward: {raw_env}")
 
-                if comet_experiment:
-                    comet_experiment.log_metrics({"reward/train/reward": float(raw_env)}, step=t)
-
                 # Update rolling historical context
                 # env.add_stats_to_context(env.filter_historical_info(step_info["AgentInfos"]))
 
@@ -937,6 +939,11 @@ def training_loop_factored(
                 # Update factored bandit
                 bandit.update_factored(th_fields, x_t, y_fields)
 
+            train_raw_reward = np.mean(train_raw_reward)
+
+            if comet_experiment:
+                comet_experiment.log_metrics({"reward/train/reward": float(train_raw_reward)}, step=t)
+
         # Periodic eval (daisy-chained multi-year evaluation)
         test_per_round = int(args.eval_steps)
         if t % test_per_round == 0:
@@ -945,8 +952,8 @@ def training_loop_factored(
             for scenario in ["full", "reduced"]:
                 print(f"\n\nEval scenario: {scenario}\n")
                 best_seed_reward = []
-                for n in range(5):
-                    seed = args.seed + n
+                for seed in range(args.seed, args.seed + seed_range):
+                    # seed = args.seed + n
                     years = [2020, 2021, 2022, 2023, 2024]
                     rewards = []
                     info_dict = {}
@@ -1085,10 +1092,10 @@ def training_loop_factored(
                                 step=test_step,
                             )
 
-                        # Track + save best eval per scenario
-                        if sum_reward > best_eval_sum[scenario]:
-                            best_eval_sum[scenario] = sum_reward
-                            best_eval_step[scenario] = int(test_step)
+                        # Track + save best eval per scenario per seed
+                        if sum_reward > best_eval_sum[seed][scenario]:
+                            best_eval_sum[seed][scenario] = sum_reward
+                            best_eval_step[seed][scenario] = int(test_step)
 
                             os.makedirs(
                                 os.path.join(
@@ -1106,14 +1113,14 @@ def training_loop_factored(
                             with open(best_pickle_path, "wb") as f:
                                 pickle.dump(info_dict, f)
 
-                            best_eval_pickle[scenario] = best_pickle_path
+                            best_eval_pickle[seed][scenario] = best_pickle_path
 
                             print(f"[BEST] New best {scenario}: sum_reward={sum_reward:.6f} at eval_step={test_step}")
                             if comet_experiment:
                                 comet_experiment.log_metrics(
                                     {
-                                        f"reward/{scenario}/best_sum": float(sum_reward),
-                                        f"reward/{scenario}/best_at_step": int(test_step),
+                                        f"reward/{scenario}/best_sum_s{seed}": float(sum_reward),
+                                        f"reward/{scenario}/best_at_step_s{seed}": int(test_step),
                                     },
                                     step=test_step,
                                 )
@@ -1122,8 +1129,25 @@ def training_loop_factored(
                                     file_name=f"bandit_{region}_{farm_id}_{scenario}_BEST_info.pkl",
                                     step=test_step,
                                 )
+                idx_max = np.argmax([best_eval_sum[seed][scenario] for seed in range(args.seed, args.seed + seed_range)])
+                best_seed = args.seed + idx_max
+                best_pickle_across_seeds = best_eval_pickle[best_seed][scenario]
+
+                best_dir = os.path.join(
+                    _DEFAULT_LOGDIR,
+                    f"Bandit_{args.model_dir}_{scenario}_best_seed"
+                )
+                os.makedirs(best_dir, exist_ok=True)
+
+                src = best_pickle_across_seeds  # this is a file path (string)
+                dst = os.path.join(best_dir, os.path.basename(best_pickle_across_seeds))
+
+                shutil.copy2(src, dst)
+                print(f"Copied best-seed pickle to: {dst}")
+
                 if comet_experiment:
                     comet_experiment.log_metric(f"Metrics/{scenario}/best_eval", max(best_seed_reward), step=test_step)
+                    comet_experiment.log_asset(file_data=best_pickle_across_seeds, file_name=f"bandit_{region}_{farm_id}_{scenario}_BEST_across_seeds_info.pkl", step=test_step)
 
             test_step += test_per_round
             set_subbandits_train_mode(True)
