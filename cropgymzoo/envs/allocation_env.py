@@ -11,6 +11,7 @@ import datetime
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
+from numba.core.ir import Raise
 
 from cropgymzoo.utils.agent_helpers import _make_base_arms, _make_topk_super_arms
 
@@ -288,20 +289,20 @@ class AllocationBandit(gym.Env):
         # we convert apply_units -> reduction_units via:
         #   reduction_units = max_units - apply_units
 
-        max_budgets = np.asarray(
-            [
-                self.farm.get_per_parcel_max_budget(a)
-                for a in self.agents_order
-            ], dtype=np.float32)  # per-field max N (kg)
-        max_units = max_budgets / 10.0  # per-field max in "units"
-
-        apply_units = np.asarray(action, dtype=np.float32).reshape(-1) # bandit outputs apply in "units
-        apply_units = np.clip(apply_units, 0.0, max_units) # "
-
-        reduction_units = max_units - apply_units  # 0 apply -> max reduction; max apply -> 0 reduction
+        # max_budgets = np.asarray(
+        #     [
+        #         self.farm.get_per_parcel_max_budget(a)
+        #         for a in self.agents_order
+        #     ], dtype=np.float32)  # per-field max N (kg)
+        # max_units = max_budgets / 10.0  # per-field max in "units"
+        #
+        # apply_units = np.asarray(action, dtype=np.float32).reshape(-1) # bandit outputs apply in "units
+        # apply_units = np.clip(apply_units, 0.0, max_units) # "
+        #
+        # reduction_units = max_units - apply_units  # 0 apply -> max reduction; max apply -> 0 reduction
 
         # save as reductions because allocate_bandit_budgets uses reductions
-        self.infos['AllocationAction'] = reduction_units.astype(np.float32)
+        self.infos['AllocationAction'] = action.astype(np.float32)
 
         # allocate here
         self.farm.allocate_bandit_budgets(self.infos['AllocationAction'])
@@ -434,19 +435,19 @@ class AllocationBandit(gym.Env):
         return [
             "InitialN",
             "InitialWC",
-            "CropPrice",
-            "CropCode",
-            "FertilizerPrice",
+            # "CropPrice",
+            # "CropCode",
+            # "FertilizerPrice",
             # "Area",
             "MaxBudget",
-            "EarlySeasonPrecipitation",
-            "EarlySeasonTemperatureMin",
+            # "EarlySeasonPrecipitation",
+            # "EarlySeasonTemperatureMin",
             # "EarlySeasonTemperatureMax",
-            "EarlySeasonIrradiation",
-            "ForecastPrecipitation",
-            "ForecastTemperatureMin",
+            # "EarlySeasonIrradiation",
+            # "ForecastPrecipitation",
+            # "ForecastTemperatureMin",
             # "ForecastTemperatureMax",
-            "ForecastIrradiation",
+            # "ForecastIrradiation",
             "PreviousSeasonPrecipitation",
             "PreviousSeasonTemperatureMin",
             # "PreviousSeasonTemperatureMax",
@@ -465,6 +466,9 @@ class AllocationBandit(gym.Env):
             # "HistoricalTemperature",
             # "HistoricalTemperatureMax",
             # "HistoricalIrradiation",
+            "CropW",
+            "CropS",
+            "CropP",
         ]
 
     def _context_value(self, key: str):
@@ -627,7 +631,43 @@ class AllocationBandit(gym.Env):
         if key == "HistoricalIrradiation":
             return self._get_historical_weather_features("IRRAD")
 
+        if key == "CropW":
+            return self._get_crop_one_hot(key)
+
+        if key == "CropS":
+            return self._get_crop_one_hot(key)
+
+        if key == "CropP":
+            return self._get_crop_one_hot(key)
+
         raise KeyError(f"Unknown context key: {key}")
+
+    def _get_crop_one_hot(self, key: str):
+        out = []
+        for a in self.agents_order:
+            crop = None
+
+            # Prefer campaign_specs crop_name if possible (more robust for chained eval)
+            env = self.farm.fields[a].unwrapped
+            spec = getattr(env, "_campaign_specs", None)
+            ptr = getattr(env, "_campaign_ptr", 0)
+            if spec is not None and ptr is not None and 0 <= ptr < len(spec):
+                crop = spec[ptr].get("crop_name", None)
+            else:
+                crop = None
+
+            if crop is None:
+                crop = getattr(self.farm.fields[a].unwrapped, "crop")
+
+            if 'W' in key and crop == 'winterwheat':
+                out.append(1.0)
+            elif 'S' in key and crop == 'sugarbeet':
+                out.append(1.0)
+            elif 'P' in key and crop == 'potato':
+                out.append(1.0)
+            else:
+                out.append(0.0)
+        return out
 
     def _get_previous_season_context(self, agent: str) -> dict[str, float]:
         """Previous calendar-year (Jan 1 .. Dec 31) means using the field's WDP."""
