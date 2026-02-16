@@ -1,4 +1,5 @@
 import warnings
+from sympy.physics.units import temperature
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -12,9 +13,11 @@ import matplotlib.pyplot as plt
 import datetime
 import pickle
 
+from collections import deque
+
 from cropgymzoo.eval_allocator import run_eval_allocator
 from cropgymzoo.agents.nn_agp import NNAGPBandit
-from cropgymzoo.utils.agent_helpers import min_max_normalize
+from cropgymzoo.utils.agent_helpers import last_before_nan
 from cropgymzoo.utils.callbacks import _setup_bandit_comet, log_selection_info, log_model_histograms, fig_to_chw_uint8
 from cropgymzoo.envs.allocation_env import AllocationBandit
 from cropgymzoo import _DEFAULT_LOGDIR, _DEFAULT_RESULTSDIR, _SCENARIO_PATH
@@ -28,7 +31,7 @@ class BanditNormalizer:
         rng,
         seed: int | None = None,
         clip: float = 5.0,
-        n_calib: int = 100,
+        n_calib: int = 200,
         cache_dir: str = "theta_norm_cache",
         cache_tag: str | None = None,
         use_cache: bool = True,
@@ -240,7 +243,8 @@ def train_allocator_for_farm(args):
             n_fields=int(env.n_fields),
             d_theta_per_field=int(d_theta_per_field),
             m_sub=int(m_field),
-            use_farm_budget=True
+            use_farm_budget=True,
+            use_lstm=getattr(args, "lstm", False),
         )
 
         training_loop_factored(
@@ -751,6 +755,10 @@ def training_loop_factored(
     method = args.method
     test_step = 0
 
+    use_lstm = bool(getattr(args, "lstm", False))
+    seq_len = int(getattr(args, "seq_len", 5))
+    theta_seq = deque(maxlen=seq_len)  # stores (n_fields, d_theta_per_field)
+
     # Persistent best-eval trackers
     best_eval_sum = {"full": float("-inf"), "reduced": float("-inf")}
     best_eval_step = {"full": None, "reduced": None}
@@ -765,85 +773,169 @@ def training_loop_factored(
         return int(sum(len(sb.y_hist) for sb in getattr(bandit, "sub_bandits", [])))
 
     for t in range(1, args.rounds + 1):
-        # Keep your existing rotation-year behavior if you want it
-        if region is not None or farm_id is not None:
-            env.get_rotation_year(rng.choice([2020, 2021, 2022, 2023, 2024]))
 
-        theta_np, env_info = env.reset(
-            options={
-                "year": rng.choice(env.years),
-                "random_initial_conditions": True,
-            },
-            seed=args.seed,
-        )
-        if comet_experiment:
-            comet_experiment.log_metric("episode/year", int(env_info["year"]))
+        if not getattr(args, "train_multi_campaign", False):
+            if region is not None or farm_id is not None:
+                env.get_rotation_year(rng.choice([2020, 2021, 2022, 2023, 2024]))
 
-        # Normalize (flat) context
-        theta_np = rms.norm_theta(theta_np)
-
-        # Unflatten to per-field theta matrix
-        theta_fields_np = env.unflatten_context_per_field(theta_np)
-        theta_fields = torch.from_numpy(theta_fields_np.astype(np.float32))
-
-        # FULL candidate set per field (tiny)
-        X_list = env.build_full_candidates_per_field()
-
-        # Train surrogate occasionally
-        train_every = int(getattr(args, "train_every", 1))
-        if t % train_every == 0:
-            steps = int(getattr(args, "bandit_epochs", 100))
-            loss_val = float(bandit.train_step(steps=steps, lr=args.bandit_lr))
-            n_hist = hist_size_total()
-            loss_per_sample = loss_val / max(n_hist, 1)
-            print(f"round {t}, loss: {loss_per_sample} (train_steps={steps})")
+            theta_np, env_info = env.reset(
+                options={
+                    "year": rng.choice(env.years),
+                    "random_initial_conditions": True,
+                },
+                seed=args.seed,
+            )
             if comet_experiment:
-                comet_experiment.log_metric("loss", loss_per_sample, step=t)
+                comet_experiment.log_metric("episode/year", int(env_info["year"]))
 
-        # Select action vector
-        if method == "ucb":
-            x_t, info = bandit.select_ucb_factored(
-                theta_fields,
-                X_list,
-                delta=0.1,
-                global_budget=float(env.global_budget),
-                max_budgets=torch.as_tensor(env.max_budgets, dtype=torch.float32),
+            # Normalize (flat) context
+            theta_np = rms.norm_theta(theta_np)
+
+            # Unflatten to per-field theta matrix
+            theta_fields_np = env.unflatten_context_per_field(theta_np)
+            theta_fields = torch.from_numpy(theta_fields_np.astype(np.float32))
+
+            # FULL candidate set per field (tiny)
+            X_list = env.build_full_candidates_per_field()
+
+            # Train occasionally
+            train_every = int(getattr(args, "train_every", 1))
+            if t % train_every == 0:
+                steps = int(getattr(args, "bandit_epochs", 100))
+                loss_val = float(bandit.train_step(steps=steps, lr=args.bandit_lr))
+                n_hist = hist_size_total()
+                loss_per_sample = loss_val / max(n_hist, 1)
+                print(f"round {t}, loss: {loss_per_sample} (train_steps={steps})")
+                if comet_experiment:
+                    comet_experiment.log_metric("loss", loss_per_sample, step=t)
+
+            # Select action vector
+            if method == "ucb":
+                x_t, info = bandit.select_ucb_factored(
+                    theta_fields,
+                    X_list,
+                    delta=0.1,
+                    global_budget=float(env.global_budget),
+                    max_budgets=torch.as_tensor(env.max_budgets, dtype=torch.float32),
+                )
+            else:
+                x_t, info = bandit.select_ts_factored(
+                    theta_fields,
+                    X_list,
+                    global_budget=float(env.global_budget),
+                    max_budgets=torch.as_tensor(env.max_budgets, dtype=torch.float32),
+                )
+
+            # violation check
+            if getattr(bandit, "use_farm_budget", False):
+                applied = float((torch.as_tensor(env.max_budgets, dtype=torch.float32) - x_t.detach().cpu()).sum().item())
+                if applied > float(env.global_budget) + 1e-3:
+                    print(f"[WARN] budget violated: applied={applied:.3f} > B={float(env.global_budget):.3f}")
+
+            # Step env (x_t is vector length n_fields)
+            _, reward_env, _, _, step_info = env.step(x_t)
+            n_surp_infos = [step_info['AgentInfos'][a]["Nsurp"][-1] for a in env.unwrapped.agents_order]
+            nue_infos = [step_info['AgentInfos'][a]["Nue"][-1] for a in env.unwrapped.agents_order]
+            print(f"reward: {reward_env}")
+            if comet_experiment:
+                comet_experiment.log_metrics({"reward/train/reward": float(reward_env)}, step=t)
+
+            # Update your rolling historical context
+            # env.add_stats_to_context(env.filter_historical_info(step_info["AgentInfos"]))
+
+            # Per-field reward components (consistent with env._get_reward())
+            y_fields = env.compute_per_field_rewards(n_surp_infos, nue_infos)
+
+            # Optional observation noise (match your previous habit if desired)
+            noise = float(getattr(args, "reward_noise", 0.005))
+            if noise > 0:
+                y_fields = y_fields + noise * rng.randn(len(y_fields)).astype(np.float32)
+
+            # Update factored bandit
+            bandit.update_factored(theta_fields, x_t, y_fields)
+
+
+        else:  # use multi campaign
+
+            train_years = [2015, 2016, 2017, 2018, 2019]
+            train_farm_dict_by_year = {}
+            for y in train_years:
+                with open(os.path.join(_SCENARIO_PATH, f"{env.region}", f"{y+5}", f"farmer_{env.farm_id}.yaml"),
+                          'r') as f:
+                    train_farm_dict_by_year[int(y)] = yaml.safe_load(f)
+
+            # Ensure env has the right agent set (field ids) before reset
+            env.get_rotation_year(train_years[0]+5)
+
+            th_np, info = env.reset(
+                options={
+                    "year": int(train_years[0]),
+                    "random_initial_conditions": True,
+                    "eval_horizon_years": [int(y) for y in train_years],
+                    "farm_dict_by_year": train_farm_dict_by_year,
+                    "days_before_sowing": 7,
+                },
+                seed=args.seed,
             )
-        else:
-            x_t, info = bandit.select_ts_factored(
-                theta_fields,
-                X_list,
-                global_budget=float(env.global_budget),
-                max_budgets=torch.as_tensor(env.max_budgets, dtype=torch.float32),
-            )
 
-        # violation check
-        if getattr(bandit, "use_farm_budget", False):
-            applied = float((torch.as_tensor(env.max_budgets, dtype=torch.float32) - x_t.detach().cpu()).sum().item())
-            if applied > float(env.global_budget) + 1e-3:
-                print(f"[WARN] budget violated: applied={applied:.3f} > B={float(env.global_budget):.3f}")
+            done = False
+            while not done:
+                # Normalize (flat) context
+                th_np = rms.norm_theta(th_np)
+                th_fields_np = env.unflatten_context_per_field(th_np)
+                th_fields = torch.from_numpy(th_fields_np.astype(np.float32))
 
-        # Step env (x_t is vector length n_fields)
-        _, reward_env, _, _, step_info = env.step(x_t)
-        n_surp_infos = [step_info['AgentInfos'][a]["Nsurp"][-1] for a in env.unwrapped.agents_order]
-        nue_infos = [step_info['AgentInfos'][a]["Nue"][-1] for a in env.unwrapped.agents_order]
-        print(f"reward: {reward_env}")
-        if comet_experiment:
-            comet_experiment.log_metrics({"reward/train/reward": float(reward_env)}, step=t)
+                X_list = env.build_full_candidates_per_field()
 
-        # Update your rolling historical context
-        # env.add_stats_to_context(env.filter_historical_info(step_info["AgentInfos"]))
+                # Train occasionally
+                train_every = int(getattr(args, "train_every", 1))
+                if t % train_every == 0:
+                    steps = int(getattr(args, "bandit_epochs", 100))
+                    loss_val = float(bandit.train_step(steps=steps, lr=args.bandit_lr))
+                    n_hist = hist_size_total()
+                    loss_per_sample = loss_val / max(n_hist, 1)
+                    print(f"round {t}, loss: {loss_per_sample} (train_steps={steps})")
+                    if comet_experiment:
+                        comet_experiment.log_metric("loss", loss_per_sample, step=t)
 
-        # Per-field reward components (consistent with env._get_reward())
-        y_fields = env.compute_per_field_rewards(n_surp_infos, nue_infos)
+                if method == "ucb":
+                    x_t, sel_info = bandit.select_ucb_factored(
+                        th_fields,
+                        X_list,
+                        delta=0.1,
+                        global_budget=float(env.global_budget),
+                        max_budgets=torch.as_tensor(env.max_budgets, dtype=torch.float32),
+                    )
+                else:
+                    x_t, sel_info = bandit.select_ts_factored(
+                        th_fields,
+                        X_list,
+                        global_budget=float(env.global_budget),
+                        max_budgets=torch.as_tensor(env.max_budgets, dtype=torch.float32),
+                    )
 
-        # Optional observation noise (match your previous habit if desired)
-        noise = float(getattr(args, "reward_noise", 0.005))
-        if noise > 0:
-            y_fields = y_fields + noise * rng.randn(len(y_fields)).astype(np.float32)
+                _, raw_env, done, _, step_infos = env.step(x_t)
 
-        # Update factored bandit
-        bandit.update_factored(theta_fields, x_t, y_fields)
+                n_surp_infos = [last_before_nan(step_infos['AgentInfos'][a]["Nsurp"]) for a in env.unwrapped.agents_order]
+                nue_infos = [last_before_nan(step_infos['AgentInfos'][a]["Nue"]) for a in env.unwrapped.agents_order]
+                print(f"reward: {raw_env}")
+
+                if comet_experiment:
+                    comet_experiment.log_metrics({"reward/train/reward": float(raw_env)}, step=t)
+
+                # Update rolling historical context
+                # env.add_stats_to_context(env.filter_historical_info(step_info["AgentInfos"]))
+
+                # Per-field reward components (consistent with env._get_reward())
+                y_fields = env.compute_per_field_rewards(n_surp_infos, nue_infos)
+
+                # Optional observation noise (match your previous habit if desired)
+                noise = float(getattr(args, "reward_noise", 0.005))
+                if noise > 0:
+                    y_fields = y_fields + noise * rng.randn(len(y_fields)).astype(np.float32)
+
+                # Update factored bandit
+                bandit.update_factored(th_fields, x_t, y_fields)
 
         # Periodic eval (daisy-chained multi-year evaluation)
         test_per_round = int(args.eval_steps)
@@ -871,6 +963,8 @@ def training_loop_factored(
                         with open(os.path.join(_SCENARIO_PATH, f"{env.region}", f"{y}", f"farmer_{env.farm_id}.yaml"), 'r') as f:
                             farm_dict_by_year[int(y)] = yaml.safe_load(f)
 
+                    farm_dict_by_year[years[0]] = farm_dict_by_year[years[0]]
+
                     # Ensure env has the right agent set (field ids) before reset
                     env.get_rotation_year(years[0])
 
@@ -886,6 +980,10 @@ def training_loop_factored(
                         },
                         seed=args.seed,
                     )
+
+                    use_lstm = bool(getattr(args, "lstm", False))
+                    seq_len = int(getattr(bandit, "seq_len", 5))
+                    theta_seq_eval = deque(maxlen=seq_len) if use_lstm else None
 
                     done = False
                     while not done:
@@ -912,6 +1010,8 @@ def training_loop_factored(
                                 global_budget=eval_budget,
                                 max_budgets=torch.as_tensor(env.max_budgets, dtype=torch.float32),
                                 seed=seed,
+                                # deterministic=True,
+                                # temperature=0.5,
                             )
 
                         # Budget violation check (only meaningful in reduced)
