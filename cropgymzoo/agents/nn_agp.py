@@ -112,7 +112,12 @@ class FeatureNet(nn.Module):
         self.g_scale = nn.Parameter(torch.tensor(1.0))
 
     def forward(self, Theta: torch.Tensor) -> torch.Tensor:
-        # (n,d_theta) -> (n,m)
+        # Accept (N,d) only. If a sequence arrives, use the last step by default.
+        if Theta.dim() == 3:
+            Theta = Theta[:, -1, :]  # (N,d)
+        elif Theta.dim() != 2:
+            raise ValueError(f"Theta must be (N,d) (or (N,T,d) which will be last-stepped), got {Theta.shape}")
+
         G = self.net(Theta)
         if self.normalize:
             G = F.normalize(G, p=2, dim=-1)
@@ -150,17 +155,40 @@ class LSTMFeatureNet(nn.Module):
     def forward(self, Theta: torch.Tensor) -> torch.Tensor:
         """
         Theta: (N, dθ) or (N, T, dθ)
-        Returns: g ∈ (N, m), using the last time step (or last hidden).
+        Returns: g ∈ (N, m), using the last layer hidden state.
         """
         if Theta.dim() == 2:
             Theta = Theta.unsqueeze(1)  # (N, 1, dθ)
+        elif Theta.dim() != 3:
+            raise ValueError(f"Theta must be (N,d) or (N,T,d), got {Theta.shape}")
 
         # LSTM
-        _, (hn, _) = self.lstm(Theta)  # hn: (layers*dirs, N, hidden)
-        layers = self.num_layers * self.num_directions
-        hn = hn.view(layers, Theta.size(0), self.hidden)
-        last = hn[-1]  # (N, hidden) -> top layer, forward (if bidir, torch uses concat internally in hn)
-        G = self.proj(last)
+        pool = True
+
+        if pool:
+            output, _ = self.lstm(Theta)
+
+            # mean pooling over time (uses all timesteps)
+            pooled = output.mean(dim=1)  # (N, out_dim)
+
+            G = self.proj(pooled)  # (N, m)
+        else:
+
+            _, (hn, _) = self.lstm(Theta)  # hn: (num_layers*num_dirs, N, hidden)
+
+            # Reshape to (num_layers, num_dirs, N, hidden)
+            hn = hn.view(self.num_layers, self.num_directions, Theta.size(0), self.hidden)
+
+            # Take last layer
+            last_layer = hn[-1]  # (num_dirs, N, hidden)
+
+            # If bidirectional, concat directions; else just squeeze
+            if self.num_directions == 2:
+                last = torch.cat([last_layer[0], last_layer[1]], dim=-1)  # (N, 2*hidden)
+            else:
+                last = last_layer[0]  # (N, hidden)
+
+            G = self.proj(last)  # (N, m)
         if self.normalize:
             G = F.normalize(G, p=2, dim=-1)
         return self.g_scale * G
@@ -271,9 +299,14 @@ class NNAGP(nn.Module):
             kernel='matern',
             device: Optional[torch.device] = None,
             g_net: Optional[nn.Module] = None,
+            use_lstm: bool = False,
     ):
         super().__init__()
-        self.g_net = g_net if g_net is not None else FeatureNet(d_theta, m, hidden=64, depth=1, normalize=True)
+        self.g_net = g_net
+        if g_net is None and use_lstm:
+            self.g_net = LSTMFeatureNet(d_theta, m, hidden=128, num_layers=3)
+        elif g_net is None and not use_lstm:
+            self.g_net = FeatureNet(d_theta, m, hidden=64, depth=2, normalize=True)
         self.mogp = CollaborativeMOGP(d_x, m, Q=Q, shared_kernel=kernel, indep_kernel=kernel)
         self.raw_noise = nn.Parameter(torch.tensor(-2.0))  # σ_ε ≈ 0.12
         self.jitter = 1e-3
@@ -387,16 +420,59 @@ class NNAGP(nn.Module):
             y: torch.Tensor,
             calculate_covariance: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+
+        M = Xc.shape[0]
+
+        # ---- normalize theta shape to either (1,d) or (1,T,d) ----
+        if theta.dim() == 1:
+            theta = theta.view(1, -1)  # (1,d)
+        elif theta.dim() == 2:
+            # could be (1,d) or (T,d) -> treat (T,d) as sequence
+            if theta.shape[0] == 1:
+                pass  # (1,d)
+            else:
+                theta = theta.unsqueeze(0)  # (1,T,d)
+        elif theta.dim() == 3:
+            # (1,T,d) already
+            if theta.shape[0] != 1:
+                raise ValueError(f"theta 3D must be (1,T,d), got {theta.shape}")
+        else:
+            raise ValueError(f"Unsupported theta shape {theta.shape}")
+
+        # ---- build Theta_star to match candidates ----
+        if theta.dim() == 2:
+            # (1,d) -> (M,d)
+            Theta_star = theta.expand(M, -1)
+        else:
+            # (1,T,d) -> (M,T,d)
+            Theta_star = theta.expand(M, -1, -1)
+
+        # compute posterior mean/std (predict handles Theta_star shape fine)
+        mu, std = self.predict(Xc, Theta_star, train_X, train_Theta, y)
+        if not calculate_covariance:
+            return mu, std, None
+
         # returns μ_c (M,), σ_c (M,), and (optional) full covariance Σ_c (M,M)
         mu, std = self.predict(Xc, theta.expand(Xc.shape[0], -1), train_X, train_Theta, y)
         if not calculate_covariance:
             return mu, std, None
+
+
         # Build covariance only when needed (used for TS)
         # Σ = K_cand - K_*^T (K+σ^2I)^{-1} K_*
         G_tr = self._train_cache["G"]
-        G_c = self.g_net(theta.expand(Xc.shape[0], -1))
+
+        # candidate embeddings
+        if theta.dim() == 2:
+            G_c = self.g_net(theta.expand(M, -1))  # (M,m)
+            theta_rep = theta.expand(M, -1)  # (M,d)
+        else:
+            G_c = self.g_net(theta.expand(M, -1, -1))  # (M,m)
+            theta_rep = theta.expand(M, -1, -1)
+
         Kcand = self.mogp.K_tilde(Xc, theta.expand(Xc.shape[0], -1), Xc, theta.expand(Xc.shape[0], -1), G_c, G_c)
         K_star = self.mogp.K_tilde(train_X, train_Theta, Xc, theta.expand(Xc.shape[0], -1), G_tr, G_c)
+
         L = self._train_cache["L"]
         V = torch.cholesky_solve(K_star, L)                # (n,M)
         cov = Kcand - K_star.T @ V
@@ -461,6 +537,7 @@ class NNAGPBandit:
             use_farm_budget: bool = False,
             budget_tick: float = 5.0,
             budget_slack: float = 1e-6,
+            use_lstm: bool = False,
     ):
         self.action_mode = action_mode
         self.n_fields = n_fields
@@ -468,6 +545,7 @@ class NNAGPBandit:
         self.use_farm_budget = bool(use_farm_budget)
         self.budget_tick = float(budget_tick)
         self.budget_slack = float(budget_slack)
+        self.use_lstm = use_lstm
 
         # ---- FACTORED MODE: orchestrator only ----
         if self.action_mode == "factored":
@@ -482,6 +560,12 @@ class NNAGPBandit:
             self.opt_g = None
             dev = device or torch.device("cpu")
 
+            self.seq_len = 5
+            self.seq_stride = 5
+            self._ctx_step = 0
+            self._theta_seq = deque(maxlen=self.seq_len)  # stores (n_fields, d_theta)
+            self._last_theta_seq_fields = None
+
             if self.share_g_net:
                 self.shared_g_net = FeatureNet(
                     int(d_theta_per_field),
@@ -489,7 +573,16 @@ class NNAGPBandit:
                     hidden=64,
                     depth=2,
                     normalize=True
-                ).to(dev)
+                ).to(dev) if not use_lstm else (
+                    LSTMFeatureNet(
+                        d_theta=int(d_theta_per_field),
+                        m=int(m_sub),
+                        hidden=128,
+                        num_layers=1,
+                        bidirectional=False,
+                        dropout=0.0
+                    ).to(dev)
+                )
                 self.opt_g = torch.optim.AdamW(self.shared_g_net.parameters(), lr=lr, weight_decay=1e-4)
 
             # Create sub-bandits normally first
@@ -508,6 +601,7 @@ class NNAGPBandit:
                     coreset_mode=coreset_mode,
                     action_mode="joint",
                     share_g_net=False,  # prevent recursion
+                    use_lstm=use_lstm
                 )
                 for _ in range(int(n_fields))
             ]
@@ -523,6 +617,7 @@ class NNAGPBandit:
                         kernel="matern",
                         device=dev,
                         g_net=self.shared_g_net,
+                        use_lstm=use_lstm
                     )
 
                     # optimizer should NOT update shared g-net
@@ -533,7 +628,7 @@ class NNAGPBandit:
             self.model = None
             return
         self.posterior_type = posterior_type
-        self.model = NNAGP(d_theta, d_x, m=m, Q=Q, device=device or torch.device("cpu"))
+        self.model = NNAGP(d_theta, d_x, m=m, Q=Q, device=device or torch.device("cpu"), use_lstm=use_lstm)
 
         self.coreset_size = int(coreset_size)
         self.coreset_mode = coreset_mode
@@ -576,6 +671,45 @@ class NNAGPBandit:
 
         self.opt_phi = torch.optim.AdamW(self.phi_net.parameters(), lr=lr, weight_decay=1e-4)
 
+    def _seq_reset_if_needed(self):
+        if (self._ctx_step % self.seq_stride) == 0:
+            self._theta_seq.clear()
+
+    def _seq_push(self, theta_fields: torch.Tensor):
+        """
+        Push ONE context snapshot per step into the internal sequence buffer.
+
+        Expected: (n_fields, d)
+        If given: (n_fields, T, d), keep only the latest step ([:, -1, :]).
+        """
+        th = theta_fields
+        if th.dim() == 3:
+            th = th[:, -1, :]  # (n_fields, T, d) -> (n_fields, d)
+        elif th.dim() != 2:
+            raise ValueError(f"_seq_push expected (n_fields,d) or (n_fields,T,d), got {tuple(th.shape)}")
+        self._theta_seq.append(th.detach().cpu())
+
+    def _seq_build(self, device):
+        # returns (n_fields, T, d_theta)
+        H = torch.stack(list(self._theta_seq), dim=0)
+
+        # Defensive: if something 3D slipped through, collapse to latest step.
+        # Desired: H is (L, n_fields, d)
+        if H.dim() == 4:
+            H = H[:, :, -1, :]  # (L, n_fields, T, d) -> (L, n_fields, d)
+        if H.dim() != 3:
+            raise ValueError(f"_seq_build expected H to be 3D (L,n_fields,d), got {tuple(H.shape)}")
+
+        L, n_fields, d = H.shape
+        T = self.seq_len
+
+        if L < T:
+            pad = H[0:1].expand(T - L, n_fields, d)
+            H = torch.cat([pad, H], dim=0)
+
+        H = H[-T:].permute(1, 0, 2).contiguous()  # (n_fields, T, d)
+        return H.to(device)
+
     def _phi(self, x: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
         """Compute neural-linear features phi([x,theta]) -> (m,) or (B,m)."""
         if x.dim() == 2 and x.shape[0] == 1:
@@ -597,7 +731,12 @@ class NNAGPBandit:
         device = self.model.device
         X_candidates = X_candidates.to(device)
         theta_t = theta_t.to(device)
-        theta_rep = theta_t.unsqueeze(0).expand(X_candidates.shape[0], -1)
+        if theta_t.dim() == 1:
+            theta_rep = theta_t.unsqueeze(0).expand(X_candidates.shape[0], -1)  # (M, d)
+        elif theta_t.dim() == 2:
+            theta_rep = theta_t.unsqueeze(0).expand(X_candidates.shape[0], -1, -1)  # (M, T, d)
+        else:
+            raise ValueError(theta_t.shape)
         Phi = self._phi(X_candidates, theta_rep)  # (M, m)
 
         w_mean, Ainv = self._w_mean_and_Ainv()
@@ -758,48 +897,6 @@ class NNAGPBandit:
         idx = int(torch.argmax(ucb).item())
         return X_candidates[idx], SelectionInfo(mu=mu.cpu(), std=std.cpu(), ucb=ucb.cpu(), beta_t=beta_t, rule="ucb")
 
-    # Use sparsely!
-    @torch.no_grad()
-    def select_ucb_streaming(
-            self,
-            theta_t,
-            all_actions,
-            chunk=16000,
-            delta=0.1,
-            deterministic=False,
-    )->Tuple[torch.Tensor, dict | None]:
-        """
-        all_actions: (M, d_x) tensor (can be on disk-mapped or memmap if huge)
-        Returns the best action under UCB without ever materializing all M scores.
-        """
-        # pull the posterior data once
-        if not self.y_hist:
-            # cold start: pick random
-            idx = torch.randint(0, all_actions.shape[0], (1,)).item()
-            return all_actions[idx], None
-
-        X, Theta, y = self._get_stacked_history(device=self.model.device)
-        beta_t = beta_finite_candidates(
-            self.t,
-            chunk, # use chunk size conservatively
-            delta
-        )  if not deterministic else 0
-
-        best_ucb = -float("inf")
-        best_x = None
-
-        for i in range(0, all_actions.shape[0], chunk):
-            Xc = all_actions[i:i + chunk]
-            # only need mean & std; DO NOT build candidate covariance
-            mu, std, _ = self.model.posterior_on_candidates(Xc, theta_t.unsqueeze(0), X, Theta, y, calculate_covariance=False)
-            ucb = mu + (beta_t ** 0.5) * std
-            j = int(torch.argmax(ucb))
-            if ucb[j].item() > best_ucb:
-                best_ucb = ucb[j].item()
-                best_x = Xc[j].clone()
-
-        return best_x, {"best_ucb": best_ucb, "beta_t": beta_t}
-
     @torch.no_grad()
     def select_ts(
         self,
@@ -807,6 +904,7 @@ class NNAGPBandit:
         X_candidates: torch.Tensor,
         deterministic: bool = False,
         seed: Optional[int] = None,
+        temperature: float | bool = False,
     ) -> Tuple[torch.Tensor, SelectionInfo]:
         """Thompson sampling over a finite candidate set.
 
@@ -823,7 +921,23 @@ class NNAGPBandit:
 
         if self.posterior_type == "neural_linear":
             mu, std, Phi, Ainv = self._linear_posterior(X_candidates, theta_t)
-            if deterministic:
+
+            # Temperature / tempering: scale posterior sampling noise.
+            # - temperature=False (default) -> no tempering
+            # - temperature=True            -> use self.ts_temperature if present else 0.2
+            # - temperature=float           -> use that value as tau
+            if temperature is True:
+                tau = float(getattr(self, "ts_temperature", 0.2))
+            elif temperature is False or temperature is None:
+                tau = 0.0
+            else:
+                tau = float(temperature)
+            tau = float(max(0.0, min(1.0, tau)))
+
+            # Deterministic default = greedy on posterior mean.
+            # If deterministic=True AND tau>0, we do a *tempered* Thompson draw around the mean
+            # using a fixed seed (so it is reproducible), then pick argmax.
+            if deterministic and tau <= 0.0:
                 sample = mu
             else:
                 # sample weights: w ~ N(w_mean, sigma^2 A^{-1})
@@ -831,13 +945,20 @@ class NNAGPBandit:
                 w_mean, _ = self._w_mean_and_Ainv()
                 sigma = float(self.model.noise.detach().cpu().item())
                 L = torch.linalg.cholesky(add_jitter(Ainv, 1e-10))
-                if seed is not None:
-                    g = torch.Generator(device=device)
-                    g.manual_seed(seed)
-                    z = torch.randn(w_mean.shape[0], generator=g, device=device)
+
+                # If we are in deterministic+tempered mode, require a seed for reproducibility.
+                # If none is provided, fall back to 0.
+                if seed is None:
+                    seed_use = 0
                 else:
-                    z = torch.randn(w_mean.shape[0], device=device)
-                w_samp = w_mean + sigma * (L @ z)
+                    seed_use = int(seed)
+
+                g = torch.Generator(device=device)
+                g.manual_seed(seed_use)
+                z = torch.randn(w_mean.shape[0], generator=g, device=device)
+
+                # Tempered sampling: scale noise by tau (tau=1 -> standard TS)
+                w_samp = w_mean + (tau if (deterministic or temperature) else 1.0) * sigma * (L @ z)
                 sample = Phi @ w_samp
 
             idx = int(torch.argmax(sample).item())
@@ -860,33 +981,41 @@ class NNAGPBandit:
         mu = torch.nan_to_num(mu, nan=0.0, posinf=0.0, neginf=0.0)
         std = torch.nan_to_num(std, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # Deterministic = greedy on posterior mean; otherwise Thompson sampling
-        if deterministic:
+        # Temperature / tempering: scale posterior sampling noise.
+        # - temperature=False (default) -> deterministic uses mean; stochastic uses standard TS
+        # - temperature=True            -> use self.ts_temperature if present else 0.2
+        # - temperature=float           -> use that value as tau
+        if temperature is True:
+            tau = float(getattr(self, "ts_temperature", 0.2))
+        elif temperature is False or temperature is None:
+            tau = 0.0
+        else:
+            tau = float(temperature)
+        tau = float(max(0.0, min(1.0, tau)))
+
+        # Deterministic default = greedy on posterior mean.
+        # If deterministic=True AND tau>0, we do a *tempered* Thompson draw around the mean
+        # using a fixed seed (so it is reproducible), then pick argmax.
+        if deterministic and tau <= 0.0:
             sample = mu
         else:
-            # Sample a function draw over the candidate set
-            if seed is not None:
-                # Make sampling reproducible if a seed is provided
-                g = torch.Generator(device=mu.device)
-                g.manual_seed(seed)
-                if cov is not None:
-                    # Lc = torch.linalg.cholesky(cov)
-                    Lc = self.model._robust_cholesky(cov, base_jitter=1e-10)
-                    z = torch.randn(mu.shape[0], generator=g, device=mu.device)
-                    sample = mu + Lc @ z
-                else:
-                    z = torch.randn_like(mu, generator=g)
-                    sample = mu + std * z
+            # Sample a function draw over the candidate set (tempered by tau)
+            if seed is None:
+                seed_use = 0
             else:
-                if cov is not None:
-                    # Lc = torch.linalg.cholesky(cov)
-                    Lc = self.model._robust_cholesky(cov, base_jitter=1e-10)
-                    z = torch.randn(mu.shape[0], device=mu.device)
-                    sample = mu + Lc @ z
-                else:
-                    # Fallback: assume independence if covariance is not provided
-                    z = torch.randn_like(mu)
-                    sample = mu + std * z
+                seed_use = int(seed)
+
+            g = torch.Generator(device=mu.device)
+            g.manual_seed(seed_use)
+
+            if cov is not None:
+                Lc = self.model._robust_cholesky(cov, base_jitter=1e-10)
+                z = torch.randn(mu.shape[0], generator=g, device=mu.device)
+                # tau=1 -> standard TS; tau in (0,1) -> limited deviation around mean
+                sample = mu + (tau if (deterministic or temperature) else 1.0) * (Lc @ z)
+            else:
+                z = torch.randn(mu.shape, generator=g, device=mu.device, dtype=mu.dtype)
+                sample = mu + (tau if (deterministic or temperature) else 1.0) * (std * z)
 
         idx = int(torch.argmax(sample).item())
         return X_candidates[idx], SelectionInfo(mu=mu.cpu(), std=std.cpu(), sampled_vals=sample.cpu(), rule="ts")
@@ -922,6 +1051,12 @@ class NNAGPBandit:
 
         n_fields = len(self.sub_bandits)
         device = theta_fields.device
+
+        # sequence mode (Option A)
+        self._seq_reset_if_needed()
+        self._seq_push(theta_fields)
+        theta_seq_fields = self._seq_build(device=device)  # (n_fields, T, d)
+        self._last_theta_seq_fields = theta_seq_fields
 
         # --- helpers (defined inline to avoid extra dependencies) ---
         def _applied_costs_from_reductions(
@@ -998,7 +1133,8 @@ class NNAGPBandit:
         for i, b in enumerate(self.sub_bandits):
             Xi = X_candidates_list[i]
             Xi = Xi.to(dtype=torch.float32, device=b.model.device)
-            th_i = theta_fields[i].to(dtype=torch.float32, device=b.model.device).view(1, -1)
+            th_raw = theta_seq_fields[i]  # (T, d)
+            th_i = th_raw.to(dtype=torch.float32, device=b.model.device).unsqueeze(0)  # (1, T, d)
 
             if len(b.y_hist) == 0:
                 # cold-start for this field: pretend mu=0, std=1
@@ -1073,6 +1209,7 @@ class NNAGPBandit:
             xs = [float(torch.as_tensor(X_candidates_list[i]).view(-1)[picks[i]].item()) for i in range(n_fields)]
             x_vec = torch.tensor(xs, dtype=torch.get_default_dtype(), device=device)
             self.t += 1
+            self._ctx_step += 1
             return x_vec, {"rule": "ucb_factored_budget", "picks": picks, "total_applied": float(total_applied), "infos": infos}
 
         # Independent per-field
@@ -1094,6 +1231,7 @@ class NNAGPBandit:
             max_budgets: torch.Tensor | None = None,
             deterministic: bool = False,
             seed: "Optional[int]" = None,
+            temperature: float | bool = False,
     ) -> tuple[torch.Tensor, list["SelectionInfo"] | dict]:
         """Factored Thompson sampling.
 
@@ -1110,6 +1248,32 @@ class NNAGPBandit:
 
         n_fields = len(self.sub_bandits)
         device = theta_fields.device
+
+        # sequence mode (Option A)
+        self._seq_reset_if_needed()
+        self._seq_push(theta_fields)
+        theta_seq_fields = self._seq_build(device=device)  # (n_fields, T, d)
+        self._last_theta_seq_fields = theta_seq_fields
+
+        # Temperature / tempering: scale posterior sampling noise.
+        # - temperature=False (default) -> stochastic TS uses full noise scale=1.0; deterministic uses mean.
+        # - temperature=True            -> use self.ts_temperature if present else 0.2
+        # - temperature=float           -> use that value as tau
+        if temperature is True:
+            tau = float(getattr(self, "ts_temperature", 0.2))
+        elif temperature is False or temperature is None:
+            tau = 0.0
+        else:
+            tau = float(temperature)
+        tau = float(max(0.0, min(1.0, tau)))
+
+        # Noise scale used when we DO sample:
+        # - if temperature is not provided (False/None): use 1.0 (standard TS)
+        # - otherwise: use tau (tempered TS)
+        if temperature is False or temperature is None:
+            noise_scale = 1.0
+        else:
+            noise_scale = tau
 
         # --- helpers ---
         def _applied_costs_from_reductions(
@@ -1194,7 +1358,8 @@ class NNAGPBandit:
         for i, b in enumerate(self.sub_bandits):
             Xi = X_candidates_list[i]
             Xi = Xi.to(dtype=torch.float32, device=b.model.device)
-            th_i = theta_fields[i].to(dtype=torch.float32, device=b.model.device).view(1, -1)
+            th_raw = theta_seq_fields[i]  # (T, d)
+            th_i = th_raw.to(dtype=torch.float32, device=b.model.device).unsqueeze(0)  # (1, T, d)
 
             if len(b.y_hist) == 0:
                 mu_i = torch.zeros(Xi.shape[0], device=b.model.device, dtype=torch.float32)
@@ -1216,7 +1381,9 @@ class NNAGPBandit:
             mu_i = torch.nan_to_num(mu_i, nan=0.0, posinf=0.0, neginf=0.0)
             std_i = torch.nan_to_num(std_i, nan=0.0, posinf=0.0, neginf=0.0)
 
-            if deterministic:
+            # Deterministic default: greedy on posterior mean.
+            # If deterministic=True AND tau>0 (temperature enabled), do a reproducible tempered draw around mean.
+            if deterministic and tau <= 0.0:
                 samp_i = mu_i
             else:
                 g_i = _make_gen(i)
@@ -1224,7 +1391,9 @@ class NNAGPBandit:
                     z = torch.randn(mu_i.shape, device=mu_i.device, dtype=mu_i.dtype, generator=g_i)
                 else:
                     z = torch.randn(mu_i.shape, device=mu_i.device, dtype=mu_i.dtype)
-                samp_i = mu_i + std_i * z
+                # Standard TS when temperature is False/None (noise_scale=1.0);
+                # tempered TS otherwise (noise_scale=tau in (0,1]).
+                samp_i = mu_i + (noise_scale * std_i) * z
 
             infos.append(SelectionInfo(mu=mu_i.detach().cpu(), std=std_i.detach().cpu(), sampled_vals=samp_i.detach().cpu(), rule="ts"))
             sampled_scores.append(samp_i.to(device))
@@ -1269,6 +1438,7 @@ class NNAGPBandit:
             xs = [float(torch.as_tensor(X_candidates_list[i]).view(-1)[picks[i]].item()) for i in range(n_fields)]
             x_vec = torch.tensor(xs, dtype=torch.get_default_dtype(), device=device)
             self.t += 1
+            self._ctx_step += 1
             return x_vec, {"rule": "ts_factored_budget", "picks": picks, "total_applied": float(total_applied), "infos": infos}
 
         xs = []
@@ -1282,23 +1452,48 @@ class NNAGPBandit:
 
     def update_factored(
             self,
-            theta_fields: torch.Tensor,  # (n_fields, d_theta_per_field)
-            x_vec: torch.Tensor,  # (n_fields,)
+            theta_fields: torch.Tensor,  # (n_fields, d) OR (n_fields, T, d)
+            x_vec: torch.Tensor,         # (n_fields,)
             y_fields: np.ndarray | torch.Tensor  # (n_fields,)
     ):
         if self.action_mode != "factored":
             raise ValueError("update_factored called but action_mode != 'factored'")
 
+        # y_fields -> tensor
         if isinstance(y_fields, np.ndarray):
             y_fields = torch.from_numpy(y_fields.astype(np.float32))
         y_fields = y_fields.view(-1)
 
+        # theta_fields -> tensor
+        if not torch.is_tensor(theta_fields):
+            theta_fields = torch.as_tensor(theta_fields, dtype=torch.float32)
+
         if len(self.sub_bandits) != theta_fields.shape[0] or len(self.sub_bandits) != y_fields.shape[0]:
             raise ValueError("Mismatch: n_fields between sub_bandits / theta_fields / y_fields")
 
+        # Support both MLP g(θ) and LSTM g(θ)
+        # - MLP expects (d,)
+        # - LSTM expects (T, d) (or (1, T, d) at call sites)
+        # Here we normalize each field context to (T, d) and store it for later.
+        self._last_theta_seq_fields = []
+        for i in range(theta_fields.shape[0]):
+            th_i = theta_fields[i]
+            if th_i.dim() == 1:
+                th_i = th_i.unsqueeze(0)  # (1, d)
+            elif th_i.dim() != 2:
+                raise ValueError(
+                    f"theta_fields[{i}] must be 1D (d,) or 2D (T,d), got shape {tuple(th_i.shape)}"
+                )
+            self._last_theta_seq_fields.append(th_i.detach().cpu())  # keep a cheap CPU copy
+
+        # Ensure x_vec tensor
+        if not torch.is_tensor(x_vec):
+            x_vec = torch.as_tensor(x_vec, dtype=torch.get_default_dtype())
+        x_vec = x_vec.view(-1)
+
         for i, b in enumerate(self.sub_bandits):
             device = b.model.device
-            th_i = theta_fields[i].to(device)
+            th_i = self._last_theta_seq_fields[i].to(device=device, dtype=torch.float32)  # (T, d)
             x_i = torch.tensor([float(x_vec[i].item())], device=device, dtype=torch.get_default_dtype())
             b.update(th_i, x_i, float(y_fields[i].item()))
 
@@ -1342,6 +1537,20 @@ class NNAGPBandit:
         x_t = x_t.detach().to(device)
         y_val = torch.tensor(float(y_t), device=device, dtype=torch.get_default_dtype())
 
+        # For LSTM g(θ), theta_t may be (T, d). For coreset bookkeeping we need a 1D
+        # vector to concatenate with x_t, so we summarize theta_t with the LAST step.
+        # (This does NOT change what gets stored in theta_hist for GP training.)
+        if theta_t.dim() == 2:
+            theta_z = theta_t[-1]  # (d,)
+        elif theta_t.dim() == 3 and theta_t.shape[0] == 1:
+            # Be tolerant if a caller passes (1, T, d)
+            theta_z = theta_t[0, -1]
+        else:
+            theta_z = theta_t
+
+        x_z = x_t.view(-1)
+        theta_z = theta_z.view(-1)
+
         if self.posterior_type == "neural_linear":
             # update sufficient stats
             phi = self._phi(x_t, theta_t)  # (m,)
@@ -1354,7 +1563,7 @@ class NNAGPBandit:
             self._b = self._b + phi * y_val
 
             # optional training buffer for representation learning
-            z = torch.cat([x_t, theta_t], dim=-1)
+            z = torch.cat([x_z, theta_z], dim=0)
             self._z_hist.append(z.unsqueeze(0))
             self._yl_hist.append(y_val.unsqueeze(0))
 
@@ -1363,7 +1572,7 @@ class NNAGPBandit:
 
         # Default GP path
         # Default GP path (exact GP on a bounded coreset)
-        z_new = torch.cat([x_t, theta_t], dim=-1)
+        z_new = torch.cat([x_z, theta_z], dim=0)
 
         if len(self.y_hist) < self.coreset_size:
             # still filling
@@ -1554,12 +1763,17 @@ class NNAGPBandit:
         """
         device = device or self.model.device
 
+        # Detect whether g_net expects sequences (LSTMFeatureNet) or flat vectors (FeatureNet)
+        g_net = getattr(self.model, "g_net", None)
+        use_lstm = bool(getattr(self, "use_lstm", False))
+        if g_net is not None:
+            use_lstm = use_lstm or (hasattr(g_net, "lstm") and isinstance(getattr(g_net, "lstm"), torch.nn.LSTM))
+
         if (not self._stack_cache_dirty) and self._stack_cache:
             X = self._stack_cache["X"]
             Theta = self._stack_cache["Theta"]
             y = self._stack_cache["y"]
 
-            # Ensure correct device
             if X.device != device:
                 X = X.to(device)
                 Theta = Theta.to(device)
@@ -1572,8 +1786,44 @@ class NNAGPBandit:
 
         # Rebuild stacked history
         X = torch.vstack(tuple(self.x_hist)).to(device)
-        Theta = torch.vstack(tuple(self.theta_hist)).to(device)
         y = torch.hstack(tuple(self.y_hist)).to(device)
+
+        if not use_lstm:
+            # Flat theta: elements typically (1,d) => vstack => (N,d)
+            Theta = torch.vstack(tuple(self.theta_hist)).to(device)
+        else:
+            # Sequence theta: normalize to (1,T,d), then pad to common T and cat => (N,T,d)
+            seqs = []
+            max_T = 1
+            d = None
+
+            for th in self.theta_hist:
+                th = th.to(device)
+
+                if th.dim() == 2:
+                    # (1,d) -> (1,1,d)
+                    th = th.unsqueeze(1)
+                elif th.dim() != 3:
+                    raise ValueError(f"theta_hist element must be 2D (1,d) or 3D (1,T,d); got {tuple(th.shape)}")
+
+                if d is None:
+                    d = int(th.shape[-1])
+                elif int(th.shape[-1]) != d:
+                    raise ValueError(f"Inconsistent d in theta_hist: expected {d}, got {int(th.shape[-1])}")
+
+                max_T = max(max_T, int(th.shape[1]))
+                seqs.append(th)
+
+            # Pad by repeating the last step (keeps scale stable vs zero-padding)
+            padded = []
+            for th in seqs:
+                Ti = int(th.shape[1])
+                if Ti < max_T:
+                    last = th[:, -1:, :].expand(-1, max_T - Ti, -1)
+                    th = torch.cat([th, last], dim=1)
+                padded.append(th)
+
+            Theta = torch.cat(padded, dim=0)  # (N,max_T,d)
 
         self._stack_cache = {"X": X, "Theta": Theta, "y": y}
         self._stack_cache_dirty = False
