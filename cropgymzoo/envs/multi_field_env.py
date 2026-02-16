@@ -543,14 +543,7 @@ class MultiFieldEnv(AECEnv, EzPickle):
             preseason_N: float = 0.0,
             apply_preseason_N: bool = False,
     ) -> None:
-        """Advance a single field to (approximately) target_date.
 
-        - If use_rule_of_thumb=False: fast-forward using Engine.run(...), action=0 (or one preseason pulse).
-        - If use_rule_of_thumb=True: advance using ParcelEnv.step(...) at the env timestep (e.g., 7 days),
-          calling rule_of_thumb each step (and optionally applying preseason_N on the last step before target).
-
-        With timestep>1, exact target alignment may be impossible; if allow_overshoot=True we stop once date >= target_date.
-        """
         parcel = self.fields[agent]
         env = parcel.unwrapped
 
