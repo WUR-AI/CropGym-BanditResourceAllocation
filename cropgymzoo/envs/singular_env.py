@@ -390,13 +390,17 @@ class ParcelEnv(pcse_env.PCSEEnv, EzPickle):
                     return d.replace(year=year, day=28)
 
             campaign_specs = []
-            for y in horizon_years:
+            for i, y in enumerate(horizon_years):
                 crop_y = farm_by_year[y][self.name]["crop"]  # self.name is field id like "field-3"
                 tpl = self.crop_info[crop_y]
 
                 start_year = (y - 1) if crop_y == "winterwheat" else y
 
-                campaign_date = _safe_replace(self.agmt.str_to_datetime(tpl["campaign_date"]), start_year)
+                if i != 0:
+                    campaign_date = _safe_replace(self.agmt.str_to_datetime(tpl["campaign_date"]), start_year)
+                else:
+                    campaign_date = _safe_replace(self.agmt.str_to_datetime(tpl["campaign_date"]), start_year) \
+                                    - datetime.timedelta(weeks=8)
                 crop_start_date = _safe_replace(self.agmt.str_to_datetime(tpl["crop_start_date"]), start_year)
 
                 crop_end_date = None
