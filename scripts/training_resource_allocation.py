@@ -51,15 +51,19 @@ if __name__ == '__main__':
         default=256,
         help="Buffer size for representation training (neural_linear)."
     )
+    parser.add_argument("--lstm", action='store_true', dest='lstm')
+    parser.add_argument("--train_multi_campaign", action='store_true', dest='train_multi_campaign')
     parser.add_argument("--coreset_size", type=int, default=300)
-    parser.add_argument("--coreset_mode", type=str, default="diverse", choices=["fifo", "diverse"])
+    parser.add_argument("--coreset_mode", type=str, default="fifo", choices=["fifo", "diverse"])
     parser.add_argument("--bandit_action_mode", type=str, default="factored", choices=["joined", "factored"])
     parser.set_defaults(
         use_model=True,
         use_comet=True,
         streaming=False,
         render=False,
-        elite_enabled=True
+        elite_enabled=True,
+        train_multi_campaign=False,
+        lstm=False,
     )
     args = parser.parse_args()
 
