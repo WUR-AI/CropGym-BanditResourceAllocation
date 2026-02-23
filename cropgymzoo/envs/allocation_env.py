@@ -85,6 +85,8 @@ class AllocationBandit(gym.Env):
 
         self.forecast_horizon_days = 14
 
+        self.gate = True
+
         # The MARL env
         self._init_envs(args, warm_up_eps=warm_up_eps)
 
@@ -375,9 +377,12 @@ class AllocationBandit(gym.Env):
 
         separate_reward = []
         for nsurp, nue in zip(separate_nsurp, separate_nue):
-            r_nsurp = Rewards.ContainerNUE.nsurplus_score(nsurp, low=10.0, high=60.0, max_dev=40)
+            r_nsurp = Rewards.ContainerNUE.nsurplus_score(nsurp, low=10.0, high=60.0, max_dev=40, clip=not self.gate)
             # Soft constraint: 1 until nue<=0.9, then linearly decays to 0 over `width`.
-            r_nue = Rewards.ContainerNUE.nue_score(nue)
+            r_nue = Rewards.ContainerNUE.nue_score(nue, clip=not self.gate)
+            if self.gate:
+                r_nue = self.gate_sigmoid(r_nue)
+                r_nsurp = self.gate_sigmoid(r_nsurp)
             separate_reward.append(r_nsurp * r_nue)
 
         n_arms = len(separate_reward)
@@ -385,6 +390,11 @@ class AllocationBandit(gym.Env):
 
         reward = np.sum(weighted_reward)
         return reward
+
+    @staticmethod
+    def gate_sigmoid(s, tau=0.2):
+        s = float(s)
+        return 1.0 / (1.0 + np.exp(-s / tau))
 
     def build_full_candidates_per_field(self):
         """Return list of tensors, each (M_i, 1) for select_*_factored API."""
@@ -421,11 +431,14 @@ class AllocationBandit(gym.Env):
         blocks = [theta_flat[i * n_fields:(i + 1) * n_fields] for i in range(n_keys)]
         return np.stack(blocks, axis=1)  # (n_fields, n_keys)
 
-    @staticmethod
-    def compute_per_field_rewards(n_surps: dict, nues: dict) -> np.ndarray:
+
+    def compute_per_field_rewards(self, n_surps: dict, nues: dict) -> np.ndarray:
         """Return per-field reward components consistent with `_get_reward`."""
-        r_nsurp = [Rewards.ContainerNUE.nsurplus_score(n, low=10.0, high=60.0, max_dev=40) for n in n_surps]
-        r_nue = [Rewards.ContainerNUE.nue_score(n) for n in nues]
+        r_nsurp = [Rewards.ContainerNUE.nsurplus_score(n, low=0.0, high=80.0, max_dev=40, clip=not self.gate) for n in n_surps]
+        r_nue = [Rewards.ContainerNUE.nue_score(n, clip=not self.gate) for n in nues]
+        if self.gate:
+            r_nue = [self.gate_sigmoid(r) for r in r_nue]
+            r_nsurp = [self.gate_sigmoid(r) for r in r_nsurp]
         r = [r_ns * r_n for r_ns, r_n in zip(r_nsurp, r_nue)]
         return np.asarray(r, dtype=np.float32)
 

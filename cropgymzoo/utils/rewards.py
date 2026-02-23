@@ -1125,7 +1125,7 @@ class Rewards:
             return self.nue_condition(nue) * yield_t
 
         @staticmethod
-        def nsurplus_score(nsurp, low=0.0, high=40.0, max_dev=100.0):
+        def nsurplus_score(nsurp, low=0.0, high=40.0, max_dev=100.0, clip=True):
             try:
                 nsurp = float(nsurp)
             except Exception:
@@ -1143,10 +1143,10 @@ class Rewards:
                 dist = nsurp - high
 
             score = 1.0 - dist / max_dev
-            return max(score, 0.0)
+            return max(score, 0.0) if clip else score
 
         @staticmethod
-        def nue_score(nue, low=0.5, high=0.9, max_dev=0.2):
+        def nue_score(nue, low=0.5, high=0.9, max_dev=0.2, clip=True):
             try:
                 nue = float(nue)
             except Exception:
@@ -1164,7 +1164,7 @@ class Rewards:
                 dist = nue - high
 
             score = 1.0 - dist / max_dev
-            return max(score, 0.0)
+            return max(score, 0.0) if clip else score
 
         def calculate_nue_term(self, n_fertilized, n_output, no3_depo=None, nh4_depo=None):
             nue = calculate_nue(n_fertilized, n_output, no3_depo=no3_depo, nh4_depo=nh4_depo)
