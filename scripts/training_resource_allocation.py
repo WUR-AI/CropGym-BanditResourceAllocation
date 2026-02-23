@@ -56,6 +56,7 @@ if __name__ == '__main__':
     parser.add_argument("--coreset_size", type=int, default=300)
     parser.add_argument("--coreset_mode", type=str, default="fifo", choices=["fifo", "diverse"])
     parser.add_argument("--bandit_action_mode", type=str, default="factored", choices=["joined", "factored"])
+    parser.add_argument("--online_update_mode", action='store_true', default=False)
     parser.set_defaults(
         use_model=True,
         use_comet=True,
