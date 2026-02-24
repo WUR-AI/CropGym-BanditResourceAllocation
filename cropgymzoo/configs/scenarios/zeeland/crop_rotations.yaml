@@ -1,0 +1,1527 @@
+farmer_0:
+  field-1:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: winterwheat
+    2024: potato
+  field-10:
+    2020: winterwheat
+    2021: winterwheat
+    2022: winterwheat
+    2023: potato
+    2024: sugarbeet
+  field-11:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-12:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: sugarbeet
+  field-2:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-3:
+    2020: winterwheat
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-4:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-5:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-6:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: winterwheat
+    2024: sugarbeet
+  field-7:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: sugarbeet
+  field-8:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-9:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+farmer_1:
+  field-1:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: winterwheat
+  field-10:
+    2020: potato
+    2021: winterwheat
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-11:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-12:
+    2020: potato
+    2021: winterwheat
+    2022: winterwheat
+    2023: winterwheat
+    2024: sugarbeet
+  field-13:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-14:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-2:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-3:
+    2020: winterwheat
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-4:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-5:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-6:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-7:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-8:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-9:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: winterwheat
+    2024: potato
+farmer_10:
+  field-1:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-2:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-3:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-4:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-5:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-6:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-7:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+farmer_11:
+  field-1:
+    2020: winterwheat
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-2:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: winterwheat
+    2023: winterwheat
+    2024: sugarbeet
+  field-3:
+    2020: winterwheat
+    2021: winterwheat
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-4:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: winterwheat
+    2024: potato
+  field-5:
+    2020: winterwheat
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: winterwheat
+  field-6:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-7:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-8:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: winterwheat
+  field-9:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+farmer_12:
+  field-1:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-10:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-2:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-3:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: winterwheat
+    2024: sugarbeet
+  field-4:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-5:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-6:
+    2020: winterwheat
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-7:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-8:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-9:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+farmer_13:
+  field-1:
+    2020: winterwheat
+    2021: winterwheat
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-10:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-11:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-12:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-13:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-14:
+    2020: winterwheat
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-2:
+    2020: winterwheat
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: winterwheat
+  field-3:
+    2020: winterwheat
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-4:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: winterwheat
+    2024: potato
+  field-5:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-6:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-7:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-8:
+    2020: winterwheat
+    2021: winterwheat
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-9:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+farmer_14:
+  field-1:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-2:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-3:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-4:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-5:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-6:
+    2020: winterwheat
+    2021: potato
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-7:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: sugarbeet
+  field-8:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+farmer_15:
+  field-1:
+    2020: sugarbeet
+    2021: potato
+    2022: winterwheat
+    2023: winterwheat
+    2024: winterwheat
+  field-2:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-3:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-4:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-5:
+    2020: sugarbeet
+    2021: potato
+    2022: winterwheat
+    2023: winterwheat
+    2024: winterwheat
+  field-6:
+    2020: winterwheat
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-7:
+    2020: winterwheat
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-8:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: winterwheat
+    2023: winterwheat
+    2024: winterwheat
+farmer_16:
+  field-1:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-2:
+    2020: potato
+    2021: winterwheat
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-3:
+    2020: winterwheat
+    2021: winterwheat
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-4:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: potato
+    2024: winterwheat
+  field-5:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: sugarbeet
+    2024: winterwheat
+  field-6:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-7:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: winterwheat
+  field-8:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-9:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+farmer_17:
+  field-1:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-2:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-3:
+    2020: potato
+    2021: winterwheat
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-4:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-5:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+farmer_18:
+  field-1:
+    2020: potato
+    2021: winterwheat
+    2022: winterwheat
+    2023: winterwheat
+    2024: potato
+  field-2:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-3:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-4:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-5:
+    2020: potato
+    2021: winterwheat
+    2022: winterwheat
+    2023: winterwheat
+    2024: potato
+  field-6:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+farmer_19:
+  field-1:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-2:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-3:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-4:
+    2020: potato
+    2021: winterwheat
+    2022: winterwheat
+    2023: winterwheat
+    2024: winterwheat
+  field-5:
+    2020: winterwheat
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-6:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: winterwheat
+  field-7:
+    2020: winterwheat
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+farmer_2:
+  field-1:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-10:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-11:
+    2020: winterwheat
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-12:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: winterwheat
+  field-2:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-3:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-4:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-5:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-6:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-7:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-8:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-9:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+farmer_20:
+  field-1:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-10:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-2:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-3:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-4:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-5:
+    2020: sugarbeet
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: potato
+  field-6:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: potato
+    2024: winterwheat
+  field-7:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-8:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-9:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+farmer_21:
+  field-1:
+    2020: winterwheat
+    2021: potato
+    2022: sugarbeet
+    2023: winterwheat
+    2024: winterwheat
+  field-2:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-3:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: winterwheat
+  field-4:
+    2020: winterwheat
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-5:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+farmer_22:
+  field-1:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-2:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: winterwheat
+    2024: sugarbeet
+  field-3:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: winterwheat
+    2024: sugarbeet
+  field-4:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-5:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: winterwheat
+    2024: sugarbeet
+farmer_23:
+  field-1:
+    2020: potato
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-2:
+    2020: potato
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-3:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-4:
+    2020: potato
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-5:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: potato
+    2023: winterwheat
+    2024: winterwheat
+farmer_24:
+  field-1:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-2:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-3:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-4:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-5:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: winterwheat
+    2024: potato
+  field-6:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-7:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+farmer_25:
+  field-1:
+    2020: winterwheat
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-2:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-3:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: winterwheat
+    2024: sugarbeet
+  field-4:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-5:
+    2020: winterwheat
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+farmer_26:
+  field-1:
+    2020: potato
+    2021: winterwheat
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-2:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-3:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-4:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: sugarbeet
+    2024: winterwheat
+  field-5:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+farmer_3:
+  field-1:
+    2020: potato
+    2021: winterwheat
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-2:
+    2020: winterwheat
+    2021: potato
+    2022: sugarbeet
+    2023: winterwheat
+    2024: winterwheat
+  field-3:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-4:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-5:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+farmer_4:
+  field-1:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-10:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-11:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-12:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-13:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: potato
+  field-14:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-15:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-2:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-3:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-4:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-5:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-6:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-7:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-8:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-9:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+farmer_5:
+  field-1:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: winterwheat
+  field-10:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-11:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-12:
+    2020: winterwheat
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-13:
+    2020: winterwheat
+    2021: potato
+    2022: sugarbeet
+    2023: winterwheat
+    2024: winterwheat
+  field-14:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-15:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-16:
+    2020: winterwheat
+    2021: winterwheat
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-17:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-18:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-19:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-2:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-20:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-21:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-22:
+    2020: winterwheat
+    2021: potato
+    2022: sugarbeet
+    2023: winterwheat
+    2024: winterwheat
+  field-23:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-3:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-4:
+    2020: winterwheat
+    2021: winterwheat
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-5:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: winterwheat
+  field-6:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-7:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-8:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-9:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+farmer_6:
+  field-1:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-2:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-3:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-4:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-5:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-6:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+farmer_7:
+  field-1:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-2:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-3:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-4:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-5:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-6:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-7:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-8:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+farmer_8:
+  field-1:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-10:
+    2020: winterwheat
+    2021: winterwheat
+    2022: winterwheat
+    2023: winterwheat
+    2024: winterwheat
+  field-11:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-2:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: winterwheat
+    2024: sugarbeet
+  field-3:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: potato
+    2024: winterwheat
+  field-4:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: winterwheat
+    2023: potato
+    2024: sugarbeet
+  field-5:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-6:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-7:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-8:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: winterwheat
+    2023: winterwheat
+    2024: sugarbeet
+  field-9:
+    2020: potato
+    2021: winterwheat
+    2022: sugarbeet
+    2023: potato
+    2024: winterwheat
+farmer_9:
+  field-1:
+    2020: winterwheat
+    2021: winterwheat
+    2022: winterwheat
+    2023: potato
+    2024: sugarbeet
+  field-10:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-11:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-12:
+    2020: winterwheat
+    2021: winterwheat
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-13:
+    2020: winterwheat
+    2021: winterwheat
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-14:
+    2020: winterwheat
+    2021: potato
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-15:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: winterwheat
+    2023: winterwheat
+    2024: sugarbeet
+  field-16:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-17:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat
+  field-18:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: winterwheat
+    2024: winterwheat
+  field-19:
+    2020: potato
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: sugarbeet
+  field-2:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: winterwheat
+    2023: potato
+    2024: sugarbeet
+  field-3:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: winterwheat
+    2023: winterwheat
+    2024: sugarbeet
+  field-4:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: potato
+    2023: winterwheat
+    2024: sugarbeet
+  field-5:
+    2020: winterwheat
+    2021: winterwheat
+    2022: winterwheat
+    2023: winterwheat
+    2024: sugarbeet
+  field-6:
+    2020: sugarbeet
+    2021: winterwheat
+    2022: winterwheat
+    2023: potato
+    2024: sugarbeet
+  field-7:
+    2020: winterwheat
+    2021: sugarbeet
+    2022: winterwheat
+    2023: potato
+    2024: winterwheat
+  field-8:
+    2020: winterwheat
+    2021: potato
+    2022: sugarbeet
+    2023: winterwheat
+    2024: potato
+  field-9:
+    2020: winterwheat
+    2021: potato
+    2022: winterwheat
+    2023: sugarbeet
+    2024: winterwheat

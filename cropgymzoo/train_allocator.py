@@ -18,7 +18,8 @@ from collections import deque
 from cropgymzoo.eval_allocator import run_eval_allocator
 from cropgymzoo.agents.nn_agp import NNAGPBandit
 from cropgymzoo.utils.agent_helpers import last_before_nan
-from cropgymzoo.utils.callbacks import _setup_bandit_comet, log_selection_info, log_model_histograms, fig_to_chw_uint8
+from cropgymzoo.utils.callbacks import _setup_bandit_comet
+from cropgymzoo.utils.scenario_utils import load_dict_fields
 from cropgymzoo.envs.allocation_env import AllocationBandit
 from cropgymzoo import _DEFAULT_LOGDIR, _DEFAULT_RESULTSDIR, _SCENARIO_PATH
 from cropgymzoo.utils.plotters import plot_results, plot_results_daisy_chained
@@ -87,10 +88,7 @@ class BanditNormalizer:
             # env.get_rotation_year(rng.choice(years))
             farm_dict_by_year = {}
             for y in years:
-                with open(
-                        os.path.join(_SCENARIO_PATH, f"{env.region}", f"{y}", f"farmer_{env.farm_id}.yaml"),
-                        'r') as f:
-                    farm_dict_by_year[int(y)] = yaml.safe_load(f)
+                farm_dict_by_year[int(y)] =  load_dict_fields(env.farm_id, env.region, year=y)
             theta_np, _ = env.reset(
                 options={
                     "year": int(years[0]),
@@ -363,9 +361,7 @@ def training_loop_factored(
 
                 train_farm_dict_by_year = {}
                 for y in train_years:
-                    with open(os.path.join(_SCENARIO_PATH, f"{env.region}", f"{y+kickback}", f"farmer_{env.farm_id}.yaml"),
-                              'r') as f:
-                        train_farm_dict_by_year[int(y)] = yaml.safe_load(f)
+                    train_farm_dict_by_year[int(y)] = load_dict_fields(env.farm_id, env.region, year=y+kickback)
 
                 # Ensure env has the right agent set (field ids) before reset
                 env.get_rotation_year(test_years[0])
@@ -477,8 +473,7 @@ def training_loop_factored(
                         # Build farm_dict_by_year once (needed for chained campaigns)
                         farm_dict_by_year = {}
                         for y in years:
-                            with open(os.path.join(_SCENARIO_PATH, f"{env.region}", f"{y}", f"farmer_{env.farm_id}.yaml"), 'r') as f:
-                                farm_dict_by_year[int(y)] = yaml.safe_load(f)
+                            farm_dict_by_year[int(y)] = load_dict_fields(env.farm_id, env.region, year=y)
 
                         # Ensure env has the right agent set (field ids) before reset
                         env.get_rotation_year(years[0])
@@ -717,9 +712,7 @@ def multi_year_train_concurrent(t: int, args, bandit, bandits,
         train_farm_dict_by_year = {}
         for y in train_years:
             file_y = 2020 + (y % 5)
-            with open(os.path.join(_SCENARIO_PATH, f"{env.region}", f"{file_y}", f"farmer_{env.farm_id}.yaml"),
-                      'r') as f:
-                train_farm_dict_by_year[int(y)] = yaml.safe_load(f)
+            train_farm_dict_by_year[int(y)] = load_dict_fields(env.farm_id, env.region, year=file_y)
 
         # Ensure env has the right agent set (field ids) before reset
         env.get_rotation_year(test_years[0])

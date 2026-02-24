@@ -10,6 +10,22 @@ from cropgymzoo import _SCENARIO_PATH
 import hashlib
 from typing import Tuple
 
+def load_dict_fields(farm_id: int, region: str, year: int =None):
+    if year is None:
+        year = 2020
+
+    with open(os.path.join(_SCENARIO_PATH, f"{region}",
+                           f"farmer_{farm_id}.yaml"), 'rb') as f:
+        dict_fields = yaml.safe_load(f)
+    with open(os.path.join(_SCENARIO_PATH, f"{region}",
+                           f"crop_rotations.yaml"), 'rb') as f:
+        crops = yaml.safe_load(f)[f"farmer_{farm_id}"]
+
+    for field_id, field_dict in dict_fields.items():
+        dict_fields[field_id]['crop'] = crops[field_id][year]
+
+    return dict_fields
+
 def _stable_uniform_01(key: str) -> float:
     h = hashlib.sha256(key.encode("utf-8")).digest()
     # Take first 8 bytes as an integer

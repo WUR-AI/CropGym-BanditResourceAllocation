@@ -6,7 +6,7 @@ from tqdm import tqdm
 from dataclasses import dataclass
 from typing import Dict, Tuple, List, Hashable
 
-from cropgymzoo.utils.scenario_utils import model_picker
+from cropgymzoo.utils.scenario_utils import model_picker, load_dict_fields
 from cropgymzoo.fit_nue_response import solve_lp_for_env
 
 
@@ -110,12 +110,11 @@ def run_region_year(
 
     _REGION_PATH = os.path.join(_SCENARIO_PATH, region)
     # Use the first season's data_year for farmer count
-    _YEAR_PATH = os.path.join(_REGION_PATH, str(get_data_year(season_years[0])))
     name_allocator = "" if allocator is None else f"_{allocator}"
 
 
     # Loop through farmers with a progress bar
-    num_farmers = len([name for name in os.listdir(_YEAR_PATH) if ".bak" not in name]) - 1
+    num_farmers = len([name for name in os.listdir(_REGION_PATH) if "farmer" in name]) - 1
 
 
     if subset:
@@ -144,8 +143,10 @@ def run_region_year(
             year_path = os.path.join(_REGION_PATH, str(sy))
             farmer_path = os.path.join(year_path, f"farmer_{i}.yaml")
 
-            with open(farmer_path, 'r') as f:
-                farm_dict_by_year[int(sy)] = yaml.load(f, Loader=yaml.SafeLoader)
+            farm_dict_by_year[int(sy)] = load_dict_fields(i, region, sy)
+
+            # with open(farmer_path, 'r') as f:
+            #     farm_dict_by_year[int(sy)] = yaml.load(f, Loader=yaml.SafeLoader)
 
 
         # Initialize env once per farmer using first season's dict

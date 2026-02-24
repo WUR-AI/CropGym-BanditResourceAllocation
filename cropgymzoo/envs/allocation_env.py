@@ -17,7 +17,7 @@ from cropgymzoo.utils.agent_helpers import _make_base_arms, _make_topk_super_arm
 
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 from cropgymzoo.utils.defaults import get_default_years
-from cropgymzoo.utils.scenario_utils import model_picker
+from cropgymzoo.utils.scenario_utils import model_picker, load_dict_fields
 from cropgymzoo.utils.rewards import Rewards
 from cropgymzoo.utils.agent_helpers import last_before_nan
 from cropgymzoo.utils.historical_forecasts import OpenMeteoHistoricalForecastStore, ForecastWindow
@@ -735,8 +735,7 @@ class AllocationBandit(gym.Env):
         if getattr(self, "year", None) == year and getattr(self.farm, "year", None) == year and getattr(self.farm, "fields", None):
             return
 
-        with open(os.path.join(_SCENARIO_PATH, f"{self.region}", f"{year}", f"farmer_{self.farm_id}.yaml"), 'r') as f:
-            dict_fields = yaml.safe_load(f)
+        dict_fields = load_dict_fields(self.farm_id, self.region, year=year)
 
         self.farm.set_new_fields(dict_fields, year=year)
 
@@ -1444,9 +1443,7 @@ class AllocationBandit(gym.Env):
         # make farm
         dict_fields = None
         if args.farm is not None:
-            with open(os.path.join(_SCENARIO_PATH, f"{self.region}", "2020",
-                                   f"farmer_{self.farm_id}.yaml"), 'rb') as f:
-                dict_fields = yaml.safe_load(f)
+            dict_fields = load_dict_fields(self.farm_id, self.region)
 
         if not any("Historical" in s for s in self._get_context_keys()):
             warm_up_eps = 0
