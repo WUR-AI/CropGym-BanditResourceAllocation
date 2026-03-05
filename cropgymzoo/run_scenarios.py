@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Dict, Tuple, List, Hashable
 
 from cropgymzoo.utils.scenario_utils import model_picker, load_dict_fields
-from cropgymzoo.fit_nue_response import solve_lp_for_env
+from cropgymzoo.fit_nue_response import solve_discrete_lp_for_env, make_df_nue_response
 
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -163,16 +163,36 @@ def run_region_year(
         # Allocation strategies before each season
         # Prepare LP allocation if needed (loaded once for all seasons)
 
-        lp = None
+        lp_df = None
         global_farm_id = None
+        global_farm_idx = None
 
         if allocator is not None and "LP" in allocator:
-            lp_suffix = "reduced_" if allocator == "LP_reduced" else "full_"
-            lp_name = f"lp_results_{lp_suffix}{agent}.pkl"
-            global_farm_id = f"farm{farm_region_mapper(region, i)}"
+            # Path-B benchmark: use precomputed grid metrics (0,20,40,...) for this GLOBAL farm.
+            global_farm_idx = int(farm_region_mapper(region, i))
+            global_farm_id = f"farm{global_farm_idx}"
 
-            with open(os.path.join(_DEFAULT_RESULTSDIR, "LP", "nue_response", f"nue_response_{global_farm_id}.pkl"), "rb") as f:
-                lp = pickle.load(f)
+            # The precomputed grid run (aggregated) is written by `run_for_response.py` as:
+            #   results/{agent}/results_{agent}_{scenario}_farm_{global_farm_idx}.pkl
+            metrics_path = os.path.join(
+                _DEFAULT_RESULTSDIR,
+                str(agent),
+                f"results_{agent}_{scenario}-lp_farm_{global_farm_idx}.pkl"
+                if scenario == "full_budget"
+                else f"results_{agent}_full_budget-lp_farm_{global_farm_idx}.pkl",
+            )
+            if not os.path.exists(metrics_path):
+                raise FileNotFoundError(
+                    f"Precomputed LP grid metrics not found for {global_farm_id}. "
+                    f"Expected at: {metrics_path}. "
+                    "Run run_for_response.py first to generate the grid pickles."
+                )
+
+            with open(metrics_path, "rb") as f:
+                metrics_data = pickle.load(f)
+
+            # Convert aggregated grid metrics pickle -> tidy DataFrame (expects columns like farm_id, field_id, year, red_level, N, NUE, Nsurp)
+            lp_df = make_df_nue_response(metrics_data)
 
 
         # Policy runner object (created once)
@@ -228,16 +248,28 @@ def run_region_year(
 
 
             if allocator is not None and "LP" in allocator:
+                if lp_df is None or global_farm_id is None:
+                    raise RuntimeError("LP allocator requested but lp_df/global_farm_id not initialized")
+
                 farm_budget = float(getattr(env, "global_budget", env._get_global_max_budget()))
                 if allocator == "LP_reduced" or ("reduced" in scenario):
                     farm_budget = 0.7 * farm_budget
-                reductions_vec, _ = solve_lp_for_env(
+
+                # Path-B discrete benchmark: pick the minimum-N feasible grid point per field
+                # subject to NUE/Nsurp bands. Returns reductions in 10 kg/ha units.
+                reductions_vec, lp_diag = solve_discrete_lp_for_env(
                     env,
-                    responses=lp['responses'],
+                    df_metrics=lp_df,
                     farm_id=global_farm_id,
+                    year=int(sy),
                     total_budget=farm_budget,
+                    nue_range=(0.5, 0.9),
+                    nsurp_range=(0.0, 80.0),
                 )
                 env.allocate_bandit_budgets(reductions_vec)
+
+                # Optional debug print
+                print(f"[LP-grid] {global_farm_id} year={sy} feasible={lp_diag.feasible} reason={lp_diag.reason} totalN={lp_diag.total_N:.2f}")
             # Step env until season completes
             if runner.__class__.__name__ == "MultiRLAgent":
                 next_states = env.run_until_past_season_year(
