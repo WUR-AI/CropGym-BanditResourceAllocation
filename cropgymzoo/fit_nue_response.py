@@ -68,6 +68,19 @@ def _parse_farm_key(key: str):
     """
     s = str(key)
 
+    # Daisy-chain format: region_YYYY-YYYY_redX_farmK_farmer_J
+    # Return start year (YYYY); caller can override per-season later.
+    m = re.match(r"(.+?)_(\d+)-(\d+)_red(-?\d+(?:\.\d+)?)_farm(\d+)_farmer_(\d+)$", s)
+    if m:
+        region, year0, year1, red_level, farm_global_id, farmer_id = m.groups()
+        return str(region), int(year0), int(farm_global_id), int(farmer_id), float(red_level)
+
+    # Daisy-chain format without global farm id: region_YYYY-YYYY_redX_farmer_J
+    m = re.match(r"(.+?)_(\d+)-(\d+)_red(-?\d+(?:\.\d+)?)_farmer_(\d+)$", s)
+    if m:
+        region, year0, year1, red_level, farmer_id = m.groups()
+        return str(region), int(year0), None, int(farmer_id), float(red_level)
+
     # Newest format: region_year_redX_farmK_farmer_J
     m = re.match(r"(.+?)_(\d+)_red(-?\d+(?:\.\d+)?)_farm(\d+)_farmer_(\d+)$", s)
     if m:
@@ -99,79 +112,125 @@ def make_df_nue_response(data: dict) -> pd.DataFrame:
       - CropName (optional)
       - BudgetTotal (optional, rate kg/ha)
 
+    Supported pickle shapes
+    ----------------------
+    1) Non-daisy-chain:
+        data[farm_key] -> {field_id -> field_data}
+
+    2) Daisy-chain aggregated:
+        data[farm_key] -> {season_year(int) -> {field_id -> field_data}}
+
+    Notes
+    -----
+    - If the key contains a year-range (e.g. '2020-2024'), we still parse a start-year,
+      but for daisy-chain aggregated pickles we ALWAYS use the inner `season_year` as
+      the row's `year`.
+
     Returns columns:
       [farm_id, farm_global_id, farmer_id, field_id, year, red_level, region, crop, N, NUE, Nsurp, budget_rate]
     """
-    rows = []
+    rows: list[dict] = []
+
+    def _last_finite(seq):
+        """Return last finite value in seq (or None)."""
+        if seq is None:
+            return None
+        try:
+            arr = np.asarray(seq, dtype=float)
+        except Exception:
+            return None
+        if arr.size == 0:
+            return None
+        mask = np.isfinite(arr)
+        if not np.any(mask):
+            return None
+        return float(arr[np.where(mask)[0][-1]])
+
+    if not isinstance(data, dict):
+        return pd.DataFrame(rows)
 
     for farm_key, farm_dict in data.items():
-        region, year, farm_global_id, farmer_id, red_level = _parse_farm_key(farm_key)
+        region, year_from_key, farm_global_id, farmer_id, red_level = _parse_farm_key(farm_key)
         if region is None:
-            # skip unknown key formats
             continue
 
         if farm_global_id is not None:
-            farm_id = f"farm{int(farm_global_id)}"  # stable global identifier
+            farm_id = f"farm{int(farm_global_id)}"
         else:
-            farm_id = f"{region}_farmer_{int(farmer_id)}"  # fallback
+            farm_id = f"{region}_farmer_{int(farmer_id)}"
 
-        if not isinstance(farm_dict, dict):
+        if not isinstance(farm_dict, dict) or not farm_dict:
             continue
 
-        for field_id, field_data in farm_dict.items():
-            if not isinstance(field_data, dict):
+        # Detect daisy-chain aggregated dict: keys are season years (int)
+        if all(isinstance(k, (int, np.integer)) for k in farm_dict.keys()):
+            season_items = list(farm_dict.items())   # [(2020, {...fields...}), (2021, {...}), ...]
+        else:
+            season_items = [(int(year_from_key), farm_dict)]  # old shape
+
+        for season_year, season_fields in season_items:
+            if not isinstance(season_fields, dict):
                 continue
 
-            # --- seasonal N ---
-            N_values = field_data.get("Naction", None)
-            if N_values is None or len(N_values) == 0:
-                continue
-            N_season = float(N_values[-1])
+            for field_id, field_data in season_fields.items():
+                if not isinstance(field_data, dict):
+                    continue
 
-            # --- NUE ---
-            nue_values = field_data.get("NUE", None)
-            if nue_values is None:
-                nue_values = field_data.get("Nue", None)  # in case it is spelled differently
-            NUE_final = float(nue_values[-1]) if nue_values is not None and len(nue_values) else np.nan
+                # --- seasonal N ---
+                N_values = field_data.get("Naction", None)
+                N_season = _last_finite(N_values)
+                if N_season is None:
+                    continue
 
-            # --- Nsurp ---
-            nsurp_values = field_data.get("Nsurp", None)
-            Nsurp_final = float(nsurp_values[-1]) if nsurp_values is not None and len(nsurp_values) else np.nan
+                # --- NUE ---
+                nue_values = field_data.get("NUE", None)
+                if nue_values is None:
+                    nue_values = field_data.get("Nue", None)
+                NUE_final = _last_finite(nue_values)
+                if NUE_final is None:
+                    NUE_final = np.nan
 
-            # --- crop (optional) ---
-            crop = "unknown"
-            crop_values = field_data.get("CropName", None)
-            if crop_values is not None and len(crop_values):
-                crop = str(crop_values[-1])
+                # --- Nsurp ---
+                nsurp_values = field_data.get("Nsurp", None)
+                Nsurp_final = _last_finite(nsurp_values)
+                if Nsurp_final is None:
+                    Nsurp_final = np.nan
 
-            # --- budget rate (optional; useful for debugging) ---
-            budget_rate = field_data.get("BudgetTotal", None)
-            if isinstance(budget_rate, (list, tuple, np.ndarray)) and len(budget_rate) > 0:
-                budget_rate = float(budget_rate[-1])
-            elif budget_rate is None:
-                budget_rate = np.nan
-            else:
-                try:
-                    budget_rate = float(budget_rate)
-                except Exception:
+                # --- crop (optional) ---
+                crop = "unknown"
+                crop_values = field_data.get("CropName", None)
+                if crop_values is not None and len(crop_values):
+                    crop = str(crop_values[-1])
+
+                # --- budget rate (optional) ---
+                budget_rate = field_data.get("BudgetTotal", None)
+                if isinstance(budget_rate, (list, tuple, np.ndarray)):
+                    v = _last_finite(budget_rate)
+                    budget_rate = float(v) if v is not None else np.nan
+                elif budget_rate is None:
                     budget_rate = np.nan
+                else:
+                    try:
+                        budget_rate = float(budget_rate)
+                    except Exception:
+                        budget_rate = np.nan
 
-            rows.append(
-                {
-                    "farm_id": farm_id,
-                    "farm_global_id": float(farm_global_id) if farm_global_id is not None else np.nan,
-                    "farmer_id": int(farmer_id),
-                    "field_id": field_id,
-                    "year": int(year),
-                    "red_level": float(red_level) if red_level is not None else np.nan,
-                    "region": region,
-                    "crop": crop,
-                    "N": float(N_season),
-                    "NUE": float(NUE_final),
-                    "Nsurp": float(Nsurp_final),
-                    "budget_rate": float(budget_rate),
-                }
-            )
+                rows.append(
+                    {
+                        "farm_id": farm_id,
+                        "farm_global_id": float(farm_global_id) if farm_global_id is not None else np.nan,
+                        "farmer_id": int(farmer_id),
+                        "field_id": field_id,
+                        "year": int(season_year),  # IMPORTANT: inner season year for daisy-chain
+                        "red_level": float(red_level) if red_level is not None else np.nan,
+                        "region": region,
+                        "crop": crop,
+                        "N": float(N_season),
+                        "NUE": float(NUE_final),
+                        "Nsurp": float(Nsurp_final),
+                        "budget_rate": float(budget_rate),
+                    }
+                )
 
     return pd.DataFrame(rows)
 
@@ -1004,6 +1063,493 @@ def solve_lp_for_env(
         "strict_budget_repaired": bool(strict_budget_repaired),
     }
     return reductions_vec, info
+
+
+@dataclass
+class CandidatePoint:
+    """One precomputed candidate for a (farm, field, year)."""
+    red_level: float  # kg/ha reduction tag used to generate the simulation
+    N: float          # realized seasonal applied N (kg/ha)
+    NUE: float
+    Nsurp: float
+
+
+@dataclass
+class DiscreteLPResult:
+    farm_id: Hashable
+    year: int
+    field_ids: list[Hashable]
+    chosen_red_level: np.ndarray   # kg/ha per field
+    chosen_N: np.ndarray           # kg/ha per field
+    total_N: float
+    feasible: bool
+    reason: str
+
+
+def build_candidate_grid(
+    df: pd.DataFrame,
+    *,
+    farm_id: Hashable,
+    year: int,
+    field_ids: list[Hashable] | None = None,
+    nue_range: tuple[float, float] = (0.5, 0.9),
+    nsurp_range: tuple[float, float] = (0.0, 80.0),
+    require_finite: bool = True,
+    filter_feasible: bool = True,
+    keep_closest_if_infeasible: bool = True,
+) -> dict[Hashable, list[CandidatePoint]]:
+    """
+    Build per-field candidate lists from a precomputed response DataFrame.
+
+    df must include:
+      ['farm_id','field_id','year','red_level','N','NUE','Nsurp']
+
+    Returns dict[field_id] -> list of CandidatePoint sorted by N ascending.
+    """
+    lo_nue, hi_nue = float(nue_range[0]), float(nue_range[1])
+    lo_ns, hi_ns = float(nsurp_range[0]), float(nsurp_range[1])
+
+    dff = df[(df["farm_id"] == farm_id) & (df["year"] == int(year))].copy()
+    if dff.empty:
+        return {}
+
+    if field_ids is not None:
+        wanted = {str(x) for x in field_ids}
+        dff = dff[dff["field_id"].astype(str).isin(wanted)]
+
+    # drop NaN/inf red_level
+    if "red_level" in dff.columns:
+        dff = dff[np.isfinite(dff["red_level"].to_numpy(dtype=float))]
+
+    if require_finite:
+        for col in ("N", "NUE", "Nsurp"):
+            if col in dff.columns:
+                dff = dff[np.isfinite(dff[col].to_numpy(dtype=float))]
+
+    # keep only feasible points; if a field has no feasible points, optionally keep the closest one
+    if filter_feasible:
+        feas = (
+                dff["NUE"].between(lo_nue, hi_nue, inclusive="both")
+                & dff["Nsurp"].between(lo_ns, hi_ns, inclusive="both")
+        )
+
+        if keep_closest_if_infeasible:
+            # Penalty = total constraint violation (0 means feasible)
+
+            nue = dff["NUE"].to_numpy(dtype=float)
+            ns = dff["Nsurp"].to_numpy(dtype=float)
+
+            nue_v = np.maximum(0.0, lo_nue - nue) + np.maximum(0.0, nue - hi_nue)
+            ns_v = np.maximum(0.0, lo_ns - ns) + np.maximum(0.0, ns - hi_ns)
+
+            dff = dff.copy()
+            dff["__feas__"] = feas.to_numpy(dtype=bool)
+            dff["__penalty__"] = (nue_v + ns_v)
+
+            kept = []
+            for fid, g in dff.groupby("field_id", sort=False):
+                gf = g[g["__feas__"]]
+                if len(gf) > 0:
+                    kept.append(gf)  # keep all feasible points for this field
+                else:
+                    # keep single closest infeasible point; tie-break by low N
+                    kept.append(g.sort_values(["__penalty__", "N"], ascending=[True, True]).head(1))
+
+            dff = pd.concat(kept, axis=0, ignore_index=True) if kept else dff.iloc[0:0]
+            dff = dff.drop(columns=["__feas__", "__penalty__"], errors="ignore")
+        else:
+            dff = dff[feas]
+
+    out: dict[Hashable, list[CandidatePoint]] = {}
+    for fid, g in dff.groupby("field_id", sort=False):
+        pts = [
+            CandidatePoint(
+                red_level=float(row["red_level"]),
+                N=float(row["N"]),
+                NUE=float(row["NUE"]),
+                Nsurp=float(row["Nsurp"]),
+            )
+            for _, row in g.iterrows()
+        ]
+        pts.sort(key=lambda p: (p.N, p.red_level))  # objective is min N
+        if pts:
+            out[fid] = pts
+
+    # preserve env order if provided
+    if field_ids is not None and out:
+        ordered: dict[Hashable, list[CandidatePoint]] = {}
+        for fid in field_ids:
+            if fid in out:
+                ordered[fid] = out[fid]
+            else:
+                # try string match
+                for k in list(out.keys()):
+                    if str(k) == str(fid):
+                        ordered[fid] = out[k]
+                        break
+        for k, v in out.items():
+            if k not in ordered:
+                ordered[k] = v
+        out = ordered
+
+    return out
+
+
+def solve_discrete_minN(
+    candidates: dict[Hashable, list[CandidatePoint]],
+    *,
+    total_budget: float | None = None,
+) -> tuple[dict[Hashable, CandidatePoint], bool, str]:
+    """
+    Select one candidate per field to minimize total N.
+
+    With objective min(sum N) and only coupling constraint sum(N) <= total_budget,
+    the optimal policy is to pick each field’s minimum-N feasible point.
+    """
+    if not candidates:
+        return {}, False, "no_candidates"
+
+    chosen: dict[Hashable, CandidatePoint] = {}
+    for fid, pts in candidates.items():
+        if not pts:
+            return {}, False, f"no_feasible_points_for_field:{fid}"
+        chosen[fid] = pts[0]
+
+    if total_budget is not None:
+        totalN = float(sum(p.N for p in chosen.values()))
+        if totalN > float(total_budget) + 1e-9:
+            return chosen, False, "min_solution_exceeds_total_budget"
+
+    return chosen, True, "ok"
+
+
+def solve_discrete_lp_for_env(
+    env,
+    *,
+    df_metrics: pd.DataFrame,
+    farm_id: Hashable,
+    year: int,
+    total_budget: float | None = None,
+    nue_range: tuple[float, float] = (0.5, 0.9),
+    nsurp_range: tuple[float, float] = (0.0, 80.0),
+) -> tuple[np.ndarray, DiscreteLPResult]:
+    """Path-B benchmark: choose per-field reduction level from precomputed metrics.
+
+    Default (original) behavior:
+      - Build feasible candidate set per field (NUE/Nsurp within ranges).
+      - Choose the minimum-N point per field (minimize total N).
+
+    Fallback behavior (when infeasible or min-feasible exceeds budget):
+      - If a potato crop is present in this farm-year, prioritize the (largest-area) potato field by
+        maximizing NUE and minimizing Nsurp.
+      - Otherwise, prioritize the largest-area field.
+      - Non-priority fields are pushed toward low-N points.
+      - If total_budget is exceeded, reduce non-priority fields first.
+
+    Returns a reductions vector compatible with:
+        env.allocate_bandit_budgets(reductions_vec)
+    where reductions are in 10 kg/ha units.
+    """
+
+    # print(df_metrics[df_metrics["farm_id"] == "farm12"].groupby("red_level").size())
+
+    field_ids = list(getattr(env, "possible_agents", []))
+    if not field_ids:
+        field_ids = list(getattr(env, "parcel_meta_infos", {}).keys())
+
+    # --- helper: get per-field area for tie-breaking / priorities ---
+    def _field_area(fid) -> float:
+        if hasattr(env, "get_per_parcel_area"):
+            try:
+                return float(env.get_per_parcel_area(fid))
+            except Exception:
+                pass
+        # best-effort fallbacks
+        try:
+            if hasattr(env, "fields") and fid in env.fields:
+                fenv = env.fields[fid]
+                fenv = getattr(fenv, "unwrapped", fenv)
+                for attr in ("area", "AREA", "parcel_area"):
+                    if hasattr(fenv, attr):
+                        return float(getattr(fenv, attr))
+        except Exception:
+            pass
+        return 1.0
+
+    areas = {fid: _field_area(fid) for fid in field_ids}
+
+    # 1) strict feasible candidates
+    cand_feas = build_candidate_grid(
+        df_metrics,
+        farm_id=farm_id,
+        year=int(year),
+        field_ids=field_ids,
+        nue_range=nue_range,
+        nsurp_range=nsurp_range,
+        require_finite=True,
+        filter_feasible=True,
+    )
+
+    chosen, feasible, reason = solve_discrete_minN(cand_feas, total_budget=total_budget)
+
+    # ------------------------------------------------------------------
+    # Special case: budget is so tight that even the minimum-N (feasible/closest)
+    # selection violates it. In that case we must allow moving to lower-N points
+    # that may violate NUE/Nsurp (since otherwise the problem is infeasible).
+    # Heuristic requested:
+    #   1) prioritize the single largest-area field (try to satisfy NUE/Nsurp if possible)
+    #   2) then prioritize potato fields
+    #   3) allocate remaining budget to minimize constraint-violation (closest-to-feasible)
+    # ------------------------------------------------------------------
+    if reason == "min_solution_exceeds_total_budget" and total_budget is not None:
+        B = float(total_budget)
+
+        # Build full candidate sets (do NOT filter feasible) so we can reduce N below feasible minima.
+        cand_all = build_candidate_grid(
+            df_metrics,
+            farm_id=farm_id,
+            year=int(year),
+            field_ids=field_ids,
+            nue_range=nue_range,
+            nsurp_range=nsurp_range,
+            require_finite=True,
+            filter_feasible=False,
+        )
+
+        lo_nue, hi_nue = float(nue_range[0]), float(nue_range[1])
+        lo_ns, hi_ns = float(nsurp_range[0]), float(nsurp_range[1])
+
+        def _penalty(p: CandidatePoint) -> float:
+            # total violation distance (0 is feasible)
+            nue_v = 0.0
+            if np.isfinite(p.NUE):
+                if p.NUE < lo_nue:
+                    nue_v += (lo_nue - p.NUE)
+                elif p.NUE > hi_nue:
+                    nue_v += (p.NUE - hi_nue)
+            else:
+                nue_v += 1e6
+
+            ns_v = 0.0
+            if np.isfinite(p.Nsurp):
+                if p.Nsurp < lo_ns:
+                    ns_v += (lo_ns - p.Nsurp)
+                elif p.Nsurp > hi_ns:
+                    ns_v += (p.Nsurp - hi_ns)
+            else:
+                ns_v += 1e6
+
+            return float(nue_v + ns_v)
+
+        def _is_feasible(p: CandidatePoint) -> bool:
+            return (
+                np.isfinite(p.NUE) and np.isfinite(p.Nsurp)
+                and (lo_nue <= p.NUE <= hi_nue)
+                and (lo_ns <= p.Nsurp <= hi_ns)
+            )
+
+        # Determine crop per field from df (most common crop label across grid points)
+        dff_crop = df_metrics[(df_metrics["farm_id"] == farm_id) & (df_metrics["year"] == int(year))].copy()
+        field_crop: dict[Hashable, str] = {}
+        if not dff_crop.empty and "crop" in dff_crop.columns:
+            for fid, g in dff_crop.groupby("field_id"):
+                try:
+                    c = g["crop"].dropna().astype(str)
+                    field_crop[fid] = str(c.mode().iloc[0]) if len(c) else "unknown"
+                except Exception:
+                    field_crop[fid] = "unknown"
+
+        def _is_potato(c: str) -> bool:
+            return "potato" in str(c).lower()
+
+        # Priority ordering: largest-area field first, then potato fields, then remaining by area desc.
+        largest_area_fid = max(field_ids, key=lambda f: areas.get(f, 1.0)) if field_ids else None
+        potato_fids = [fid for fid in field_ids if _is_potato(field_crop.get(fid, "")) and fid != largest_area_fid]
+        potato_fids.sort(key=lambda f: areas.get(f, 1.0), reverse=True)
+        rest_fids = [fid for fid in field_ids if fid not in ([largest_area_fid] if largest_area_fid is not None else []) and fid not in potato_fids]
+        rest_fids.sort(key=lambda f: areas.get(f, 1.0), reverse=True)
+
+        priority_order = ([largest_area_fid] if largest_area_fid is not None else []) + potato_fids + rest_fids
+
+        # For each field, sort candidates by increasing N (so we can fit under remaining budget)
+        cand_sorted = {fid: sorted(pts, key=lambda p: float(p.N)) for fid, pts in cand_all.items() if pts}
+
+        chosen = {}
+        remaining = B
+
+        for fid in priority_order:
+            pts = cand_sorted.get(fid, [])
+            if not pts:
+                continue
+
+            # Candidates that fit in remaining budget
+            fit = [p for p in pts if float(p.N) <= remaining + 1e-9]
+            if not fit:
+                # If nothing fits, pick the minimum-N option (will exceed) and break; infeasible budget.
+                chosen[fid] = pts[0]
+                remaining -= float(pts[0].N)
+                continue
+
+            if fid == largest_area_fid:
+                # Try to satisfy constraints for largest field; if possible, pick min-N feasible.
+                feas_fit = [p for p in fit if _is_feasible(p)]
+                if feas_fit:
+                    pick = min(feas_fit, key=lambda p: (p.N, _penalty(p)))
+                else:
+                    # Otherwise closest-to-feasible with smallest N tie-break.
+                    pick = min(fit, key=lambda p: (_penalty(p), p.N))
+            elif fid in potato_fids or (fid == largest_area_fid and _is_potato(field_crop.get(fid, ""))):
+                # Potato priority: maximize NUE, minimize Nsurp (with feasibility preference)
+                feas_fit = [p for p in fit if _is_feasible(p)]
+                base = feas_fit if feas_fit else fit
+                pick = max(base, key=lambda p: (p.NUE, -p.Nsurp, -p.N))
+            else:
+                # Remaining: closest-to-feasible first, then low N
+                pick = min(fit, key=lambda p: (_penalty(p), p.N))
+
+            chosen[fid] = pick
+            remaining -= float(pick.N)
+
+        # If we ended up exceeding budget due to empty fit on some earlier field, mark as infeasible.
+        totalN = float(sum(p.N for p in chosen.values())) if chosen else 0.0
+        feasible = bool(totalN <= B + 1e-6)
+        reason = "budget_scarcity_priority_allocation"
+
+    # Keep original behavior if feasible
+    if not (feasible and reason == "ok") and reason != "budget_scarcity_priority_allocation":
+        # 2) fallback: allow infeasible points but apply priorities
+        cand_all = build_candidate_grid(
+            df_metrics,
+            farm_id=farm_id,
+            year=int(year),
+            field_ids=field_ids,
+            nue_range=nue_range,
+            nsurp_range=nsurp_range,
+            require_finite=True,
+            filter_feasible=False,
+        )
+
+        # Determine crop per field from df (most common crop label across grid points)
+        dff = df_metrics[(df_metrics["farm_id"] == farm_id) & (df_metrics["year"] == int(year))].copy()
+        field_crop: dict[Hashable, str] = {}
+        if not dff.empty and "crop" in dff.columns:
+            for fid, g in dff.groupby("field_id"):
+                try:
+                    c = g["crop"].dropna().astype(str)
+                    field_crop[fid] = str(c.mode().iloc[0]) if len(c) else "unknown"
+                except Exception:
+                    field_crop[fid] = "unknown"
+
+        def _is_potato(c: str) -> bool:
+            return "potato" in str(c).lower()
+
+        potato_fields = [fid for fid in field_ids if _is_potato(field_crop.get(fid, ""))]
+        if potato_fields:
+            priority_fid = max(potato_fields, key=lambda f: areas.get(f, 1.0))
+            priority_mode = "potato"
+        else:
+            priority_fid = max(field_ids, key=lambda f: areas.get(f, 1.0)) if field_ids else None
+            priority_mode = "area"
+
+        # Choose one point per field
+        chosen = {}
+        for fid in field_ids:
+            pts = cand_all.get(fid, [])
+            if not pts:
+                continue
+            if fid == priority_fid:
+                # maximize NUE, then minimize Nsurp, then minimize N (tie-break)
+                best = max(pts, key=lambda p: (p.NUE, -p.Nsurp, -p.N))
+                chosen[fid] = best
+            else:
+                # prefer low N; keep NUE higher and Nsurp lower as tie-breakers
+                best = min(pts, key=lambda p: (p.N, -p.NUE, p.Nsurp))
+                chosen[fid] = best
+
+        # Repair to meet total_budget if needed by reducing non-priority fields first
+        if total_budget is not None and chosen:
+            B = float(total_budget)
+            pts_sorted = {fid: sorted(cand_all.get(fid, []), key=lambda p: p.N) for fid in field_ids}
+
+            # Current index per field in pts_sorted
+            idx_map: dict[Hashable, int] = {}
+            for fid in field_ids:
+                pts = pts_sorted.get(fid, [])
+                if not pts or fid not in chosen:
+                    continue
+                j = 0
+                for k, p in enumerate(pts):
+                    if abs(p.N - chosen[fid].N) < 1e-9 and abs(p.red_level - chosen[fid].red_level) < 1e-9:
+                        j = k
+                        break
+                idx_map[fid] = j
+
+            def _totalN() -> float:
+                return float(sum(chosen[f].N for f in chosen if np.isfinite(chosen[f].N)))
+
+            totalN = _totalN()
+            if totalN > B + 1e-9:
+                max_iter = 100000
+                it = 0
+                while totalN > B + 1e-9 and it < max_iter:
+                    it += 1
+
+                    reducible = [fid for fid in idx_map if idx_map[fid] > 0]
+                    if not reducible:
+                        break
+
+                    def _key(fid):
+                        pri_pen = 1 if fid == priority_fid else 0
+                        return (pri_pen, chosen[fid].N)
+
+                    fid = max(reducible, key=_key)
+                    idx_map[fid] -= 1
+                    chosen[fid] = pts_sorted[fid][idx_map[fid]]
+                    totalN = _totalN()
+
+        feasible = True
+        reason = f"fallback_priority_{priority_mode}:{priority_fid}" if priority_fid is not None else "fallback"
+
+    # Assemble vectors in env field order
+    chosen_red = []
+    chosen_N = []
+    for fid in field_ids:
+        p = None
+        if fid in chosen:
+            p = chosen[fid]
+        else:
+            for k, v in chosen.items():
+                if str(k) == str(fid):
+                    p = v
+                    break
+
+        if p is None:
+            chosen_red.append(0.0)
+            chosen_N.append(np.nan)
+            feasible = False
+            if reason == "ok":
+                reason = f"missing_field_in_solution:{fid}"
+        else:
+            chosen_red.append(float(p.red_level))
+            chosen_N.append(float(p.N))
+
+    chosen_red = np.asarray(chosen_red, dtype=float)
+    chosen_N = np.asarray(chosen_N, dtype=float)
+
+    reductions_vec_units10 = chosen_red / 10.0
+
+    res = DiscreteLPResult(
+        farm_id=farm_id,
+        year=int(year),
+        field_ids=list(field_ids),
+        chosen_red_level=chosen_red,
+        chosen_N=chosen_N,
+        total_N=float(np.nansum(chosen_N)),
+        feasible=bool(feasible),
+        reason=str(reason),
+    )
+
+    return reductions_vec_units10, res
 
 
 if __name__ == "__main__":
