@@ -16,6 +16,7 @@ import yaml
 from cropgymzoo import _SCENARIO_PATH, _DEFAULT_MODEL_DIR, _DEFAULT_RESULTSDIR
 
 from cropgymzoo.eval_policy import MultiRLAgent, RoTAgent, RandomAgent
+from cropgymzoo.utils.scenario_utils import load_dict_fields
 
 from cropgymzoo.envs.multi_field_env import MultiFieldEnv
 
@@ -80,7 +81,7 @@ def farm_int_mapper(x: int):
 
 
 def run_region_year(
-        year: int,
+        years: int | list[int],
         agent: str = "baseline",
         scenario: str = "full_budget",
         allocator: str = "None",
@@ -88,80 +89,132 @@ def run_region_year(
         render: bool = False,
         farm_id: int | None = None,
         budget_reduction_kg_ha: int = 0,
+        days_before_sowing: int = 7,
 ):
-    result_dict = {}
+    """Run one GLOBAL farm over multiple season-years using the multi-campaign daisy-chain reset."""
 
-    # farm_id is a GLOBAL farm index (0–51). Map it to (region, farmer_idx_within_region)
+    # Normalize years input
+    if isinstance(years, int):
+        season_years = [int(years)]
+    else:
+        season_years = sorted(set(int(y) for y in years))
+
+    # Keep only supported scenario years (on disk)
+    season_years = [y for y in season_years if y in [2020, 2021, 2022, 2023, 2024]]
+    if not season_years:
+        raise ValueError("No valid season years after filtering to [2020..2024].")
+
     if farm_id is None:
         raise ValueError("farm_id must be provided when running run_region_year")
+
+    # farm_id is a GLOBAL farm index (0–51). Map it to (region, farmer_idx_within_region)
     region, farmer_idx = farm_int_mapper(int(farm_id))
 
-    _REGION_PATH = os.path.join(_SCENARIO_PATH, region)
-    _YEAR_PATH = os.path.join(_REGION_PATH, str(year))
-
-    year = year - 5 if "-lp" in scenario else year
+    year_tag = f"{season_years[0]}-{season_years[-1]}" if len(season_years) > 1 else str(season_years[0])
     name_allocator = "" if allocator is None else f"_{allocator}"
 
     global_tag = f"farm{int(farm_id)}"
     red_tag = f"red{int(budget_reduction_kg_ha)}"
-    name = f"results_{scenario}_{region}_{year}_{red_tag}_{global_tag}" + name_allocator + f"_farmer_{farmer_idx}.pkl"
+
+    name = f"results_{scenario}_{region}_{year_tag}_{red_tag}_{global_tag}" + name_allocator + f"_farmer_{farmer_idx}.pkl"
     if subset:
-        name = f"results_{scenario}_{region}_{year}_{red_tag}_{global_tag}" + name_allocator + f"_subset_farmer_{farmer_idx}.pkl"
+        name = f"results_{scenario}_{region}_{year_tag}_{red_tag}_{global_tag}" + name_allocator + f"_subset_farmer_{farmer_idx}.pkl"
+
     out_path = os.path.join(
         _DEFAULT_RESULTSDIR,
         agent,
         name,
     )
+
     # Skip if this farmer's results already exist
     if os.path.exists(out_path):
-        print(f"Skipping {region}-{year} farmer_{farmer_idx}; results already exist at {out_path}")
-        return result_dict
-    _FARMER_PATH = os.path.join(_YEAR_PATH, f"farmer_{farmer_idx}.yaml")
+        print(f"Skipping {region}-{year_tag} farmer_{farmer_idx}; results already exist at {out_path}")
+        return {}
 
-    with open(_FARMER_PATH, 'r') as f:
-        dict_fields = yaml.load(f, Loader=yaml.SafeLoader)
+    # Build farm_dict_by_year (daisy-chain reset uses this)
+    farm_dict_by_year: dict[int, dict] = {}
+    for sy in season_years:
+        farm_dict_by_year[int(sy)] = load_dict_fields(farmer_idx, region, int(sy))
 
+    # Initialize env once per farmer using first season's dict
     env = MultiFieldEnv(
-        years=[year],
         training=False,
         render=render,
-        farm_dict=dict_fields,
+        farm_dict=farm_dict_by_year[int(season_years[0])],
         reward='NSU'
     )
 
-    # ------------------------------------------------------------
+    if hasattr(env, "set_new_fields"):
+        env.set_new_fields(farm_dict_by_year[int(season_years[0])])
+
+    runner = RoTAgent(env=env, render=render)
+
+    # Reset env with multi-season campaign
+    env.reset(options={
+        "year": int(season_years[0]),
+        "eval_horizon_years": season_years,
+        "farm_dict_by_year": farm_dict_by_year,
+        "preseason_allocation": True,
+        "days_before_sowing": int(days_before_sowing),
+    })
+
+    info_dict: dict[int, dict] = {}
+
     # Apply budget reduction (kg N/ha) as a per-field reduction.
     # allocate_bandit_budgets expects "reductions" in 10 kg/ha units.
-    # So: 0, 50, 100 kg/ha -> 0, 5, 10.
-    # ------------------------------------------------------------
-    reduction_units = int(budget_reduction_kg_ha) / 10.0
-    if reduction_units > 0:
-        env.allocate_bandit_budgets([reduction_units for _ in env.possible_agents])
-        for ag in env.possible_agents:
-            assert env.get_per_parcel_budget(ag) < env.get_per_parcel_max_budget(ag)
-    runner = RoTAgent(
-        env=env,
-        render=render,
-    )
-    info = runner.run(years=[year])
+    reduction_units = float(int(budget_reduction_kg_ha)) / 10.0
 
-    if info is None:
-        print(f"No results for farmer_{farmer_idx} at {region} in year {year}")
+    for sy in season_years:
+        # Advance fields to allocation date for this season
+        if hasattr(env, "advance_fields_to_allocation_dates"):
+            env.advance_fields_to_allocation_dates(
+                days_before_sowing=int(days_before_sowing),
+                season_year=int(sy),
+                farm_dict_by_year=farm_dict_by_year,
+            )
 
-    del runner
-    del env
+        # Apply reduction (if any)
+        if reduction_units > 0:
+            env.allocate_bandit_budgets([min(reduction_units, (env.get_per_parcel_max_budget(ag)/10.0)) for ag in env.possible_agents])
+            for ag in env.possible_agents:
+                assert env.get_per_parcel_budget(ag) < env.get_per_parcel_max_budget(ag)
 
+        # Run until season completes (daisy-chain in the same env instance)
+        if hasattr(env, "run_til_past_season_year"):
+            env.run_til_past_season_year(season_year=int(sy))
+        else:
+            runner.run(years=[int(sy)])
+
+        # Collect per-season infos
+        if hasattr(env, "collect_agent_infos_for_season"):
+            info_dict[int(sy)] = env.collect_agent_infos_for_season(int(sy))
+        else:
+            info_dict[int(sy)] = {}
+
+    # Save results (one file per reduction, containing all seasons)
+    os.makedirs(os.path.join(_DEFAULT_RESULTSDIR, agent), exist_ok=True)
     with open(out_path, "wb") as f:
-        pickle.dump(info, f)
+        pickle.dump(info_dict, f)
 
-    return result_dict
+    # Cleanup
+    try:
+        del runner
+    except Exception:
+        pass
+    try:
+        if env is not None:
+            env.close()
+    except Exception:
+        pass
+
+    return info_dict
 
 
 # Helper for parallel execution
 def _run_region_year_wrapper(args):
-    year, agent, scenario, allocator, subset, render, farm_id, budget_reduction_kg_ha = args
+    years, agent, scenario, allocator, subset, render, farm_id, budget_reduction_kg_ha = args
     info_dict = run_region_year(
-        year,
+        years,
         agent=agent,
         scenario=scenario,
         allocator=allocator,
@@ -170,7 +223,7 @@ def _run_region_year_wrapper(args):
         farm_id=farm_id,
         budget_reduction_kg_ha=budget_reduction_kg_ha,
     )
-    return year, info_dict
+    return years, info_dict
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -213,73 +266,58 @@ if __name__ == "__main__":
         years = [years[0]]
 
     # Budget reductions in kg N/ha
-    budget_reductions = [0, 50, 100]
+    budget_reductions = [
+        0, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200,
+                         220, 240]
 
-    results_dict = {}
-    # Create list of jobs: (year, agent, scenario, allocator, subset, render, farm_global, reduction)
+    # One daisy-chain run per budget reduction level (each run contains all seasons)
     all_jobs = [
-        (year, agent, scenario, allocator, subset, args.render, farm_global, red)
-        for year in years
+        (years, agent, scenario, allocator, subset, args.render, farm_global, red)
         for red in budget_reductions
     ]
-    sliced_jobs = [all_jobs[i:i+3] for i in range(0, len(all_jobs), 3)]
 
     if num_workers is None or num_workers <= 1:
-        # Fallback to sequential execution
-        for year, agent, scenario, allocator, subset_job, render_job, farm_id, red in tqdm(all_jobs, desc="Running scenarios"):
-            info_dict = run_region_year(
-                year,
-                agent=agent,
-                scenario=scenario,
-                allocator=allocator,
+        for yrs, agent_job, scenario_job, allocator_job, subset_job, render_job, farm_id_job, red in tqdm(all_jobs, desc="Running scenarios"):
+            run_region_year(
+                yrs,
+                agent=agent_job,
+                scenario=scenario_job,
+                allocator=allocator_job,
                 subset=subset_job,
                 render=render_job,
-                farm_id=farm_id,
+                farm_id=farm_id_job,
                 budget_reduction_kg_ha=red,
             )
-            # results_dict[f"{year}"] = info_dict
     else:
-        # Parallel execution over regions/years
-        for jobs in tqdm(sliced_jobs, desc="Slicing jobs"):
-            with ProcessPoolExecutor(max_workers=num_workers) as executor:
-                futures = {
-                    executor.submit(_run_region_year_wrapper, job): job
-                    for job in jobs
-                }
-                for future in tqdm(as_completed(futures), total=len(futures),
-                                   desc="-----Running scenarios------"):
-                    year, info_dict = future.result()
-                    # results_dict[f"{year}"] = info_dict
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            futures = {executor.submit(_run_region_year_wrapper, job): job for job in all_jobs}
+            for future in tqdm(as_completed(futures), total=len(futures), desc="-----Running scenarios------"):
+                future.result()
 
-    # Aggregate only the single selected farm's files
+    # Aggregate only the single selected farm's files (one per reduction)
     aggregated_results = {}
     base_dir = Path(_DEFAULT_RESULTSDIR) / agent
 
-    if "-lp" in scenario:
-        years = [year - 5 for year in years]
-
     name_al = "" if allocator is None else f"_{allocator}"
+    year_tag = f"{years[0]}-{years[-1]}" if len(years) > 1 else str(years[0])
 
-    # Recompute mapping for aggregation (same as run)
     farm_global = int(args.farm)
     region, farmer_idx = farm_int_mapper(farm_global)
     global_tag = f"farm{farm_global}"
 
-    for year in years:
-        for red in budget_reductions:
-            red_tag = f"red{int(red)}"
-            # IMPORTANT: match exactly the single farmer file
-            pattern = f"results_{scenario}_{region}_{year}_{red_tag}_{global_tag}" + name_al + f"_farmer_{farmer_idx}.pkl"
-            if subset:
-                pattern = f"results_{scenario}_{region}_{year}_{red_tag}_{global_tag}" + name_al + f"_subset_farmer_{farmer_idx}.pkl"
+    for red in budget_reductions:
+        red_tag = f"red{int(red)}"
+        pattern = f"results_{scenario}_{region}_{year_tag}_{red_tag}_{global_tag}" + name_al + f"_farmer_{farmer_idx}.pkl"
+        if subset:
+            pattern = f"results_{scenario}_{region}_{year_tag}_{red_tag}_{global_tag}" + name_al + f"_subset_farmer_{farmer_idx}.pkl"
 
-            for pkl_file in base_dir.glob(pattern):
-                key = f"{region}_{year}_{red_tag}_{global_tag}_farmer_{farmer_idx}"
-                if subset:
-                    key = f"{region}_{year}_{red_tag}_{global_tag}_subset_farmer_{farmer_idx}"
-                with open(pkl_file, "rb") as f:
-                    temp_dict = pickle.load(f)
-                aggregated_results[key] = temp_dict.get(year, temp_dict)
+        for pkl_file in base_dir.glob(pattern):
+            key = f"{region}_{year_tag}_{red_tag}_{global_tag}_farmer_{farmer_idx}"
+            if subset:
+                key = f"{region}_{year_tag}_{red_tag}_{global_tag}_subset_farmer_{farmer_idx}"
+            with open(pkl_file, "rb") as f:
+                temp_dict = pickle.load(f)
+            aggregated_results[key] = temp_dict
 
     out_name = f"results_{agent}_{scenario}_farm_{int(args.farm)}" + name_al + ".pkl"
     if subset:
