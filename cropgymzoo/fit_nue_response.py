@@ -4,6 +4,15 @@ import pickle
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, Tuple, List, Hashable, Optional, Any
+import copy
+
+import gc
+import tracemalloc
+import resource
+
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
+import pulp
 
 import numpy as np
 import pandas as pd
@@ -164,9 +173,9 @@ def make_df_nue_response(data: dict) -> pd.DataFrame:
 
         # Detect daisy-chain aggregated dict: keys are season years (int)
         if all(isinstance(k, (int, np.integer)) for k in farm_dict.keys()):
-            season_items = list(farm_dict.items())   # [(2020, {...fields...}), (2021, {...}), ...]
+            season_items = list(farm_dict.items())
         else:
-            season_items = [(int(year_from_key), farm_dict)]  # old shape
+            season_items = [(int(year_from_key), farm_dict)]
 
         for season_year, season_fields in season_items:
             if not isinstance(season_fields, dict):
@@ -202,6 +211,16 @@ def make_df_nue_response(data: dict) -> pd.DataFrame:
                 if crop_values is not None and len(crop_values):
                     crop = str(crop_values[-1])
 
+                # --- optional direct outputs for proxy accounting ---
+                n_out = _last_finite(field_data.get("NamountSO", None))
+                if n_out is None:
+                    n_out = np.nan
+
+                no3_depo = _last_finite(field_data.get("RNO3DEPOSTT", None))
+                nh4_depo = _last_finite(field_data.get("RNH4DEPOSTT", None))
+                n_depo = float((0.0 if no3_depo is None or not np.isfinite(no3_depo) else no3_depo) +
+                               (0.0 if nh4_depo is None or not np.isfinite(nh4_depo) else nh4_depo))
+
                 # --- budget rate (optional) ---
                 budget_rate = field_data.get("BudgetTotal", None)
                 if isinstance(budget_rate, (list, tuple, np.ndarray)):
@@ -221,7 +240,7 @@ def make_df_nue_response(data: dict) -> pd.DataFrame:
                         "farm_global_id": float(farm_global_id) if farm_global_id is not None else np.nan,
                         "farmer_id": int(farmer_id),
                         "field_id": field_id,
-                        "year": int(season_year),  # IMPORTANT: inner season year for daisy-chain
+                        "year": int(season_year),
                         "red_level": float(red_level) if red_level is not None else np.nan,
                         "region": region,
                         "crop": crop,
@@ -229,10 +248,34 @@ def make_df_nue_response(data: dict) -> pd.DataFrame:
                         "NUE": float(NUE_final),
                         "Nsurp": float(Nsurp_final),
                         "budget_rate": float(budget_rate),
+                        "N_out": float(n_out) if np.isfinite(n_out) else np.nan,
+                        "N_depo": float(n_depo),
                     }
                 )
 
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+
+    df["N_seed"] = df["crop"].map(_crop_seed_n).astype(float)
+    df["N_tot_in"] = (
+        pd.to_numeric(df["N"], errors="coerce").fillna(0.0)
+        + df["N_seed"].fillna(0.0)
+        + df["N_depo"].fillna(0.0)
+    )
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        df["NUE_proxy"] = df["N_out"] / df["N_tot_in"].replace(0.0, np.nan)
+
+    df["Nsurp_proxy"] = df["N_tot_in"] - df["N_out"]
+
+    # Keep legacy names only if missing
+    if "NUE" not in df.columns:
+        df["NUE"] = df["NUE_proxy"]
+    if "Nsurp" not in df.columns:
+        df["Nsurp"] = df["Nsurp_proxy"]
+
+    return df
 
 
 # --------------------------------------------------------------------------------------
@@ -1067,11 +1110,16 @@ def solve_lp_for_env(
 
 @dataclass
 class CandidatePoint:
-    """One precomputed candidate for a (farm, field, year)."""
-    red_level: float  # kg/ha reduction tag used to generate the simulation
-    N: float          # realized seasonal applied N (kg/ha)
+    red_level: float
+    N: float
     NUE: float
     Nsurp: float
+    N_out: float = np.nan
+    N_depo: float = np.nan
+    N_seed: float = np.nan
+    score_nue: float = np.nan
+    score_nsurp: float = np.nan
+    score_total: float = np.nan
 
 
 @dataclass
@@ -1086,14 +1134,450 @@ class DiscreteLPResult:
     reason: str
 
 
+def _safe_float(x, default=np.nan) -> float:
+    try:
+        return float(x)
+    except Exception:
+        return float(default)
+
+
+def _crop_seed_n(crop: str) -> float:
+    c = str(crop).strip().lower().replace("_", " ")
+    if "potato" in c:
+        return 10.0
+    if "winter" in c and "wheat" in c:
+        return 3.5
+    if "sugar" in c and "beet" in c:
+        return 0.0
+    return 0.0
+
+
+def _bounded_range_score(x: float, low: float, high: float, max_dev: float) -> float:
+    try:
+        x = float(x)
+    except Exception:
+        return 0.0
+    if not np.isfinite(x):
+        return 0.0
+    if low <= x <= high:
+        return 1.0
+    if x < low:
+        dist = low - x
+    else:
+        dist = x - high
+    if max_dev <= 0:
+        return 0.0
+    return float(max(0.0, 1.0 - dist / max_dev))
+
+
+def _target_peak_score(x: float, target: float, width: float, clip: bool = True) -> float:
+    """
+    Triangular peak score centered at `target`.
+
+    Score is 1 at the target and decreases linearly with absolute distance.
+    `width` controls how far from the target the score decays to 0.
+    """
+    try:
+        x = float(x)
+    except Exception:
+        return 0.0
+    if not np.isfinite(x):
+        return 0.0
+    if width <= 0:
+        return 1.0 if abs(x - target) <= 1e-12 else 0.0
+
+    score = 1.0 - abs(x - float(target)) / float(width)
+    return float(max(score, 0.0)) if clip else float(score)
+
+
+def _priority_weights(
+    field_ids: list[Hashable],
+    areas: dict[Hashable, float],
+    field_crop: dict[Hashable, str],
+) -> dict[Hashable, float]:
+    """
+    Priority order:
+      1) largest-area field
+      2) potato fields
+      3) others
+    Encoded as weights in the objective.
+    """
+    weights = {fid: 1.0 for fid in field_ids}
+    if not field_ids:
+        return weights
+
+    largest_area_fid = max(field_ids, key=lambda f: areas.get(f, 1.0))
+    weights[largest_area_fid] = 3.0
+
+    for fid in field_ids:
+        crop = str(field_crop.get(fid, "")).lower()
+        if "potato" in crop:
+            weights[fid] = max(weights.get(fid, 1.0), 2.0)
+
+    return weights
+
+
+def _last_finite_value(seq):
+    if seq is None:
+        return None
+    try:
+        arr = np.asarray(seq, dtype=float)
+    except Exception:
+        return None
+    if arr.size == 0:
+        return None
+    mask = np.isfinite(arr)
+    if not np.any(mask):
+        return None
+    return float(arr[np.where(mask)[0][-1]])
+
+
+def _candidate_point_from_field_info(field_info: dict, *, red_level: float) -> CandidatePoint | None:
+    if not isinstance(field_info, dict):
+        return None
+
+    n_action = _last_finite_value(field_info.get("Naction", None))
+    if n_action is None:
+        return None
+
+    nue_val = _last_finite_value(field_info.get("NUE", None))
+    if nue_val is None:
+        nue_val = _last_finite_value(field_info.get("Nue", None))
+
+    nsurp_val = _last_finite_value(field_info.get("Nsurp", None))
+    n_out = _last_finite_value(field_info.get("NamountSO", None))
+    no3_depo = _last_finite_value(field_info.get("RNO3DEPOSTT", None))
+    nh4_depo = _last_finite_value(field_info.get("RNH4DEPOSTT", None))
+
+    crop_val = "unknown"
+    crop_name = field_info.get("CropName", None)
+    if crop_name is not None:
+        try:
+            if isinstance(crop_name, (list, tuple, np.ndarray)) and len(crop_name) > 0:
+                crop_val = str(crop_name[-1])
+            else:
+                crop_val = str(crop_name)
+        except Exception:
+            crop_val = "unknown"
+
+    n_seed = _crop_seed_n(crop_val)
+    n_depo = float(
+        (0.0 if no3_depo is None or not np.isfinite(no3_depo) else no3_depo)
+        + (0.0 if nh4_depo is None or not np.isfinite(nh4_depo) else nh4_depo)
+    )
+
+    if n_out is not None and np.isfinite(n_out):
+        n_tot_in = float(n_action) + float(n_seed) + float(n_depo)
+        nue_proxy = float(n_out) / n_tot_in if n_tot_in > 0 else np.nan
+        nsurp_proxy = float(n_tot_in) - float(n_out)
+    else:
+        nue_proxy = float(nue_val) if nue_val is not None and np.isfinite(nue_val) else np.nan
+        nsurp_proxy = float(nsurp_val) if nsurp_val is not None and np.isfinite(nsurp_val) else np.nan
+
+    return CandidatePoint(
+        red_level=float(red_level),
+        N=float(n_action),
+        NUE=float(nue_proxy) if np.isfinite(nue_proxy) else np.nan,
+        Nsurp=float(nsurp_proxy) if np.isfinite(nsurp_proxy) else np.nan,
+        N_out=float(n_out) if n_out is not None and np.isfinite(n_out) else np.nan,
+        N_depo=float(n_depo),
+        N_seed=float(n_seed),
+    )
+
+
+def _candidate_reduction_grid(max_budget: float, step: float = 20.0) -> list[float]:
+    if not np.isfinite(max_budget) or max_budget <= 0:
+        return [0.0]
+    vals = list(np.arange(0.0, float(max_budget) + 1e-9, float(step)))
+    if abs(vals[-1] - float(max_budget)) > 1e-9:
+        vals.append(float(max_budget))
+    return [float(v) for v in vals]
+
+
+def _serialize_alloc_history(history: dict[int, dict[Hashable, float]]) -> dict[int, dict[str, float]]:
+    out: dict[int, dict[str, float]] = {}
+    for year, allocs in history.items():
+        out[int(year)] = {str(fid): float(val) for fid, val in allocs.items()}
+    return out
+
+
+def _get_rss_mb() -> float:
+    """Best-effort resident-set size in MB."""
+    try:
+        rss_raw = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # macOS usually reports bytes, Linux usually reports KB
+        if rss_raw > 10_000_000:
+            return float(rss_raw) / (1024.0 * 1024.0)
+        return float(rss_raw) / 1024.0
+    except Exception:
+        return float("nan")
+
+
+def _maybe_start_tracemalloc(enabled: bool) -> None:
+    if not enabled:
+        return
+    try:
+        if not tracemalloc.is_tracing():
+            tracemalloc.start(25)
+    except Exception:
+        pass
+
+
+def _format_top_allocations(limit: int = 5) -> str:
+    try:
+        if not tracemalloc.is_tracing():
+            return "tracemalloc_off"
+        snap = tracemalloc.take_snapshot()
+        stats = snap.statistics("lineno")[:limit]
+        return " | ".join(
+            f"{s.traceback[0]}: {s.size / (1024.0 * 1024.0):.2f} MB"
+            for s in stats
+        )
+    except Exception as e:
+        return f"tracemalloc_error:{e}"
+
+
+def _memory_log(label: str, *, enabled: bool = False) -> None:
+    if not enabled:
+        return
+    gc.collect()
+    rss = _get_rss_mb()
+    top = _format_top_allocations(limit=5)
+    print(f"[mem] {label} rss_mb={rss:.2f} top={top}")
+
+
+
+# Helper to reset and replay allocations in an existing env instance.
+def _reset_env_for_replay(
+    env,
+    *,
+    farm_dict_by_year: dict[int, dict],
+    season_years: list[int],
+    allocation_history: dict[int, dict[Hashable, float]],
+    target_year: int,
+    days_before_sowing: int = 7,
+    stop_at_target_preseason: bool = True,
+):
+    """
+    Reuse an existing MultiFieldEnv instance by resetting/reconfiguring it and replaying
+    accepted allocations up to the target year.
+
+    This avoids constructing a brand-new MultiFieldEnv object for every replay.
+    """
+    farm0 = farm_dict_by_year[int(season_years[0])]
+
+    if hasattr(env, "set_new_fields"):
+        env.set_new_fields(farm0)
+
+    env.reset(options={
+        "year": int(season_years[0]),
+        "eval_horizon_years": list(season_years),
+        "farm_dict_by_year": farm_dict_by_year,
+        "preseason_allocation": True,
+        "days_before_sowing": int(days_before_sowing),
+    })
+
+    for sy in season_years:
+        sy = int(sy)
+        env.advance_fields_to_allocation_dates(
+            days_before_sowing=int(days_before_sowing),
+            season_year=sy,
+            farm_dict_by_year=farm_dict_by_year,
+        )
+
+        if sy == int(target_year) and bool(stop_at_target_preseason):
+            break
+
+        hist = allocation_history.get(sy, None)
+        if hist is None:
+            raise RuntimeError(
+                f"Missing replay allocation history for season {sy} while rebuilding target year {target_year}."
+            )
+
+        reductions_vec = []
+        for fid in env.possible_agents:
+            val = hist.get(fid, hist.get(str(fid), None))
+            if val is None:
+                raise RuntimeError(f"Missing replay allocation for field {fid} in season {sy}.")
+            reductions_vec.append(float(val))
+
+        env.allocate_bandit_budgets(reductions_vec)
+        env.run_til_past_season_year(season_year=sy)
+        gc.collect()
+
+    return env
+
+def _rebuild_env_with_history(
+    env_template_or_cls,
+    *,
+    farm_dict_by_year: dict[int, dict],
+    season_years: list[int],
+    allocation_history: dict[int, dict[Hashable, float]],
+    target_year: int,
+    days_before_sowing: int = 7,
+    stop_at_target_preseason: bool = True,
+):
+    """
+    Rebuild a fresh MultiFieldEnv from scratch and replay accepted allocations up to
+    the preseason allocation point of `target_year`.
+    """
+    env_cls = env_template_or_cls if isinstance(env_template_or_cls, type) else env_template_or_cls.__class__
+    farm0 = farm_dict_by_year[int(season_years[0])]
+
+    new_env = env_cls(
+        training=False,
+        render=False,
+        farm_dict=farm0,
+        reward='NSU',
+    )
+
+    return _reset_env_for_replay(
+        new_env,
+        farm_dict_by_year=farm_dict_by_year,
+        season_years=season_years,
+        allocation_history=allocation_history,
+        target_year=target_year,
+        days_before_sowing=days_before_sowing,
+        stop_at_target_preseason=stop_at_target_preseason,
+    )
+
+
+def _save_online_oracle_progress(
+    *,
+    checkpoint_path: str | os.PathLike,
+    farm_key: str,
+    season_year: int,
+    reductions_vec_units10: np.ndarray,
+    lp_diag,
+    allocation_history: dict[int, dict[Hashable, float]],
+) -> None:
+    payload = {
+        "farm_key": str(farm_key),
+        "season_year": int(season_year),
+        "reductions_vec_units10": np.asarray(reductions_vec_units10, dtype=float),
+        "chosen_red_level": np.asarray(getattr(lp_diag, "chosen_red_level", []), dtype=float),
+        "chosen_N": np.asarray(getattr(lp_diag, "chosen_N", []), dtype=float),
+        "total_N": float(getattr(lp_diag, "total_N", np.nan)),
+        "feasible": bool(getattr(lp_diag, "feasible", False)),
+        "reason": str(getattr(lp_diag, "reason", "unknown")),
+        "allocation_history": _serialize_alloc_history(allocation_history),
+    }
+
+    checkpoint_path = Path(checkpoint_path)
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(checkpoint_path, "wb") as f:
+        pickle.dump(payload, f)
+
+
+def _generate_online_candidates_for_field_worker(
+    *,
+    env_cls,
+    farm_dict_by_year: dict[int, dict],
+    season_years: list[int],
+    allocation_history: dict[int, dict[Hashable, float]],
+    season_year: int,
+    field_id: Hashable,
+    days_before_sowing: int,
+    reduction_step: float,
+    debug_memory: bool = False,
+) -> tuple[Hashable, list[CandidatePoint]]:
+    """
+    Worker for online oracle candidate generation.
+
+    Reuses a single env object for one field and repeatedly resets/replays it,
+    instead of constructing a brand-new MultiFieldEnv for every candidate.
+    """
+    _maybe_start_tracemalloc(debug_memory)
+    _memory_log(f"worker_start field={field_id} season={season_year}", enabled=debug_memory)
+
+    farm0 = farm_dict_by_year[int(season_years[0])]
+    live_env = env_cls(
+        training=False,
+        render=False,
+        farm_dict=farm0,
+        reward='NSU',
+    )
+
+    try:
+        live_env = _reset_env_for_replay(
+            live_env,
+            farm_dict_by_year=farm_dict_by_year,
+            season_years=season_years,
+            allocation_history=allocation_history,
+            target_year=int(season_year),
+            days_before_sowing=int(days_before_sowing),
+            stop_at_target_preseason=True,
+        )
+
+        try:
+            max_budget = float(live_env.get_per_parcel_max_budget(field_id))
+        except Exception:
+            max_budget = np.nan
+
+        candidates_for_field: list[CandidatePoint] = []
+        gc.collect()
+
+        red_grid = _candidate_reduction_grid(max_budget, step=reduction_step)
+
+        for red_level in red_grid:
+            try:
+                live_env = _reset_env_for_replay(
+                    live_env,
+                    farm_dict_by_year=farm_dict_by_year,
+                    season_years=season_years,
+                    allocation_history=allocation_history,
+                    target_year=int(season_year),
+                    days_before_sowing=int(days_before_sowing),
+                    stop_at_target_preseason=True,
+                )
+
+                allocation = max(0.0, float(max_budget) - float(red_level))
+                live_env.set_per_parcel_budget(field_id, allocation)
+
+                if hasattr(live_env, "_get_global_budget_left"):
+                    live_env.global_budget_left = live_env._get_global_budget_left()
+                    live_env.global_allocated_budget = live_env.global_budget_left
+
+                live_env.run_til_past_season_year(season_year=int(season_year))
+                season_info = live_env.collect_agent_infos_for_season(int(season_year))
+                point = _candidate_point_from_field_info(
+                    season_info.get(field_id, {}),
+                    red_level=float(red_level),
+                )
+                if point is not None:
+                    candidates_for_field.append(point)
+            except Exception:
+                continue
+            finally:
+                gc.collect()
+
+        _memory_log(
+            f"worker_end field={field_id} season={season_year} n_candidates={len(candidates_for_field)}",
+            enabled=debug_memory,
+        )
+        candidates_for_field.sort(key=lambda p: (p.N, p.red_level))
+        return field_id, candidates_for_field
+    finally:
+        try:
+            live_env.close()
+        except Exception:
+            pass
+        finally:
+            try:
+                del live_env
+            except Exception:
+                pass
+            gc.collect()
+
+
 def build_candidate_grid(
     df: pd.DataFrame,
     *,
     farm_id: Hashable,
     year: int,
     field_ids: list[Hashable] | None = None,
-    nue_range: tuple[float, float] = (0.5, 0.9),
-    nsurp_range: tuple[float, float] = (0.0, 80.0),
+    nue_range: tuple[float, float] = (0.5, 0.8),
+    nsurp_range: tuple[float, float] = (20.0, 80.0),
     require_finite: bool = True,
     filter_feasible: bool = True,
     keep_closest_if_infeasible: bool = True,
@@ -1101,10 +1585,13 @@ def build_candidate_grid(
     """
     Build per-field candidate lists from a precomputed response DataFrame.
 
-    df must include:
-      ['farm_id','field_id','year','red_level','N','NUE','Nsurp']
+    Expected minimum columns:
+      ['farm_id', 'field_id', 'year', 'red_level', 'N']
 
-    Returns dict[field_id] -> list of CandidatePoint sorted by N ascending.
+    Optional proxy columns:
+      ['N_out', 'N_depo', 'N_seed', 'NUE_proxy', 'Nsurp_proxy']
+
+    Returns dict[field_id] -> list[CandidatePoint] sorted by N ascending.
     """
     lo_nue, hi_nue = float(nue_range[0]), float(nue_range[1])
     lo_ns, hi_ns = float(nsurp_range[0]), float(nsurp_range[1])
@@ -1117,42 +1604,48 @@ def build_candidate_grid(
         wanted = {str(x) for x in field_ids}
         dff = dff[dff["field_id"].astype(str).isin(wanted)]
 
-    # drop NaN/inf red_level
     if "red_level" in dff.columns:
-        dff = dff[np.isfinite(dff["red_level"].to_numpy(dtype=float))]
+        dff = dff[np.isfinite(pd.to_numeric(dff["red_level"], errors="coerce").to_numpy(dtype=float))]
+
+    # Prefer proxy metrics if available
+    if "NUE_proxy" in dff.columns:
+        dff["NUE_eff"] = pd.to_numeric(dff["NUE_proxy"], errors="coerce")
+    else:
+        dff["NUE_eff"] = pd.to_numeric(dff.get("NUE", np.nan), errors="coerce")
+
+    if "Nsurp_proxy" in dff.columns:
+        dff["Nsurp_eff"] = pd.to_numeric(dff["Nsurp_proxy"], errors="coerce")
+    else:
+        dff["Nsurp_eff"] = pd.to_numeric(dff.get("Nsurp", np.nan), errors="coerce")
 
     if require_finite:
-        for col in ("N", "NUE", "Nsurp"):
+        for col in ("N", "NUE_eff", "Nsurp_eff"):
             if col in dff.columns:
-                dff = dff[np.isfinite(dff[col].to_numpy(dtype=float))]
+                dff = dff[np.isfinite(pd.to_numeric(dff[col], errors="coerce").to_numpy(dtype=float))]
 
-    # keep only feasible points; if a field has no feasible points, optionally keep the closest one
     if filter_feasible:
         feas = (
-                dff["NUE"].between(lo_nue, hi_nue, inclusive="both")
-                & dff["Nsurp"].between(lo_ns, hi_ns, inclusive="both")
+            dff["NUE_eff"].between(lo_nue, hi_nue, inclusive="both")
+            & dff["Nsurp_eff"].between(lo_ns, hi_ns, inclusive="both")
         )
 
         if keep_closest_if_infeasible:
-            # Penalty = total constraint violation (0 means feasible)
-
-            nue = dff["NUE"].to_numpy(dtype=float)
-            ns = dff["Nsurp"].to_numpy(dtype=float)
+            nue = dff["NUE_eff"].to_numpy(dtype=float)
+            ns = dff["Nsurp_eff"].to_numpy(dtype=float)
 
             nue_v = np.maximum(0.0, lo_nue - nue) + np.maximum(0.0, nue - hi_nue)
             ns_v = np.maximum(0.0, lo_ns - ns) + np.maximum(0.0, ns - hi_ns)
 
             dff = dff.copy()
             dff["__feas__"] = feas.to_numpy(dtype=bool)
-            dff["__penalty__"] = (nue_v + ns_v)
+            dff["__penalty__"] = nue_v + ns_v
 
             kept = []
             for fid, g in dff.groupby("field_id", sort=False):
                 gf = g[g["__feas__"]]
                 if len(gf) > 0:
-                    kept.append(gf)  # keep all feasible points for this field
+                    kept.append(gf)
                 else:
-                    # keep single closest infeasible point; tie-break by low N
                     kept.append(g.sort_values(["__penalty__", "N"], ascending=[True, True]).head(1))
 
             dff = pd.concat(kept, axis=0, ignore_index=True) if kept else dff.iloc[0:0]
@@ -1162,27 +1655,29 @@ def build_candidate_grid(
 
     out: dict[Hashable, list[CandidatePoint]] = {}
     for fid, g in dff.groupby("field_id", sort=False):
-        pts = [
-            CandidatePoint(
-                red_level=float(row["red_level"]),
-                N=float(row["N"]),
-                NUE=float(row["NUE"]),
-                Nsurp=float(row["Nsurp"]),
+        pts = []
+        for _, row in g.iterrows():
+            pts.append(
+                CandidatePoint(
+                    red_level=_safe_float(row.get("red_level", np.nan)),
+                    N=_safe_float(row.get("N", np.nan)),
+                    NUE=_safe_float(row.get("NUE_eff", np.nan)),
+                    Nsurp=_safe_float(row.get("Nsurp_eff", np.nan)),
+                    N_out=_safe_float(row.get("N_out", np.nan)),
+                    N_depo=_safe_float(row.get("N_depo", np.nan)),
+                    N_seed=_safe_float(row.get("N_seed", np.nan)),
+                )
             )
-            for _, row in g.iterrows()
-        ]
-        pts.sort(key=lambda p: (p.N, p.red_level))  # objective is min N
+        pts.sort(key=lambda p: (p.N, p.red_level))
         if pts:
             out[fid] = pts
 
-    # preserve env order if provided
     if field_ids is not None and out:
         ordered: dict[Hashable, list[CandidatePoint]] = {}
         for fid in field_ids:
             if fid in out:
                 ordered[fid] = out[fid]
             else:
-                # try string match
                 for k in list(out.keys()):
                     if str(k) == str(fid):
                         ordered[fid] = out[k]
@@ -1193,6 +1688,199 @@ def build_candidate_grid(
         out = ordered
 
     return out
+
+
+def solve_discrete_score_oracle(
+    candidates: dict[Hashable, list[CandidatePoint]],
+    *,
+    field_priority_weight: Optional[dict[Hashable, float]] = None,
+    total_budget: float | None = None,
+    nue_range: tuple[float, float] = (0.5, 0.8),
+    nsurp_range: tuple[float, float] = (20.0, 80.0),
+    nue_target: float = 0.8,
+    nsurp_target: float = 30.0,
+    nue_width: float = 0.2,
+    nsurp_width: float = 20.0,
+    score_mode: str = "peak",
+    tie_break_eps: float = 1e-9,
+) -> tuple[dict[Hashable, CandidatePoint], bool, str]:
+    """
+    Lexicographic discrete oracle over precomputed candidates.
+
+    Stage 1:
+        maximize weighted agronomic score
+    Stage 2:
+        among all score-optimal solutions, minimize total N
+
+    This avoids the degenerate pure-min-N solution while still giving a true
+    "minimum-N subject to best achievable score" oracle.
+    """
+    if not candidates:
+        return {}, False, "no_candidates"
+
+    try:
+        import pulp
+    except Exception as e:
+        return {}, False, f"missing_pulp:{e}"
+
+    lo_nue, hi_nue = float(nue_range[0]), float(nue_range[1])
+    lo_ns, hi_ns = float(nsurp_range[0]), float(nsurp_range[1])
+
+    weights = field_priority_weight or {fid: 1.0 for fid in candidates.keys()}
+
+    # Precompute candidate scores once
+    raw_score_map: dict[tuple[Hashable, int], float] = {}
+    score_map: dict[tuple[Hashable, int], float] = {}
+    for fid, pts in candidates.items():
+        if not pts:
+            return {}, False, f"no_candidates_for_field:{fid}"
+        for j, p in enumerate(pts):
+            if score_mode == "peak":
+                s_nue = _target_peak_score(
+                    p.NUE,
+                    target=float(nue_target),
+                    width=float(nue_width),
+                )
+                s_ns = _target_peak_score(
+                    p.Nsurp,
+                    target=float(nsurp_target),
+                    width=float(nsurp_width),
+                )
+            elif score_mode == "range":
+                s_nue = _bounded_range_score(p.NUE, lo_nue, hi_nue, nue_width)
+                s_ns = _bounded_range_score(p.Nsurp, lo_ns, hi_ns, nsurp_width)
+            else:
+                raise ValueError(f"Unknown score_mode: {score_mode}")
+
+            s_total = s_nue * s_ns
+
+            pts[j].score_nue = float(s_nue)
+            pts[j].score_nsurp = float(s_ns)
+            pts[j].score_total = float(s_total)
+            score_map[(fid, j)] = float(weights.get(fid, 1.0)) * float(s_total)
+            raw_score_map[(fid, j)] = float(s_total)
+
+    def _build_problem(
+            objective: str,
+            target_weighted_score: float | None = None,
+            target_raw_score: float | None = None,
+    ):
+        prob = pulp.LpProblem(
+            f"discrete_score_oracle_{objective}",
+            pulp.LpMaximize if objective in {"score", "raw_score"} else pulp.LpMinimize,
+        )
+        x = {}
+
+        for fid, pts in candidates.items():
+            for j, _ in enumerate(pts):
+                x[(fid, j)] = pulp.LpVariable(
+                    f"x_{str(fid).replace('-', '_')}_{j}",
+                    cat="Binary",
+                )
+
+        # exactly one candidate per field
+        for fid, pts in candidates.items():
+            prob += pulp.lpSum(x[(fid, j)] for j in range(len(pts))) == 1, f"one_choice_{str(fid)}"
+
+        # optional farm budget
+        if total_budget is not None:
+            prob += (
+                    pulp.lpSum(
+                        float(candidates[fid][j].N) * x[(fid, j)]
+                        for fid in candidates
+                        for j in range(len(candidates[fid]))
+                    )
+                    <= float(total_budget)
+            ), "farm_budget"
+
+        total_weighted_score_expr = pulp.lpSum(
+            score_map[(fid, j)] * x[(fid, j)]
+            for fid in candidates
+            for j in range(len(candidates[fid]))
+        )
+
+        total_raw_score_expr = pulp.lpSum(
+            raw_score_map[(fid, j)] * x[(fid, j)]
+            for fid in candidates
+            for j in range(len(candidates[fid]))
+        )
+
+        total_n_expr = pulp.lpSum(
+            float(candidates[fid][j].N) * x[(fid, j)]
+            for fid in candidates
+            for j in range(len(candidates[fid]))
+        )
+
+        if target_weighted_score is not None:
+            prob += (
+                    total_weighted_score_expr >= float(target_weighted_score) - float(tie_break_eps)
+            ), "fix_optimal_weighted_score"
+
+        if target_raw_score is not None:
+            prob += (
+                    total_raw_score_expr >= float(target_raw_score) - float(tie_break_eps)
+            ), "fix_optimal_raw_score"
+
+        if objective == "score":
+            prob += total_weighted_score_expr
+        elif objective == "raw_score":
+            prob += total_raw_score_expr
+        elif objective == "min_n":
+            prob += total_n_expr
+        else:
+            raise ValueError(f"Unknown objective stage: {objective}")
+
+        return prob, x, total_weighted_score_expr, total_raw_score_expr, total_n_expr
+
+    # Stage 1: maximize priority-weighted score
+    prob1, x1, weighted_score_expr1, _, _ = _build_problem("score")
+    status1 = prob1.solve(pulp.PULP_CBC_CMD(msg=False))
+    status1_str = pulp.LpStatus.get(status1, str(status1))
+    if status1_str != "Optimal":
+        return {}, False, f"solver_status_stage1:{status1_str}"
+
+    best_weighted_score = pulp.value(weighted_score_expr1)
+    if best_weighted_score is None:
+        return {}, False, "stage1_no_score"
+
+    # Stage 2: among Stage-1-optimal solutions, maximize total unweighted score
+    prob2, x2, _, raw_score_expr2, _ = _build_problem(
+        "raw_score",
+        target_weighted_score=float(best_weighted_score),
+    )
+    status2 = prob2.solve(pulp.PULP_CBC_CMD(msg=False))
+    status2_str = pulp.LpStatus.get(status2, str(status2))
+    if status2_str != "Optimal":
+        return {}, False, f"solver_status_stage2:{status2_str}"
+
+    best_raw_score = pulp.value(raw_score_expr2)
+    if best_raw_score is None:
+        return {}, False, "stage2_no_score"
+
+    # Stage 3: among Stage-1/2-optimal solutions, minimize total N
+    prob3, x3, _, _, _ = _build_problem(
+        "min_n",
+        target_weighted_score=float(best_weighted_score),
+        target_raw_score=float(best_raw_score),
+    )
+    status3 = prob3.solve(pulp.PULP_CBC_CMD(msg=False))
+    status3_str = pulp.LpStatus.get(status3, str(status3))
+    if status3_str != "Optimal":
+        return {}, False, f"solver_status_stage3:{status3_str}"
+
+    chosen: dict[Hashable, CandidatePoint] = {}
+    for fid, pts in candidates.items():
+        picked = None
+        for j, p in enumerate(pts):
+            val = pulp.value(x3[(fid, j)])
+            if val is not None and float(val) > 0.5:
+                picked = p
+                break
+        if picked is None:
+            return chosen, False, f"no_selected_candidate:{fid}"
+        chosen[fid] = picked
+
+    return chosen, True, "ok"
 
 
 def solve_discrete_minN(
@@ -1223,6 +1911,247 @@ def solve_discrete_minN(
     return chosen, True, "ok"
 
 
+def solve_discrete_lp_online_for_env(
+    env,
+    *,
+    farm_dict_by_year: dict[int, dict],
+    season_years: list[int],
+    season_year: int,
+    total_budget: float | None = None,
+    nue_range: tuple[float, float] = (0.5, 0.8),
+    nsurp_range: tuple[float, float] = (10.0, 80.0),
+    reduction_step: float = 20.0,
+    allocation_history: dict[int, dict[Hashable, float]] | None = None,
+    checkpoint_path: str | os.PathLike | None = None,
+    farm_key: str = "online",
+    days_before_sowing: int = 7,
+    n_jobs: int | None = None,
+    debug_memory: bool = False,
+) -> tuple[np.ndarray, DiscreteLPResult, dict[Hashable, float]]:
+    """
+    This is slower than the offline grid, but avoids the deepcopy instability and the
+    trajectory-stitching mismatch from precomputed candidate tables. The farm-level
+    allocation uses a three-stage lexicographic objective that first protects
+    higher-priority fields, then improves total closeness to target across all fields,
+    and only then minimizes total N.
+    """
+    season_year = int(season_year)
+    season_years = [int(y) for y in season_years]
+    allocation_history = {} if allocation_history is None else dict(allocation_history)
+
+    _maybe_start_tracemalloc(debug_memory)
+    _memory_log(f"online_solver_start farm={farm_key} season={season_year}", enabled=debug_memory)
+
+    live_env = _rebuild_env_with_history(
+        env,
+        farm_dict_by_year=farm_dict_by_year,
+        season_years=season_years,
+        allocation_history=allocation_history,
+        target_year=season_year,
+        days_before_sowing=days_before_sowing,
+        stop_at_target_preseason=True,
+    )
+
+    field_ids = list(getattr(live_env, "possible_agents", []))
+    if not field_ids:
+        field_ids = list(getattr(live_env, "parcel_meta_infos", {}).keys())
+
+    def _field_area(fid) -> float:
+        if hasattr(live_env, "get_per_parcel_area"):
+            try:
+                return float(live_env.get_per_parcel_area(fid))
+            except Exception:
+                pass
+        try:
+            if hasattr(live_env, "fields") and fid in live_env.fields:
+                fenv = live_env.fields[fid]
+                fenv = getattr(fenv, "unwrapped", fenv)
+                for attr in ("area", "AREA", "parcel_area"):
+                    if hasattr(fenv, attr):
+                        return float(getattr(fenv, attr))
+        except Exception:
+            pass
+        return 1.0
+
+    def _field_crop(fid) -> str:
+        try:
+            if hasattr(live_env, "fields") and fid in live_env.fields:
+                fenv = live_env.fields[fid]
+                fenv = getattr(fenv, "unwrapped", fenv)
+                if hasattr(fenv, "crop"):
+                    return str(getattr(fenv, "crop"))
+        except Exception:
+            pass
+        return "unknown"
+
+    areas = {fid: _field_area(fid) for fid in field_ids}
+    field_crop = {fid: _field_crop(fid) for fid in field_ids}
+    priority_weight = _priority_weights(field_ids, areas, field_crop)
+
+    # Cache the preseason target-year state once. Candidate evaluation then starts from
+    # this cached state instead of replaying all past seasons for every field × level.
+    preseason_template = {
+        "agent_infos": {},
+        "budget_left": {},
+        "budget_total": {},
+        "max_budget": {},
+    }
+    for fid in field_ids:
+        try:
+            preseason_template["agent_infos"][fid] = copy.deepcopy(live_env.fields[fid].unwrapped.infos)
+        except Exception:
+            preseason_template["agent_infos"][fid] = None
+        try:
+            preseason_template["budget_left"][fid] = float(live_env.get_per_parcel_budget_left(fid))
+        except Exception:
+            preseason_template["budget_left"][fid] = None
+        try:
+            preseason_template["budget_total"][fid] = float(live_env.get_per_parcel_budget(fid))
+        except Exception:
+            preseason_template["budget_total"][fid] = None
+        try:
+            preseason_template["max_budget"][fid] = float(live_env.get_per_parcel_max_budget(fid))
+        except Exception:
+            preseason_template["max_budget"][fid] = None
+
+    candidates: dict[Hashable, list[CandidatePoint]] = {fid: [] for fid in field_ids}
+    env_cls = env.__class__
+    n_jobs_eff = int(n_jobs) if n_jobs is not None else max(1, min(len(field_ids), (os.cpu_count() or 1)))
+
+    if n_jobs_eff <= 1:
+        for fid in field_ids:
+            try:
+                fid_out, pts = _generate_online_candidates_for_field_worker(
+                    env_cls=env_cls,
+                    farm_dict_by_year=farm_dict_by_year,
+                    season_years=season_years,
+                    allocation_history=allocation_history,
+                    season_year=int(season_year),
+                    field_id=fid,
+                    days_before_sowing=int(days_before_sowing),
+                    reduction_step=float(reduction_step),
+                    debug_memory=debug_memory,
+                )
+                candidates[fid_out] = pts
+            except Exception:
+                candidates[fid] = []
+    else:
+        futures = {}
+        try:
+            with ProcessPoolExecutor(max_workers=n_jobs_eff) as ex:
+                for fid in field_ids:
+                    fut = ex.submit(
+                        _generate_online_candidates_for_field_worker,
+                        env_cls=env_cls,
+                        farm_dict_by_year=farm_dict_by_year,
+                        season_years=season_years,
+                        allocation_history=allocation_history,
+                        season_year=int(season_year),
+                        field_id=fid,
+                        days_before_sowing=int(days_before_sowing),
+                        reduction_step=float(reduction_step),
+                        debug_memory=debug_memory,
+                    )
+                    futures[fut] = fid
+
+                for fut in as_completed(futures):
+                    fid = futures[fut]
+                    try:
+                        fid_out, pts = fut.result()
+                        candidates[fid_out] = pts
+                    except Exception:
+                        candidates[fid] = []
+        except Exception:
+            # Fallback to sequential if multiprocessing fails on this platform/env.
+            for fid in field_ids:
+                try:
+                    fid_out, pts = _generate_online_candidates_for_field_worker(
+                        env_cls=env_cls,
+                        farm_dict_by_year=farm_dict_by_year,
+                        season_years=season_years,
+                        allocation_history=allocation_history,
+                        season_year=int(season_year),
+                        field_id=fid,
+                        days_before_sowing=int(days_before_sowing),
+                        reduction_step=float(reduction_step),
+                        debug_memory=debug_memory,
+                    )
+                    candidates[fid_out] = pts
+                except Exception:
+                    candidates[fid] = []
+
+    _memory_log(f"online_solver_after_candidates farm={farm_key} season={season_year}", enabled=debug_memory)
+
+    chosen, feasible, reason = solve_discrete_score_oracle(
+        candidates,
+        field_priority_weight=priority_weight,
+        total_budget=total_budget,
+        nue_range=nue_range,
+        nsurp_range=nsurp_range,
+        nue_target=0.7,
+        nsurp_target=40.0,
+        nue_width=0.2,
+        nsurp_width=20.0,
+        score_mode="range",
+    )
+
+    chosen_red = []
+    chosen_N = []
+    reductions_history_for_year: dict[Hashable, float] = {}
+    for fid in field_ids:
+        p = chosen.get(fid, None)
+        if p is None:
+            chosen_red.append(0.0)
+            chosen_N.append(np.nan)
+            reductions_history_for_year[fid] = 0.0
+            feasible = False
+            if reason == "ok":
+                reason = f"missing_field_in_solution:{fid}"
+        else:
+            chosen_red.append(float(p.red_level))
+            chosen_N.append(float(p.N))
+            reductions_history_for_year[fid] = float(p.red_level) / 10.0
+
+    chosen_red = np.asarray(chosen_red, dtype=float)
+    chosen_N = np.asarray(chosen_N, dtype=float)
+    reductions_vec_units10 = chosen_red / 10.0
+
+    res = DiscreteLPResult(
+        farm_id=str(farm_key),
+        year=season_year,
+        field_ids=list(field_ids),
+        chosen_red_level=chosen_red,
+        chosen_N=chosen_N,
+        total_N=float(np.nansum(chosen_N)),
+        feasible=bool(feasible),
+        reason=str(reason),
+    )
+
+    allocation_history[season_year] = dict(reductions_history_for_year)
+    if checkpoint_path is not None:
+        _save_online_oracle_progress(
+            checkpoint_path=checkpoint_path,
+            farm_key=str(farm_key),
+            season_year=season_year,
+            reductions_vec_units10=reductions_vec_units10,
+            lp_diag=res,
+            allocation_history=allocation_history,
+        )
+
+    try:
+        live_env.close()
+    except Exception:
+        pass
+    finally:
+        try:
+            del live_env
+        except Exception:
+            pass
+        gc.collect()
+
+    return reductions_vec_units10, res, reductions_history_for_year
+
+
 def solve_discrete_lp_for_env(
     env,
     *,
@@ -1230,41 +2159,27 @@ def solve_discrete_lp_for_env(
     farm_id: Hashable,
     year: int,
     total_budget: float | None = None,
-    nue_range: tuple[float, float] = (0.5, 0.9),
-    nsurp_range: tuple[float, float] = (0.0, 80.0),
+    nue_range: tuple[float, float] = (0.5, 0.8),
+    nsurp_range: tuple[float, float] = (20.0, 80.0),
 ) -> tuple[np.ndarray, DiscreteLPResult]:
-    """Path-B benchmark: choose per-field reduction level from precomputed metrics.
-
-    Default (original) behavior:
-      - Build feasible candidate set per field (NUE/Nsurp within ranges).
-      - Choose the minimum-N point per field (minimize total N).
-
-    Fallback behavior (when infeasible or min-feasible exceeds budget):
-      - If a potato crop is present in this farm-year, prioritize the (largest-area) potato field by
-        maximizing NUE and minimizing Nsurp.
-      - Otherwise, prioritize the largest-area field.
-      - Non-priority fields are pushed toward low-N points.
-      - If total_budget is exceeded, reduce non-priority fields first.
-
-    Returns a reductions vector compatible with:
-        env.allocate_bandit_budgets(reductions_vec)
-    where reductions are in 10 kg/ha units.
     """
-
-    # print(df_metrics[df_metrics["farm_id"] == "farm12"].groupby("red_level").size())
-
+       The optimizer uses a three-stage lexicographic objective under an optional farm-level
+    N budget:
+      1) maximize a priority-weighted agronomic score
+      2) among Stage-1-optimal solutions, maximize total unweighted agronomic score
+      3) among Stage-1/2-optimal solutions, minimize total N
+    Priority order is encoded as:
+    """
     field_ids = list(getattr(env, "possible_agents", []))
     if not field_ids:
         field_ids = list(getattr(env, "parcel_meta_infos", {}).keys())
 
-    # --- helper: get per-field area for tie-breaking / priorities ---
     def _field_area(fid) -> float:
         if hasattr(env, "get_per_parcel_area"):
             try:
                 return float(env.get_per_parcel_area(fid))
             except Exception:
                 pass
-        # best-effort fallbacks
         try:
             if hasattr(env, "fields") and fid in env.fields:
                 fenv = env.fields[fid]
@@ -1278,8 +2193,22 @@ def solve_discrete_lp_for_env(
 
     areas = {fid: _field_area(fid) for fid in field_ids}
 
-    # 1) strict feasible candidates
-    cand_feas = build_candidate_grid(
+    # infer crop per field
+    dff_crop = df_metrics[(df_metrics["farm_id"] == farm_id) & (df_metrics["year"] == int(year))].copy()
+    field_crop: dict[Hashable, str] = {}
+    if not dff_crop.empty:
+        crop_col = "crop" if "crop" in dff_crop.columns else ("CropName" if "CropName" in dff_crop.columns else None)
+        if crop_col is not None:
+            for fid, g in dff_crop.groupby("field_id"):
+                try:
+                    c = g[crop_col].dropna().astype(str)
+                    field_crop[fid] = str(c.mode().iloc[0]) if len(c) else "unknown"
+                except Exception:
+                    field_crop[fid] = "unknown"
+
+    priority_weight = _priority_weights(field_ids, areas, field_crop)
+
+    cand_all = build_candidate_grid(
         df_metrics,
         farm_id=farm_id,
         year=int(year),
@@ -1287,232 +2216,25 @@ def solve_discrete_lp_for_env(
         nue_range=nue_range,
         nsurp_range=nsurp_range,
         require_finite=True,
-        filter_feasible=True,
+        filter_feasible=False,
     )
 
-    chosen, feasible, reason = solve_discrete_minN(cand_feas, total_budget=total_budget)
+    chosen, feasible, reason = solve_discrete_score_oracle(
+        cand_all,
+        field_priority_weight=priority_weight,
+        total_budget=total_budget,
+        nue_range=nue_range,
+        nsurp_range=nsurp_range,
+        nue_target=0.8,
+        nsurp_target=20.0,
+        nue_width=0.2,
+        nsurp_width=40.0,
+        score_mode="range",
+    )
 
-    # ------------------------------------------------------------------
-    # Special case: budget is so tight that even the minimum-N (feasible/closest)
-    # selection violates it. In that case we must allow moving to lower-N points
-    # that may violate NUE/Nsurp (since otherwise the problem is infeasible).
-    # Heuristic requested:
-    #   1) prioritize the single largest-area field (try to satisfy NUE/Nsurp if possible)
-    #   2) then prioritize potato fields
-    #   3) allocate remaining budget to minimize constraint-violation (closest-to-feasible)
-    # ------------------------------------------------------------------
-    if reason == "min_solution_exceeds_total_budget" and total_budget is not None:
-        B = float(total_budget)
-
-        # Build full candidate sets (do NOT filter feasible) so we can reduce N below feasible minima.
-        cand_all = build_candidate_grid(
-            df_metrics,
-            farm_id=farm_id,
-            year=int(year),
-            field_ids=field_ids,
-            nue_range=nue_range,
-            nsurp_range=nsurp_range,
-            require_finite=True,
-            filter_feasible=False,
-        )
-
-        lo_nue, hi_nue = float(nue_range[0]), float(nue_range[1])
-        lo_ns, hi_ns = float(nsurp_range[0]), float(nsurp_range[1])
-
-        def _penalty(p: CandidatePoint) -> float:
-            # total violation distance (0 is feasible)
-            nue_v = 0.0
-            if np.isfinite(p.NUE):
-                if p.NUE < lo_nue:
-                    nue_v += (lo_nue - p.NUE)
-                elif p.NUE > hi_nue:
-                    nue_v += (p.NUE - hi_nue)
-            else:
-                nue_v += 1e6
-
-            ns_v = 0.0
-            if np.isfinite(p.Nsurp):
-                if p.Nsurp < lo_ns:
-                    ns_v += (lo_ns - p.Nsurp)
-                elif p.Nsurp > hi_ns:
-                    ns_v += (p.Nsurp - hi_ns)
-            else:
-                ns_v += 1e6
-
-            return float(nue_v + ns_v)
-
-        def _is_feasible(p: CandidatePoint) -> bool:
-            return (
-                np.isfinite(p.NUE) and np.isfinite(p.Nsurp)
-                and (lo_nue <= p.NUE <= hi_nue)
-                and (lo_ns <= p.Nsurp <= hi_ns)
-            )
-
-        # Determine crop per field from df (most common crop label across grid points)
-        dff_crop = df_metrics[(df_metrics["farm_id"] == farm_id) & (df_metrics["year"] == int(year))].copy()
-        field_crop: dict[Hashable, str] = {}
-        if not dff_crop.empty and "crop" in dff_crop.columns:
-            for fid, g in dff_crop.groupby("field_id"):
-                try:
-                    c = g["crop"].dropna().astype(str)
-                    field_crop[fid] = str(c.mode().iloc[0]) if len(c) else "unknown"
-                except Exception:
-                    field_crop[fid] = "unknown"
-
-        def _is_potato(c: str) -> bool:
-            return "potato" in str(c).lower()
-
-        # Priority ordering: largest-area field first, then potato fields, then remaining by area desc.
-        largest_area_fid = max(field_ids, key=lambda f: areas.get(f, 1.0)) if field_ids else None
-        potato_fids = [fid for fid in field_ids if _is_potato(field_crop.get(fid, "")) and fid != largest_area_fid]
-        potato_fids.sort(key=lambda f: areas.get(f, 1.0), reverse=True)
-        rest_fids = [fid for fid in field_ids if fid not in ([largest_area_fid] if largest_area_fid is not None else []) and fid not in potato_fids]
-        rest_fids.sort(key=lambda f: areas.get(f, 1.0), reverse=True)
-
-        priority_order = ([largest_area_fid] if largest_area_fid is not None else []) + potato_fids + rest_fids
-
-        # For each field, sort candidates by increasing N (so we can fit under remaining budget)
-        cand_sorted = {fid: sorted(pts, key=lambda p: float(p.N)) for fid, pts in cand_all.items() if pts}
-
-        chosen = {}
-        remaining = B
-
-        for fid in priority_order:
-            pts = cand_sorted.get(fid, [])
-            if not pts:
-                continue
-
-            # Candidates that fit in remaining budget
-            fit = [p for p in pts if float(p.N) <= remaining + 1e-9]
-            if not fit:
-                # If nothing fits, pick the minimum-N option (will exceed) and break; infeasible budget.
-                chosen[fid] = pts[0]
-                remaining -= float(pts[0].N)
-                continue
-
-            if fid == largest_area_fid:
-                # Try to satisfy constraints for largest field; if possible, pick min-N feasible.
-                feas_fit = [p for p in fit if _is_feasible(p)]
-                if feas_fit:
-                    pick = min(feas_fit, key=lambda p: (p.N, _penalty(p)))
-                else:
-                    # Otherwise closest-to-feasible with smallest N tie-break.
-                    pick = min(fit, key=lambda p: (_penalty(p), p.N))
-            elif fid in potato_fids or (fid == largest_area_fid and _is_potato(field_crop.get(fid, ""))):
-                # Potato priority: maximize NUE, minimize Nsurp (with feasibility preference)
-                feas_fit = [p for p in fit if _is_feasible(p)]
-                base = feas_fit if feas_fit else fit
-                pick = max(base, key=lambda p: (p.NUE, -p.Nsurp, -p.N))
-            else:
-                # Remaining: closest-to-feasible first, then low N
-                pick = min(fit, key=lambda p: (_penalty(p), p.N))
-
-            chosen[fid] = pick
-            remaining -= float(pick.N)
-
-        # If we ended up exceeding budget due to empty fit on some earlier field, mark as infeasible.
-        totalN = float(sum(p.N for p in chosen.values())) if chosen else 0.0
-        feasible = bool(totalN <= B + 1e-6)
-        reason = "budget_scarcity_priority_allocation"
-
-    # Keep original behavior if feasible
-    if not (feasible and reason == "ok") and reason != "budget_scarcity_priority_allocation":
-        # 2) fallback: allow infeasible points but apply priorities
-        cand_all = build_candidate_grid(
-            df_metrics,
-            farm_id=farm_id,
-            year=int(year),
-            field_ids=field_ids,
-            nue_range=nue_range,
-            nsurp_range=nsurp_range,
-            require_finite=True,
-            filter_feasible=False,
-        )
-
-        # Determine crop per field from df (most common crop label across grid points)
-        dff = df_metrics[(df_metrics["farm_id"] == farm_id) & (df_metrics["year"] == int(year))].copy()
-        field_crop: dict[Hashable, str] = {}
-        if not dff.empty and "crop" in dff.columns:
-            for fid, g in dff.groupby("field_id"):
-                try:
-                    c = g["crop"].dropna().astype(str)
-                    field_crop[fid] = str(c.mode().iloc[0]) if len(c) else "unknown"
-                except Exception:
-                    field_crop[fid] = "unknown"
-
-        def _is_potato(c: str) -> bool:
-            return "potato" in str(c).lower()
-
-        potato_fields = [fid for fid in field_ids if _is_potato(field_crop.get(fid, ""))]
-        if potato_fields:
-            priority_fid = max(potato_fields, key=lambda f: areas.get(f, 1.0))
-            priority_mode = "potato"
-        else:
-            priority_fid = max(field_ids, key=lambda f: areas.get(f, 1.0)) if field_ids else None
-            priority_mode = "area"
-
-        # Choose one point per field
-        chosen = {}
-        for fid in field_ids:
-            pts = cand_all.get(fid, [])
-            if not pts:
-                continue
-            if fid == priority_fid:
-                # maximize NUE, then minimize Nsurp, then minimize N (tie-break)
-                best = max(pts, key=lambda p: (p.NUE, -p.Nsurp, -p.N))
-                chosen[fid] = best
-            else:
-                # prefer low N; keep NUE higher and Nsurp lower as tie-breakers
-                best = min(pts, key=lambda p: (p.N, -p.NUE, p.Nsurp))
-                chosen[fid] = best
-
-        # Repair to meet total_budget if needed by reducing non-priority fields first
-        if total_budget is not None and chosen:
-            B = float(total_budget)
-            pts_sorted = {fid: sorted(cand_all.get(fid, []), key=lambda p: p.N) for fid in field_ids}
-
-            # Current index per field in pts_sorted
-            idx_map: dict[Hashable, int] = {}
-            for fid in field_ids:
-                pts = pts_sorted.get(fid, [])
-                if not pts or fid not in chosen:
-                    continue
-                j = 0
-                for k, p in enumerate(pts):
-                    if abs(p.N - chosen[fid].N) < 1e-9 and abs(p.red_level - chosen[fid].red_level) < 1e-9:
-                        j = k
-                        break
-                idx_map[fid] = j
-
-            def _totalN() -> float:
-                return float(sum(chosen[f].N for f in chosen if np.isfinite(chosen[f].N)))
-
-            totalN = _totalN()
-            if totalN > B + 1e-9:
-                max_iter = 100000
-                it = 0
-                while totalN > B + 1e-9 and it < max_iter:
-                    it += 1
-
-                    reducible = [fid for fid in idx_map if idx_map[fid] > 0]
-                    if not reducible:
-                        break
-
-                    def _key(fid):
-                        pri_pen = 1 if fid == priority_fid else 0
-                        return (pri_pen, chosen[fid].N)
-
-                    fid = max(reducible, key=_key)
-                    idx_map[fid] -= 1
-                    chosen[fid] = pts_sorted[fid][idx_map[fid]]
-                    totalN = _totalN()
-
-        feasible = True
-        reason = f"fallback_priority_{priority_mode}:{priority_fid}" if priority_fid is not None else "fallback"
-
-    # Assemble vectors in env field order
     chosen_red = []
     chosen_N = []
+
     for fid in field_ids:
         p = None
         if fid in chosen:

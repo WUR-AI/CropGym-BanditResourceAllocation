@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Dict, Tuple, List, Hashable
 
 from cropgymzoo.utils.scenario_utils import model_picker, load_dict_fields
-from cropgymzoo.fit_nue_response import solve_discrete_lp_for_env, make_df_nue_response
+from cropgymzoo.fit_nue_response import make_df_nue_response, solve_discrete_lp_for_env, solve_discrete_lp_online_for_env
 
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -84,6 +84,26 @@ def farm_region_mapper(region: str, farmer_id: int) -> int:
         raise ValueError(f"Unknown region: {region}")
 
 
+def inverse_farm_region_mapper(global_farm_id: int) -> tuple[str, int]:
+    """
+    Maps global farm index (0–51) back to (region, farmer_id).
+
+    Global indices:
+        0–11   -> Gelderland farmer_id 0–11
+        12–24  -> Groningen farmer_id 0–12
+        25–51  -> Zeeland farmer_id 0–26
+    """
+    g = int(global_farm_id)
+    if 0 <= g < 12:
+        return "gelderland", g
+    elif 12 <= g < 25:
+        return "groningen", g - 12
+    elif 25 <= g < 52:
+        return "zeeland", g - 25
+    else:
+        raise ValueError(f"global farm id must be in range 0–51, got {global_farm_id}")
+
+
 def run_region_year(
         region: str,
         years: list,
@@ -92,6 +112,7 @@ def run_region_year(
         allocator: str = "None",
         subset: bool = False,
         render: bool = False,
+        farm: int | None = None,
 ):
     """
     Runs a multi-season evaluation for a region over all requested years.
@@ -114,15 +135,26 @@ def run_region_year(
 
 
     # Loop through farmers with a progress bar
-    num_farmers = len([name for name in os.listdir(_REGION_PATH) if "farmer" in name]) - 1
+    num_farmers = len([name for name in os.listdir(_REGION_PATH) if "farmer" in name])
 
+    if farm is not None:
+        farm = int(farm)
+        farm_region, farm_local_idx = inverse_farm_region_mapper(farm)
+        if region.lower() != farm_region.lower():
+            return {}
+        farmer_indices = [farm_local_idx]
+    elif subset:
+        farmer_indices = range(0, 2)
+    else:
+        farmer_indices = range(0, num_farmers)
 
-    if subset:
-        num_farmers = 2
     year_tag = f"{season_years[0]}-{season_years[-1]}" if len(season_years) > 1 else str(season_years[0])
 
+    desc = f"{region}-{year_tag}"
+    if farm is not None:
+        desc = f"{region}-{farm_local_idx}-{year_tag}, global farm {farm}"
 
-    for i in tqdm(range(num_farmers), desc=f"{region}-{year_tag} farmer"):
+    for i in tqdm(farmer_indices, desc=desc):
         info = None
         # Output file for this farmer, all seasons
         name = f"results_{scenario}_{region}_{year_tag}{name_allocator}_farmer_{i}.pkl"
@@ -167,7 +199,7 @@ def run_region_year(
         global_farm_id = None
         global_farm_idx = None
 
-        if allocator is not None and "LP" in allocator:
+        if allocator is not None and "LP" in allocator and "online" not in allocator.lower():
             # Path-B benchmark: use precomputed grid metrics (0,20,40,...) for this GLOBAL farm.
             global_farm_idx = int(farm_region_mapper(region, i))
             global_farm_id = f"farm{global_farm_idx}"
@@ -227,6 +259,28 @@ def run_region_year(
         })
 
         info_dict = {}
+        online_allocation_history: dict[int, dict[str, float]] = {}
+
+        online_ckpt_prefix = f"oracle_{scenario}_{region}_{year_tag}{name_allocator}_farmer_{i}"
+        online_ckpt_dir = os.path.join(_DEFAULT_RESULTSDIR, agent, "oracle_online_checkpoints")
+
+        for sy0 in season_years:
+            ckpt_y = os.path.join(
+                online_ckpt_dir,
+                f"{online_ckpt_prefix}_year_{int(sy0)}.pkl",
+            )
+            if not os.path.exists(ckpt_y):
+                continue
+
+            with open(ckpt_y, "rb") as f:
+                ckpt_payload = pickle.load(f)
+
+            hist = ckpt_payload.get("allocation_history", {})
+            if isinstance(hist, dict):
+                for yk, allocs in hist.items():
+                    yk = int(yk)
+                    if isinstance(allocs, dict):
+                        online_allocation_history[yk] = {str(k): float(v) for k, v in allocs.items()}
 
         next_states = None
         for sy in season_years:
@@ -246,30 +300,75 @@ def run_region_year(
                 for ag in env.possible_agents:
                     assert env.get_per_parcel_budget(ag) < env.get_per_parcel_max_budget(ag)
 
-
             if allocator is not None and "LP" in allocator:
-                if lp_df is None or global_farm_id is None:
-                    raise RuntimeError("LP allocator requested but lp_df/global_farm_id not initialized")
-
                 farm_budget = float(getattr(env, "global_budget", env._get_global_max_budget()))
-                if allocator == "LP_reduced" or ("reduced" in scenario):
+                if allocator == "LP_reduced" or allocator == "LP_online_reduced" or ("reduced" in scenario):
                     farm_budget = 0.7 * farm_budget
 
-                # Path-B discrete benchmark: pick the minimum-N feasible grid point per field
-                # subject to NUE/Nsurp bands. Returns reductions in 10 kg/ha units.
-                reductions_vec, lp_diag = solve_discrete_lp_for_env(
-                    env,
-                    df_metrics=lp_df,
-                    farm_id=global_farm_id,
-                    year=int(sy),
-                    total_budget=farm_budget,
-                    nue_range=(0.5, 0.9),
-                    nsurp_range=(0.0, 80.0),
-                )
-                env.allocate_bandit_budgets(reductions_vec)
+                if "online" in allocator.lower():
+                    # Discrete oracle benchmark using full env replay from saved yearly allocations.
+                    online_ckpt_path = os.path.join(
+                        online_ckpt_dir,
+                        f"{online_ckpt_prefix}_year_{int(sy)}.pkl",
+                    )
 
-                # Optional debug print
-                print(f"[LP-grid] {global_farm_id} year={sy} feasible={lp_diag.feasible} reason={lp_diag.reason} totalN={lp_diag.total_N:.2f}")
+                    if os.path.exists(online_ckpt_path):
+                        with open(online_ckpt_path, "rb") as f:
+                            ckpt_payload = pickle.load(f)
+
+                        reductions_vec = np.asarray(ckpt_payload.get("reductions_vec_units10", []), dtype=float)
+
+                        hist = ckpt_payload.get("allocation_history", {})
+                        if isinstance(hist, dict):
+                            for yk, allocs in hist.items():
+                                yk = int(yk)
+                                if isinstance(allocs, dict):
+                                    online_allocation_history[yk] = {str(k): float(v) for k, v in allocs.items()}
+
+                        env.allocate_bandit_budgets(reductions_vec)
+                        print(f"[oracle-online-replay] farmer_{i} year={sy} loaded checkpoint {online_ckpt_path}")
+
+                    else:
+                        reductions_vec, lp_diag, chosen_history = solve_discrete_lp_online_for_env(
+                            env,
+                            farm_dict_by_year=farm_dict_by_year,
+                            season_years=season_years,
+                            season_year=int(sy),
+                            total_budget=farm_budget,
+                            nue_range=(0.5, 0.7),
+                            nsurp_range=(20.0, 80.0),
+                            reduction_step=5.0,
+                            allocation_history=online_allocation_history,
+                            checkpoint_path=online_ckpt_path,
+                            farm_key=f"{region}_farmer_{i}",
+                            days_before_sowing=7,
+                            n_jobs=4,
+                            debug_memory=False,
+                        )
+                        online_allocation_history[int(sy)] = {str(k): float(v) for k, v in chosen_history.items()}
+                        env.allocate_bandit_budgets(reductions_vec)
+                    print(
+                        f"[oracle-online-replay] farmer_{i} year={sy}")
+                    print(f"feasible={lp_diag.feasible}"
+                        f"reason={lp_diag.reason} totalN={lp_diag.total_N:.2f} ckpt={online_ckpt_path}"
+                    ) if getattr(object, "lp_diag", None) is not None else print(f"loaded from ckpt={online_ckpt_path}")
+                else:
+                    if lp_df is None or global_farm_id is None:
+                        raise RuntimeError("LP allocator requested but lp_df/global_farm_id not initialized")
+
+                    # Discrete oracle benchmark using offline precomputed candidate grid.
+                    reductions_vec, lp_diag = solve_discrete_lp_for_env(
+                        env,
+                        df_metrics=lp_df,
+                        farm_id=global_farm_id,
+                        year=int(sy),
+                        total_budget=farm_budget,
+                        nue_range=(0.5, 0.9),
+                        nsurp_range=(0.0, 80.0),
+                    )
+                    env.allocate_bandit_budgets(reductions_vec)
+                    print(
+                        f"[oracle-grid] {global_farm_id} year={sy} feasible={lp_diag.feasible} reason={lp_diag.reason} totalN={lp_diag.total_N:.2f}")
             # Step env until season completes
             if runner.__class__.__name__ == "MultiRLAgent":
                 next_states = env.run_until_past_season_year(
@@ -305,8 +404,17 @@ def run_region_year(
 
 # Helper for parallel execution
 def _run_region_year_wrapper(args):
-    region, years, agent, scenario, allocator, subset, render = args
-    info_dict = run_region_year(region, years, agent=agent, scenario=scenario, allocator=allocator, subset=subset, render=render)
+    region, years, agent, scenario, allocator, subset, render, farm = args
+    info_dict = run_region_year(
+        region,
+        years,
+        agent=agent,
+        scenario=scenario,
+        allocator=allocator,
+        subset=subset,
+        render=render,
+        farm=farm,
+    )
     return region, years, info_dict
 
 # Optional aggregation controlled by --aggregate/--aggregate_only
@@ -355,6 +463,7 @@ if __name__ == "__main__":
     parser.add_argument("--agent", type=str, help="agent name", default="ROT")
     parser.add_argument("--scenario", type=str, help="scenario name", default="full_budget")
     parser.add_argument("--allocator", type=str, help="allocator name", default=None)
+    parser.add_argument("--farm", type=int, help="global farm id (0-51)", default=None)
     parser.add_argument("--num_workers", type=int, help="number of parallel workers (1 = no parallelism)", default=1)
     parser.add_argument("--render", action='store_true', help="render", dest='render')
     parser.add_argument("--subset", action='store_true', dest='subset')
@@ -369,12 +478,16 @@ if __name__ == "__main__":
     scenario = args.scenario
     num_workers = args.num_workers
     allocator = args.allocator
+    farm = args.farm
     subset = args.subset
 
     # make subfolder
     os.makedirs(os.path.join(_DEFAULT_RESULTSDIR, args.agent), exist_ok=True)
 
-    if regions == "all":
+    if farm is not None:
+        farm_region, _ = inverse_farm_region_mapper(int(farm))
+        regions = [farm_region]
+    elif regions == "all":
         regions = ["groningen", "zeeland", "gelderland"]
     else:
         regions = [regions]
@@ -389,8 +502,12 @@ if __name__ == "__main__":
     # Compute year_tag as in run_region_year
     year_tag = f"{years_list[0]}-{years_list[-1]}" if len(years_list) > 1 else str(years_list[0])
 
+    if farm is not None:
+        farm_region, farm_local_idx = inverse_farm_region_mapper(int(farm))
+        print(f"Running only global farm {int(farm)} -> region={farm_region}, farmer_{farm_local_idx}")
+
     # Each job runs a full multi-season horizon for the region
-    all_jobs = [(region, years_list, agent, scenario, allocator, subset, args.render) for region in regions]
+    all_jobs = [(region, years_list, agent, scenario, allocator, subset, args.render, farm) for region in regions]
     sliced_jobs = [all_jobs[i:i+3] for i in range(0, len(all_jobs), 3)]
 
     # Early exit for --aggregate_only
@@ -407,7 +524,7 @@ if __name__ == "__main__":
 
     if num_workers is None or num_workers <= 1:
         # Fallback to sequential execution
-        for region, years_job, agent, scenario, allocator, subset_job, render_job in tqdm(all_jobs, desc="Running scenarios"):
+        for region, years_job, agent, scenario, allocator, subset_job, render_job, farm_job in tqdm(all_jobs, desc="Running scenarios"):
             run_region_year(
                 region,
                 years_job,
@@ -416,6 +533,7 @@ if __name__ == "__main__":
                 allocator=allocator,
                 subset=subset_job,
                 render=render_job,
+                farm=farm_job,
             )
     else:
         # Parallel execution over regions/multi-years
