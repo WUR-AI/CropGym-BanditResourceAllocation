@@ -163,7 +163,8 @@ class LSTMFeatureNet(nn.Module):
             raise ValueError(f"Theta must be (N,d) or (N,T,d), got {Theta.shape}")
 
         # LSTM
-        pool = True
+        pool = False
+        raw_output = True
 
         if pool:
             output, _ = self.lstm(Theta)
@@ -171,7 +172,23 @@ class LSTMFeatureNet(nn.Module):
             # mean pooling over time (uses all timesteps)
             pooled = output.mean(dim=1)  # (N, out_dim)
 
-            G = self.proj(pooled)  # (N, m)
+            G = self.proj(output)  # (N, m)
+
+        elif raw_output:
+            output, (hn, _) = self.lstm(Theta)
+
+            # hn: (num_layers * num_directions, N, hidden)
+            hn = hn.view(self.num_layers, self.num_directions, Theta.size(0), self.hidden)
+
+            last_layer = hn[-1]  # (num_dirs, N, hidden)
+
+            if self.num_directions == 2:
+                last = torch.cat([last_layer[0], last_layer[1]], dim=-1)
+            else:
+                last = last_layer[0]
+
+            G = self.proj(last)  # (N, m)
+
         else:
 
             _, (hn, _) = self.lstm(Theta)  # hn: (num_layers*num_dirs, N, hidden)
@@ -529,7 +546,7 @@ class NNAGPBandit:
             ridge_lambda: float = 1.0,
             coreset_size=256,
             coreset_mode="diverse",
-            action_mode: Literal["joint", "factored"] = "joint",
+            action_mode: Literal["joint", "factored"] = "factored",
             n_fields: Optional[int] = None,
             d_theta_per_field: Optional[int] = None,
             m_sub: int = 5,
