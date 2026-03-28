@@ -292,13 +292,81 @@ def run_region_year(
             )
             # Allocation logic
             if allocator is None and "reduced" in scenario:
-                reductions = [
-                    (env.get_per_parcel_max_budget(a) - (env.get_per_parcel_max_budget(a) * 0.7)) / 10.0
-                    for a in env.possible_agents
+                # Total reduced budget: keep 70% of the total maximum budget, but allocate it
+                # with the following priority:
+                #   1) largest field overall,
+                #   2) potato fields (largest potato first if multiple),
+                #   3) all remaining fields by descending area.
+
+                print("Applying reduced budget allocation strategy...")
+                current_farm_dict = farm_dict_by_year[int(sy)]
+
+                def _field_area(agent_name: str) -> float:
+                    field_data = current_farm_dict.get(agent_name, {})
+                    return float(field_data.get("area", 0.0) or 0.0)
+
+                def _field_crop(agent_name: str) -> str:
+                    field_data = current_farm_dict.get(agent_name, {})
+                    crop_val = (
+                        field_data.get("CropName")
+                        or field_data.get("crop")
+                        or field_data.get("crop_name")
+                        or ""
+                    )
+                    return str(crop_val).strip().lower()
+
+                max_budget_by_agent = {
+                    ag: float(env.get_per_parcel_max_budget(ag))
+                    for ag in env.possible_agents
+                }
+                total_max_budget = float(sum(max_budget_by_agent.values()))
+                target_total_budget = 0.7 * total_max_budget
+
+                agents_sorted_by_area = sorted(
+                    list(env.possible_agents),
+                    key=lambda ag: _field_area(ag),
+                    reverse=True,
+                )
+
+                largest_agent = agents_sorted_by_area[0] if agents_sorted_by_area else None
+                potato_agents = [
+                    ag for ag in agents_sorted_by_area
+                    if "potato" in _field_crop(ag)
                 ]
+                other_agents = [
+                    ag for ag in agents_sorted_by_area
+                    if ag != largest_agent and ag not in potato_agents
+                ]
+
+                allocation_order = []
+                if largest_agent is not None:
+                    allocation_order.append(largest_agent)
+                allocation_order.extend([ag for ag in potato_agents if ag not in allocation_order])
+                allocation_order.extend([ag for ag in other_agents if ag not in allocation_order])
+
+                allocated_budget_by_agent = {ag: 0.0 for ag in env.possible_agents}
+                remaining_budget = target_total_budget
+
+                for ag in allocation_order:
+                    if remaining_budget <= 0:
+                        break
+                    assign_budget = min(max_budget_by_agent[ag], remaining_budget)
+                    allocated_budget_by_agent[ag] = assign_budget
+                    remaining_budget -= assign_budget
+
+                reductions = [
+                    (max_budget_by_agent[ag] - allocated_budget_by_agent[ag]) / 10.0
+                    for ag in env.possible_agents
+                ]
+
                 env.allocate_bandit_budgets(reductions)
+
                 for ag in env.possible_agents:
-                    assert env.get_per_parcel_budget(ag) < env.get_per_parcel_max_budget(ag)
+                    expected_budget = allocated_budget_by_agent[ag]
+                    actual_budget = float(env.get_per_parcel_budget(ag))
+                    assert np.isclose(actual_budget, expected_budget), (
+                        f"Budget mismatch for {ag}: expected {expected_budget}, got {actual_budget}"
+                    )
 
             if allocator is not None and "LP" in allocator:
                 farm_budget = float(getattr(env, "global_budget", env._get_global_max_budget()))
