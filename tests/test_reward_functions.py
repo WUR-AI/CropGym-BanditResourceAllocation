@@ -7,14 +7,14 @@ import matplotlib.pyplot as plt
 
 import datetime
 
-import cropgymzoo  # for gym make
+import cropgym  # for gym make
 import gymnasium as gym
 
-from cropgymzoo.envs.multi_field_env import MultiFieldEnv
-from cropgymzoo.utils import rewards
+from cropgym.envs.multi_field_env import MultiFieldEnv
+from cropgym.utils import rewards
 
-from cropgymzoo.utils.helper_for_unit_tests import run_aec_till_terminate, run_aec_step
-from cropgymzoo.utils.plotters import plot_results
+from cropgym.utils.helper_for_unit_tests import run_aec_till_terminate, run_aec_step
+from cropgym.utils.plotters import plot_results
 
 
 class TestSingularRewardFunctions(unittest.TestCase):
@@ -735,17 +735,12 @@ class TestMultiRewardFunctionPNR(unittest.TestCase):
 
 class TestMultiRewardFunction(unittest.TestCase):
     def setUp(self):
-        from tianshou.env import PettingZooEnv
         self.env = MultiFieldEnv(
             warm_up=0,
         )
         self.env_training = MultiFieldEnv(
             warm_up=0,
             training=True
-        )
-
-        self.env_wrapped = PettingZooEnv(
-            self.env_training,
         )
 
     def test_reward_area_multi(self):

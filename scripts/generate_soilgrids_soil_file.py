@@ -1,17 +1,21 @@
 import argparse
 import os
 import sys
-from cropgymzoo import _BASE_PATH
+from pathlib import Path
 
-from cropgymzoo.utils_soil.soilgrids import get_df_soilgrids
-from cropgymzoo.utils_soil.generate_soil_files import (
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from cropgym import _BASE_PATH
+
+from cropgym.utils_soil.soilgrids import get_df_soilgrids
+from cropgym.utils_soil.generate_soil_files import (
     calculate_van_genuchten,
     generate_df_soil_input,
     generate_soil_yaml,
     dump_soil_yaml
 )
 
-soil_save_dir = os.path.join(_BASE_PATH, "cropgymzoo", "configs", "soil", "soilgrids")
+soil_save_dir = os.path.join(_BASE_PATH, "cropgym", "configs", "soil", "soilgrids")
 
 def generate_soil_file(longitude, latitude):
     """

@@ -3,8 +3,8 @@ from typing import cast
 
 import numpy as np
 
-from cropgymzoo.envs.singular_env import ParcelEnv
-from cropgymzoo.envs.multi_field_env import MultiFieldEnv
+from cropgym.envs.singular_env import ParcelEnv
+from cropgym.envs.multi_field_env import MultiFieldEnv
 
 import gymnasium as gym
 

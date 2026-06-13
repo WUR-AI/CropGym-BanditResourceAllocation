@@ -1,10 +1,13 @@
-
 import argparse
+import sys
 from pathlib import Path
 import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import yaml
 from generate_soilgrids_soil_file import generate_soil_file
-from cropgymzoo import _SCENARIO_PATH, _SOILGRIDS_PATH
+from cropgym import _SCENARIO_PATH, _SOILGRIDS_PATH
 
 
 def generate_soil_files(longitude: float, latitude: float):

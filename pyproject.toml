@@ -1,5 +1,5 @@
 [project]
-name = "cropgymzoo"
+name = "cropgym"
 version = "0.1.0"
 description = "Crop Management Environment for Resource Allocation"
 authors = [
@@ -28,16 +28,6 @@ dependencies = [
     "pulp>=3.3.0",
 ]
 
-[project.optional-dependencies]
-tianshou = ["tianshou==1.2.0"]
-rllib = ["ray[rllib]>=2.48.0"]
-sb3 = ["stable_baselines3==2.7.0", "sb3_contrib==2.7.0", "pygame>=2.6.1"]
-
-[tool.uv]
-conflicts = [
-  [ { extra = "tianshou" }, { extra = "rllib" }, { extra = "sb3" } ],
-]
-
 [tool.uv.sources]
 pcse = { path = "../pcse", editable = true }
 
@@ -46,4 +36,12 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["cropgymzoo"]
+include = ["cropgym", "cropgym.*"]
+
+[tool.setuptools.package-data]
+cropgym = [
+    "configs/**/*.yaml",
+    "configs/**/*.csv",
+    "configs/**/*.conf",
+    "configs/**/*.joblib",
+]

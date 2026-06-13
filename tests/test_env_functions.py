@@ -2,7 +2,7 @@ import unittest
 import datetime
 from copy import deepcopy
 
-import cropgymzoo  # for gym make
+import cropgym  # for gym make
 import gymnasium as gym
 
 import numpy as np
@@ -11,10 +11,10 @@ import matplotlib.pyplot as plt
 
 import pcse
 
-from cropgymzoo.envs.multi_field_env import MultiFieldEnv
-from cropgymzoo.utils.curriculum import RandomiseStage, make_default_stage_manager
-from cropgymzoo.utils.helper_for_unit_tests import run_aec_till_terminate
-from cropgymzoo.utils.domain_randomizer import NoisyOpenMeteo
+from cropgym.envs.multi_field_env import MultiFieldEnv
+from cropgym.utils.curriculum import RandomiseStage, make_default_stage_manager
+from cropgym.utils.helper_for_unit_tests import run_aec_till_terminate
+from cropgym.utils.domain_randomizer import NoisyOpenMeteo
 
 
 class TestSingularEnvFunctions(unittest.TestCase):

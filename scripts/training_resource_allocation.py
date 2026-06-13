@@ -1,6 +1,11 @@
 import argparse
+import sys
+from pathlib import Path
 
-from cropgymzoo.train_allocator import train_allocator, train_allocator_for_farm
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from cropgym.baselines import resolve_baseline
+from cropgym.train_allocator import train_allocator, train_allocator_for_farm
 
 
 if __name__ == '__main__':
@@ -10,7 +15,8 @@ if __name__ == '__main__':
 
     # Meta stuff
     parser.add_argument("--use_model", action='store_true')
-    parser.add_argument("--model_dir", type=str, default='ROT')
+    parser.add_argument("--baseline", type=str, choices=["ROT", "random"], default=None)
+    parser.add_argument("--model_dir", type=str, default=None, help="deprecated alias for --baseline")
     parser.add_argument("--rounds", type=int, default=300)
     parser.add_argument("--bandit_lr", type=float, default=3e-3)
     parser.add_argument("--bandit_epochs", type=int, default=100)
@@ -67,6 +73,12 @@ if __name__ == '__main__':
         lstm=False,
     )
     args = parser.parse_args()
+    args.baseline = resolve_baseline(
+        baseline=args.baseline,
+        deprecated_value=args.model_dir,
+        deprecated_name="model_dir",
+    )
+    args.model_dir = args.baseline
 
     if args.farm is not None:
         train_allocator_for_farm(args)
