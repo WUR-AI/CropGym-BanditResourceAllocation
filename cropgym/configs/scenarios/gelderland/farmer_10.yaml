@@ -1,0 +1,25 @@
+field-1:
+  soil_lon: 5.4471
+  soil_lat: 51.9506
+  area: 2.318921881829783
+  type: clay
+field-2:
+  soil_lon: 5.4538
+  soil_lat: 51.9562
+  area: 6.3137657499665485
+  type: clay
+field-3:
+  soil_lon: 5.4353
+  soil_lat: 51.9484
+  area: 6.347725579159966
+  type: silt
+field-4:
+  soil_lon: 5.4269
+  soil_lat: 51.9474
+  area: 1.220693230328243
+  type: silt
+field-5:
+  soil_lon: 5.4313
+  soil_lat: 51.9492
+  area: 5.659478357992608
+  type: silt
